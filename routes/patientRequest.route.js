@@ -4,7 +4,8 @@ const {
   getAllPatientRequests,
   getPatientRequestById,
   approveRequest,
-  rejectRequest
+  rejectRequest,
+  assignDoctor
 } = require('../controllers/patientRequest.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
@@ -13,5 +14,6 @@ router.get('/', verifyToken, verifyRole(['Staff', 'Manager']), getAllPatientRequ
 router.get('/:requestId', verifyToken, verifyRole(['Staff', 'Manager']), getPatientRequestById);
 router.put('/:requestId/approve', verifyToken, verifyRole(['Staff', 'Manager']), approveRequest);
 router.put('/:requestId/reject', verifyToken, verifyRole(['Staff', 'Manager']), rejectRequest);
+router.put('/:requestId/assign-doctor', verifyToken, verifyRole(['Staff', 'Manager']), assignDoctor);
 
 module.exports = router;

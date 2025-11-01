@@ -1251,6 +1251,7 @@ class AppointmentService {
       throw error;
     }
   }
+
 }
 
 module.exports = new AppointmentService();

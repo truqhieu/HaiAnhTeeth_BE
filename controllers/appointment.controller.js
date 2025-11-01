@@ -3,7 +3,9 @@ const emailService = require('../services/email.service');
 const Policy = require('../models/policy.model');
 const Appointment = require('../models/appointment.model');
 const Timeslot = require('../models/timeslot.model');
+const PatientRequest = require('../models/patientRequest.model')
 const availableSlotService = require('../services/availableSlot.service');
+const { getActiveServicesForDoctor } = require('../services/medicalRecord.service');
 
 // Helper function to calculate available time range for morning/afternoon shifts
 function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
@@ -1212,6 +1214,7 @@ const requestChangeDoctor = async (req, res) => {
     });
   }
 };
+
 
 // ⭐ Lấy danh sách bác sĩ khả dụng cho thời gian cụ thể (dùng cho đổi bác sĩ)
 const getAvailableDoctorsForTimeSlot = async (req, res) => {
