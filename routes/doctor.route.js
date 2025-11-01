@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDoctorAppointmentsSchedule, getAppointmentDetail, getPatientDetail, getPatientAppointmentsForDoctor } = require('../controllers/doctor.controller');
-const { getOrCreateMedicalRecord, getActiveServicesForDoctor, updateAdditionalServicesForDoctor } = require('../controllers/medicalRecord.controller');
+const { getOrCreateMedicalRecord, getActiveServicesForDoctor, updateAdditionalServicesForDoctor, updateMedicalRecordForDoctor, approveMedicalRecordByDoctor } = require('../controllers/medicalRecord.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
 // ⭐ Doctor xem danh sách lịch hẹn trong tuần hiện tại + tuần tiếp theo (2 tuần)
@@ -24,5 +24,11 @@ router.get('/services', verifyToken, verifyRole('Doctor'), getActiveServicesForD
 
 // ⭐ Doctor - update additional services in medical record
 router.patch('/medical-records/:appointmentId/additional-services', verifyToken, verifyRole('Doctor'), updateAdditionalServicesForDoctor);
+
+// ⭐ Doctor - update medical record (diagnosis, conclusion, prescription, nurseNote)
+router.patch('/medical-records/:appointmentId', verifyToken, verifyRole('Doctor'), updateMedicalRecordForDoctor);
+
+// ⭐ Doctor - approve medical record
+router.post('/medical-records/:appointmentId/approve', verifyToken, verifyRole('Doctor'), approveMedicalRecordByDoctor);
 
 module.exports = router;

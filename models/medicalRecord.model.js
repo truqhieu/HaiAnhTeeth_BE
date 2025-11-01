@@ -65,11 +65,9 @@ const medicalRecordSchema = new mongoose.Schema(
       ref: 'Appointment',
       default: null
     },
-
-    // Record lifecycle
     status: {
       type: String,
-      enum: ['Draft', 'InProgress', 'Finalized'],
+      enum: ['Draft', 'Finalized'],
       default: 'Draft'
     }
   },

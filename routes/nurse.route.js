@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getNurseSchedule, getAppointmentDetail, getPatientDetail } = require('../controllers/nurse.controller');
+const { getNurseSchedule, getAppointmentDetail, getPatientDetail, getAllDoctors } = require('../controllers/nurse.controller');
 const { getOrCreateMedicalRecord, updateNurseNote } = require('../controllers/medicalRecord.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
@@ -16,5 +16,8 @@ router.get('/patients/:patientId', verifyToken, verifyRole('Nurse'), getPatientD
 // ⭐ Medical Record (Nurse)
 router.get('/medical-records/:appointmentId', verifyToken, verifyRole('Nurse'), getOrCreateMedicalRecord);
 router.patch('/medical-records/:appointmentId/nurse-note', verifyToken, verifyRole('Nurse'), updateNurseNote);
+
+// ⭐ Lấy danh sách tất cả bác sĩ (cho filter)
+router.get('/doctors', verifyToken, verifyRole('Nurse'), getAllDoctors);
 
 module.exports = router;

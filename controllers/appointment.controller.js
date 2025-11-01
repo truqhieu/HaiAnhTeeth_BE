@@ -1389,6 +1389,34 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
   }
 };
 
+const getAllDoctors = async (req, res) => {
+  try {
+    const User = require('../models/user.model');
+    const doctors = await User.find({ role: 'Doctor' })
+      .select('_id fullName')
+      .sort({ fullName: 1 })
+      .lean();
+
+    const doctorsList = doctors.map(doctor => ({
+      _id: doctor._id,
+      fullName: doctor.fullName
+    }));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lấy danh sách bác sĩ thành công',
+      data: doctorsList
+    });
+  } catch (error) {
+    console.error('❌ Error in getAllDoctors:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createConsultationAppointment,
   reviewAppointment,
@@ -1403,5 +1431,6 @@ module.exports = {
   requestReschedule,
   requestChangeDoctor,
   getRescheduleAvailableSlots,
-  getAvailableDoctorsForTimeSlot
+  getAvailableDoctorsForTimeSlot,
+  getAllDoctors
 };

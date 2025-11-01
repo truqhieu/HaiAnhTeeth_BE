@@ -3,8 +3,9 @@ const nurseService = require('../services/nurse.service');
 const getNurseSchedule = async (req, res) => {
   try {
     const nurseUserId = req.user.userId;
+    const { startDate, endDate } = req.query; // Lấy date range từ query params (optional)
 
-    const data = await nurseService.getNurseSchedule(nurseUserId);
+    const data = await nurseService.getNurseSchedule(nurseUserId, startDate, endDate);
 
     return res.status(200).json({
       success: true,
@@ -63,8 +64,28 @@ const getPatientDetail = async (req, res) => {
   }
 };
 
+const getAllDoctors = async (req, res) => {
+  try {
+    const data = await nurseService.getAllDoctors();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lấy danh sách bác sĩ thành công',
+      data
+    });
+  } catch (error) {
+    console.error('Error in getAllDoctors:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi server khi lấy danh sách bác sĩ',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getNurseSchedule,
   getAppointmentDetail,
-  getPatientDetail
+  getPatientDetail,
+  getAllDoctors
 };

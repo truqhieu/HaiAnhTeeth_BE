@@ -21,8 +21,9 @@ const getPatientAppointmentsForDoctor = async (req, res) => {
 const getDoctorAppointmentsSchedule = async (req, res) => {
   try {
     const doctorUserId = req.user.userId;
+    const { startDate, endDate } = req.query; // Lấy date range từ query params (optional)
 
-    const data = await doctorService.getDoctorAppointmentsSchedule(doctorUserId);
+    const data = await doctorService.getDoctorAppointmentsSchedule(doctorUserId, startDate, endDate);
 
     return res.status(200).json({
       success: true,

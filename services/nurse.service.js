@@ -1,37 +1,60 @@
 const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
 const Patient = require('../models/patient.model');
+const MedicalRecord = require('../models/medicalRecord.model');
 
 class NurseService {
 
   /**
-   * Lấy danh sách lịch hẹn của TẤT CẢ các bác sĩ cho 2 tuần
+   * Lấy danh sách lịch hẹn của TẤT CẢ các bác sĩ
+   * @param {string} nurseUserId - ID của nurse
+   * @param {string} startDate - Optional: Ngày bắt đầu (YYYY-MM-DD)
+   * @param {string} endDate - Optional: Ngày kết thúc (YYYY-MM-DD)
    */
-  async getNurseSchedule(nurseUserId) {
+  async getNurseSchedule(nurseUserId, startDate = null, endDate = null) {
     // Kiểm tra có phải Nurse không
     const nurse = await User.findById(nurseUserId);
     if (!nurse || nurse.role !== 'Nurse') {
       throw new Error('Bạn không phải là điều dưỡng');
     }
 
-    // Tính toán ngày bắt đầu tuần (Thứ 2)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    let dateRangeStart, dateRangeEnd;
 
-    const dayOfWeek = today.getDay();
-    const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-    const startOfWeek = new Date(today.setDate(diff));
+    // Nếu có startDate và endDate từ query params, dùng nó
+    if (startDate && endDate) {
+      dateRangeStart = new Date(startDate);
+      dateRangeStart.setHours(0, 0, 0, 0);
+      dateRangeEnd = new Date(endDate);
+      dateRangeEnd.setHours(23, 59, 59, 999);
+    } else {
+      // Mặc định: Tính toán ngày bắt đầu tuần (Thứ 2) - 2 tuần
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
 
-    // Ngày kết thúc = 2 tuần từ đầu tuần (14 ngày)
-    const endOfTwoWeeks = new Date(startOfWeek);
-    endOfTwoWeeks.setDate(endOfTwoWeeks.getDate() + 14);
+      const dayOfWeek = today.getDay();
+      const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const startOfWeek = new Date(today.setDate(diff));
 
-    // Lấy tất cả appointments trong 2 tuần
+      dateRangeStart = startOfWeek;
+      dateRangeEnd = new Date(startOfWeek);
+      dateRangeEnd.setDate(dateRangeEnd.getDate() + 14);
+    }
+
+    // Lấy tất cả appointments trong date range - dựa trên ngày khám (timeslot.startTime), không phải createdAt
+    // Tìm tất cả timeslots trong khoảng thời gian này trước
+    const Timeslot = require('../models/timeslot.model');
+    const timeslotsInRange = await Timeslot.find({
+      startTime: {
+        $gte: dateRangeStart,
+        $lte: dateRangeEnd
+      }
+    }).select('_id').lean();
+
+    const timeslotIds = timeslotsInRange.map(ts => ts._id);
+
+    // Lấy appointments có timeslotId trong danh sách trên
     const appointments = await Appointment.find({
-      createdAt: {
-        $gte: startOfWeek,
-        $lt: endOfTwoWeeks
-      },
+      timeslotId: { $in: timeslotIds },
       status: { $in: ['Approved', 'CheckedIn', 'InProgress', 'Completed', 'Finalized'] }
     })
       .populate({
@@ -54,8 +77,21 @@ class NurseService {
         path: 'timeslotId',
         select: 'startTime endTime'
       })
-      .sort({ 'timeslotId.startTime': 1 })
+      .sort({ 'timeslotId.startTime': 1 }) // Sort ascending: ngày cũ nhất lên đầu, ngày mới nhất xuống dưới
       .lean();
+
+    // Lấy thông tin status từ MedicalRecord cho mỗi appointment (để check xem đã được doctor duyệt chưa)
+    const appointmentIds = appointments.map(apt => apt._id);
+    const medicalRecords = await MedicalRecord.find({
+      appointmentId: { $in: appointmentIds }
+    }).select('appointmentId status').lean();
+
+    // Tạo map để tra cứu nhanh
+    // status = "Finalized" nghĩa là đã được doctor duyệt
+    const medicalRecordStatusMap = {};
+    medicalRecords.forEach(record => {
+      medicalRecordStatusMap[record.appointmentId.toString()] = record.status === 'Finalized';
+    });
 
     // Format response thành array dạng bảng
     return appointments.map(appointment => {
@@ -73,7 +109,8 @@ class NurseService {
         endTime: timeslot?.endTime ? new Date(timeslot.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' }) : 'N/A',
         type: appointment.type,
         status: appointment.status,
-        mode: appointment.mode
+        mode: appointment.mode,
+        doctorApproved: medicalRecordStatusMap[appointment._id.toString()] || false
       };
     });
   }
@@ -158,6 +195,21 @@ class NurseService {
       emergencyContact: patientRecord?.emergencyContact || 'N/A',
       lastVisitDate: patientRecord?.lastVisitDate ? new Date(patientRecord.lastVisitDate).toISOString().split('T')[0] : 'N/A'
     };
+  }
+
+  /**
+   * Lấy danh sách tất cả các bác sĩ (để hiển thị trong filter)
+   */
+  async getAllDoctors() {
+    const doctors = await User.find({ role: 'Doctor' })
+      .select('_id fullName')
+      .sort({ fullName: 1 })
+      .lean();
+
+    return doctors.map(doctor => ({
+      _id: doctor._id,
+      fullName: doctor.fullName
+    }));
   }
 }
 
