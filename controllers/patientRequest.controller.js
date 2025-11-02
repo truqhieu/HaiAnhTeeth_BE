@@ -87,26 +87,7 @@ const rejectRequest = async (req, res) => {
   }
 };
 
-const assignDoctor = async (req,res) =>{
-  try {
-    const { requestId } = req.params;
 
-    const updated = await patientRequestService.assignDoctor(requestId);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Đổi bác sĩ thành công',
-      data: updated
-    });
-
-  } catch (error) {
-    console.error('❌ Error in assignDoctor:', error);
-    return res.status(400).json({
-      success: false,
-      message: error.message || 'Có lỗi xảy ra khi đổi bác sĩ mới',
-    });
-  }
-}
 
 
 module.exports = {
@@ -114,5 +95,4 @@ module.exports = {
   getPatientRequestById,
   approveRequest,
   rejectRequest,
-  assignDoctor
 };

@@ -275,36 +275,6 @@ class PatientRequestService {
     return request;
   }
 
-  async assignDoctor(patientRequestId) {
-    try {
-
-      const patientRequest = await PatientRequest.findById(patientRequestId);
-      if (!patientRequest) throw new Error('Yêu cầu đổi bác sĩ không tồn tại')
-
-      await Timeslot.findByIdAndUpdate(
-        patientRequest.requestedData.timeslotId,
-        {status : "Booked"}
-      )
-      await Timeslot.findByIdAndUpdate(
-        patientRequest.currentData.timeslotId,
-        {status : "Cancelled"}
-      )
-
-
-      await Appointment.findByIdAndUpdate(
-        patientRequest.appointmentId,
-        {doctorUserId : patientRequest.requestedData.doctorUserId,
-        timeslotId : patientRequest.requestedData.timeslotId},
-      )
-
-      patientRequest.status = "Approved";
-      await patientRequest.save()
-      console.log('✅ Approve change doctor success')
-  
-    } catch (err) {
-      throw new Error(`Assign doctor change failed: ${err.message}`);
-    }
-  }
 }
 
 module.exports = new PatientRequestService();
