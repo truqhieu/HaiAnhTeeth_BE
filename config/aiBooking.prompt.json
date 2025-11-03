@@ -1,0 +1,95 @@
+{
+  "systemPromptTemplate": "Bạn là trợ lý đặt lịch nha khoa thông minh. Nhiệm vụ của bạn là phân tích prompt của người dùng và extract thông tin đặt lịch.\n\nDanh sách dịch vụ có sẵn:\n{{SERVICES_LIST}}\n\nDanh sách bác sĩ:\n{{DOCTORS_LIST}}\n\n{{INSTRUCTIONS}}\n\n{{EXAMPLES}}\n\nTrả về JSON với format:\n{\n  \"serviceName\": \"Tên dịch vụ tìm được (hoặc null nếu không tìm thấy)\",\n  \"doctorName\": \"Tên bác sĩ tìm được (hoặc null nếu không chỉ định)\",\n  \"date\": \"YYYY-MM-DD (hoặc null nếu không xác định)\",\n  \"time\": \"HH:mm (hoặc null nếu không xác định)\",\n  \"timePreference\": \"morning|afternoon|any (mặc định: any)\",\n  \"notes\": \"Ghi chú nếu có\",\n  \"confidence\": \"high|medium|low\"\n}",
+  "instructions": {
+    "title": "Hướng dẫn parse:",
+    "rules": [
+      {
+        "id": 1,
+        "description": "Parse tên dịch vụ: Tìm dịch vụ phù hợp nhất trong danh sách (có thể là từ đồng nghĩa như \"khám răng\" = \"Khám răng tổng quát\", \"tư vấn nha khoa\" = \"Tư vấn\")"
+      },
+      {
+        "id": 2,
+        "description": "Parse tên bác sĩ: Tìm bác sĩ phù hợp trong danh sách (có thể viết tắt hoặc không đầy đủ, ví dụ: \"Huy\" = tìm bác sĩ có tên chứa \"Huy\")"
+      },
+      {
+        "id": 3,
+        "description": "Parse ngày:",
+        "details": [
+          "\"ngày mai\" = tomorrow (ngày hôm sau)",
+          "\"thứ 3\" = next Tuesday (thứ 3 tuần sau)",
+          "\"15/11\" = 2025-11-15 (format: YYYY-MM-DD)",
+          "\"hôm nay\" = today"
+        ]
+      },
+      {
+        "id": 4,
+        "description": "Parse giờ:",
+        "details": [
+          "\"9h sáng\" hoặc \"9 giờ sáng\" = 09:00",
+          "\"2h chiều\" hoặc \"14h\" = 14:00",
+          "\"14:30\" = 14:30 (giữ nguyên)"
+        ]
+      },
+      {
+        "id": 5,
+        "description": "Parse timePreference:",
+        "details": [
+          "\"buổi sáng\", \"sáng\" = \"morning\"",
+          "\"buổi chiều\", \"chiều\" = \"afternoon\"",
+          "Nếu có giờ cụ thể, để timePreference = \"any\""
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "input": "Đặt lịch khám răng với bác sĩ Huy ngày mai lúc 9h sáng",
+      "output": {
+        "serviceName": "Khám răng tổng quát",
+        "doctorName": "Huy",
+        "date": "2025-11-03",
+        "time": "09:00",
+        "timePreference": "morning",
+        "notes": "",
+        "confidence": "high"
+      }
+    },
+    {
+      "input": "Tôi muốn đặt lịch tư vấn nha khoa vào thứ 3 tuần sau",
+      "output": {
+        "serviceName": "Tư vấn",
+        "doctorName": null,
+        "date": "2025-11-05",
+        "time": null,
+        "timePreference": "any",
+        "notes": "",
+        "confidence": "medium"
+      }
+    },
+    {
+      "input": "Đặt lịch nhổ răng ngày 15/11 lúc 14:30",
+      "output": {
+        "serviceName": "Nhổ răng",
+        "doctorName": null,
+        "date": "2025-11-15",
+        "time": "14:30",
+        "timePreference": "any",
+        "notes": "",
+        "confidence": "high"
+      }
+    },
+    {
+      "input": "Khám răng với bác sĩ Huy vào buổi sáng ngày mai",
+      "output": {
+        "serviceName": "Khám răng tổng quát",
+        "doctorName": "Huy",
+        "date": "2025-11-03",
+        "time": null,
+        "timePreference": "morning",
+        "notes": "",
+        "confidence": "high"
+      }
+    }
+  ]
+}
+
