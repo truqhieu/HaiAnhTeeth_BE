@@ -502,7 +502,8 @@ class AIBookingService {
           }
           
           // Helper function: Tính continuous free blocks từ start-end và booked appointments
-          const calculateFreeBlocks = (startTimeStr, endTimeStr, bookedAppts, patientBooked) => {
+          // CHỈ trả về các blocks có độ dài >= serviceDurationMinutes
+          const calculateFreeBlocks = (startTimeStr, endTimeStr, bookedAppts, patientBooked, serviceDurationMinutes) => {
             const [startHour, startMin] = startTimeStr.split(':').map(Number);
             const [endHour, endMin] = endTimeStr.split(':').map(Number);
             
@@ -563,6 +564,13 @@ class AIBookingService {
               });
             }
             
+            // QUAN TRỌNG: Filter các free blocks - CHỈ giữ lại những blocks có độ dài >= serviceDurationMinutes
+            const minDurationMs = serviceDurationMinutes * 60 * 1000; // Convert phút sang milliseconds
+            const validFreeBlocks = freeBlocks.filter(block => {
+              const blockDurationMs = block.end.getTime() - block.start.getTime();
+              return blockDurationMs >= minDurationMs;
+            });
+            
             // Format time cho display (HH:mm) - Format từ hour/minute của Date, convert về VN time (UTC+7)
             const formatTime = (date) => {
               // Lấy UTC hour và minute, rồi cộng 7 để convert về VN time
@@ -574,7 +582,7 @@ class AIBookingService {
               return `${String(vnHour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
             };
             
-            return freeBlocks.map(block => ({
+            return validFreeBlocks.map(block => ({
               startTime: formatTime(block.start),
               endTime: formatTime(block.end),
               displayTime: `${formatTime(block.start)}-${formatTime(block.end)}`
@@ -587,20 +595,22 @@ class AIBookingService {
           const morningPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() < 12);
           const afternoonPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() >= 12);
           
-          // Tính free blocks cho buổi sáng
+          // Tính free blocks cho buổi sáng (chỉ hiển thị blocks >= serviceDuration)
           const morningBlocks = calculateFreeBlocks(
             workingHours.morningStart,
             workingHours.morningEnd,
             morningBooked,
-            morningPatientBooked
+            morningPatientBooked,
+            serviceDuration // Truyền serviceDuration để filter
           );
           
-          // Tính free blocks cho buổi chiều
+          // Tính free blocks cho buổi chiều (chỉ hiển thị blocks >= serviceDuration)
           const afternoonBlocks = calculateFreeBlocks(
             workingHours.afternoonStart,
             workingHours.afternoonEnd,
             afternoonBooked,
-            afternoonPatientBooked
+            afternoonPatientBooked,
+            serviceDuration // Truyền serviceDuration để filter
           );
           
           return {
