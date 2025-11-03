@@ -367,8 +367,8 @@ class AIBookingService {
           const serviceIdStr = serviceId.toString();
           
           // Check nếu serviceId là số thứ tự
-          const numberMatch = serviceIdStr.match(/^\d+$/);
-          if (numberMatch) {
+          const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+          if (serviceNumberMatch) {
             // Lấy danh sách dịch vụ và chọn theo index
             const services = await Service.find({ status: 'Active' })
               .select('_id serviceName durationMinutes')
@@ -394,13 +394,43 @@ class AIBookingService {
           
           const serviceDuration = service.durationMinutes || 30;
           
+          // Xử lý doctorId: có thể là ObjectId hoặc số thứ tự
+          let doctor = null;
+          const doctorIdStr = doctorId.toString();
+          
+          // Check nếu doctorId là số thứ tự
+          const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
+          if (doctorNumberMatch) {
+            // Lấy danh sách bác sĩ và chọn theo index
+            const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+              .select('_id fullName specialization')
+              .sort({ fullName: 1 })
+              .lean();
+            
+            const index = parseInt(doctorIdStr) - 1; // Convert to 0-based index
+            if (index >= 0 && index < doctors.length) {
+              doctor = doctors[index];
+            } else {
+              return { error: `Số thứ tự ${doctorIdStr} không hợp lệ. Vui lòng chọn lại bác sĩ.` };
+            }
+          } else {
+            // Dùng doctorId trực tiếp (ObjectId)
+            doctor = await User.findById(doctorId)
+              .select('_id fullName specialization')
+              .lean();
+          }
+          
+          if (!doctor) {
+            return { error: 'Bác sĩ không tồn tại. Vui lòng chọn lại bác sĩ.' };
+          }
+          
           // Parse date
           const searchDate = new Date(date);
           searchDate.setHours(0, 0, 0, 0);
           
           // Lấy DoctorSchedule của bác sĩ cho ngày đó (Morning và Afternoon)
           const schedules = await DoctorSchedule.find({
-            doctorUserId: doctorId,
+            doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
             date: searchDate,
             status: 'Available'
           }).lean();
@@ -424,7 +454,7 @@ class AIBookingService {
           endOfDay.setHours(23, 59, 59, 999);
           
           const appointments = await Appointment.find({
-            doctorUserId: doctorId,
+            doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
             status: { $in: ['Pending', 'Approved', 'CheckedIn', 'PendingPayment'] },
             timeslotId: { $exists: true }
           })
@@ -578,7 +608,7 @@ class AIBookingService {
             serviceName: service.serviceName,
             durationMinutes: serviceDuration,
             date: date,
-            doctorId: doctorId,
+            doctorId: doctor._id.toString(), // Dùng doctor._id thay vì doctorId
             morning: morningBlocks,
             afternoon: afternoonBlocks,
             totalFreeBlocks: morningBlocks.length + afternoonBlocks.length
@@ -599,8 +629,27 @@ class AIBookingService {
               return { error: 'Tài khoản của bạn không hợp lệ. Vui lòng đăng nhập lại.' };
             }
             
-            // 2. Validate service
-            const service = await Service.findById(serviceId);
+            // 2. Validate service (có thể là ObjectId hoặc số thứ tự)
+            let service = null;
+            const serviceIdStr = serviceId.toString();
+            const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+            
+            if (serviceNumberMatch) {
+              const services = await Service.find({ status: 'Active' })
+                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .sort({ category: 1, serviceName: 1 })
+                .lean();
+              
+              const index = parseInt(serviceIdStr) - 1;
+              if (index >= 0 && index < services.length) {
+                service = services[index];
+              }
+            } else {
+              service = await Service.findById(serviceId)
+                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .lean();
+            }
+            
             if (!service) {
               return { error: 'Dịch vụ bạn chọn không tồn tại. Vui lòng chọn dịch vụ khác.' };
             }
@@ -608,8 +657,27 @@ class AIBookingService {
               return { error: 'Dịch vụ này hiện không khả dụng' };
             }
             
-            // 3. Validate doctor
-            const doctor = await User.findById(doctorId);
+            // 3. Validate doctor (có thể là ObjectId hoặc số thứ tự)
+            let doctor = null;
+            const doctorIdStr = doctorId.toString();
+            const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
+            
+            if (doctorNumberMatch) {
+              const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+                .select('_id fullName specialization role status')
+                .sort({ fullName: 1 })
+                .lean();
+              
+              const index = parseInt(doctorIdStr) - 1;
+              if (index >= 0 && index < doctors.length) {
+                doctor = doctors[index];
+              }
+            } else {
+              doctor = await User.findById(doctorId)
+                .select('_id fullName specialization role status')
+                .lean();
+            }
+            
             if (!doctor) {
               return { error: 'Bác sĩ bạn chọn không tồn tại. Vui lòng chọn bác sĩ khác.' };
             }
@@ -659,7 +727,7 @@ class AIBookingService {
             
             // 7. Find doctor schedule
             const schedules = await DoctorSchedule.find({
-              doctorUserId: doctorId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
               date: appointmentDate,
               status: 'Available'
             }).lean();
@@ -702,7 +770,7 @@ class AIBookingService {
             
             // 8. Check conflict với timeslots đã có
             const conflictingTimeslots = await Timeslot.find({
-              doctorUserId: doctorId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
               startTime: { $lt: slotEndTime },
               endTime: { $gt: slotStartTime },
               status: { $in: ['Reserved', 'Booked'] }
@@ -739,7 +807,7 @@ class AIBookingService {
             // 10. Check conflict với appointments của patient với cùng bác sĩ này
             const sameDayAppointments = await Appointment.find({
               patientUserId,
-              doctorUserId: doctorId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
               status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
               timeslotId: { $exists: true }
             }).populate({
@@ -766,7 +834,7 @@ class AIBookingService {
             }
             
             // 11. Calculate price với promotion
-            const promotionData = await calculateServicePrice(serviceId, service.price);
+            const promotionData = await calculateServicePrice(service._id.toString(), service.price);
             const finalPrice = promotionData.finalPrice;
             const originalPrice = promotionData.originalPrice;
             
@@ -792,8 +860,8 @@ class AIBookingService {
             // 14. Tạo Timeslot
             const newTimeslot = await Timeslot.create({
               doctorScheduleId: schedule._id,
-              doctorUserId,
-              serviceId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              serviceId: service._id, // Dùng service._id thay vì serviceId
               startTime: slotStartTime,
               endTime: slotEndTime,
               breakAfterMinutes: 0,
@@ -805,8 +873,8 @@ class AIBookingService {
             const newAppointment = await Appointment.create({
               patientUserId,
               customerId: null, // Đặt cho bản thân
-              doctorUserId,
-              serviceId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              serviceId: service._id, // Dùng service._id thay vì serviceId
               timeslotId: newTimeslot._id,
               status: appointmentStatus,
               type: appointmentType,
