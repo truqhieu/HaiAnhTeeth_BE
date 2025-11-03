@@ -297,7 +297,17 @@ class AIBookingService {
       // 1. Parse prompt
       const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId);
 
-      // 2. Check if AI needs more info (multi-turn conversation)
+      // 2. Check if input is invalid (not related to dental services)
+      if (parsedData.isValidInput === false) {
+        return {
+          success: false,
+          isInvalidInput: true,
+          rejectionReason: parsedData.rejectionReason || 'Xin lỗi, mình chỉ hỗ trợ đặt lịch khám răng và các dịch vụ nha khoa thôi ạ.',
+          parsedData
+        };
+      }
+
+      // 3. Check if AI needs more info (multi-turn conversation)
       if (parsedData.needsMoreInfo) {
         // Enrich followUpQuestion với danh sách dịch vụ thực tế từ DB
         let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';
@@ -357,10 +367,10 @@ class AIBookingService {
         };
       }
 
-      // 3. Map to IDs
+      // 4. Map to IDs
       const mappedData = await this.mapParsedDataToIds(parsedData);
 
-      // 4. Validate required data (double-check)
+      // 5. Validate required data (double-check)
       if (!mappedData.serviceId) {
         return {
           success: false,
@@ -381,14 +391,14 @@ class AIBookingService {
         };
       }
 
-      // 4. Find available slots
+      // 6. Find available slots
       const slotsResult = await this.findAvailableSlots(mappedData);
 
       if (!slotsResult.success) {
         throw new Error(slotsResult.message || 'Không tìm thấy slot khả dụng');
       }
 
-      // 5. Validate và lấy doctorScheduleId nếu chưa có
+      // 7. Validate và lấy doctorScheduleId nếu chưa có
       if (!slotsResult.doctorScheduleId) {
         // Nếu selectedSlot có doctorScheduleId thì dùng nó
         if (slotsResult.selectedSlot && slotsResult.selectedSlot.doctorScheduleId) {
@@ -430,7 +440,7 @@ class AIBookingService {
         throw new Error('Không tìm thấy lịch làm việc của bác sĩ vào ngày này');
       }
 
-      // 6. Create appointment
+      // 8. Create appointment
       const appointmentData = {
         patientUserId,
         doctorUserId: slotsResult.doctorUserId || mappedData.doctorUserId,

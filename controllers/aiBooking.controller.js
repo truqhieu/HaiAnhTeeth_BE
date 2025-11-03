@@ -43,6 +43,20 @@ const createAppointmentByAI = async (req, res) => {
       appointmentFor || 'self'
     );
 
+    // Check if input is invalid (not related to dental services)
+    if (result.isInvalidInput) {
+      console.log('🤖 [AI Booking] Invalid input detected');
+      return res.status(200).json({
+        success: false,
+        data: {
+          isInvalidInput: true,
+          rejectionReason: result.rejectionReason,
+          parsedData: result.parsedData
+        },
+        message: result.rejectionReason || 'Input không hợp lệ'
+      });
+    }
+
     // Check if AI needs more information (multi-turn conversation)
     if (result.needsMoreInfo) {
       console.log('🤖 [AI Booking] Needs more info. Missing fields:', result.missingFields);
