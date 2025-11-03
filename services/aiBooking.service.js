@@ -299,11 +299,47 @@ class AIBookingService {
 
       // 2. Check if AI needs more info (multi-turn conversation)
       if (parsedData.needsMoreInfo) {
+        // Enrich followUpQuestion với danh sách dịch vụ thực tế từ DB
+        let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';
+        
+        // Nếu thiếu serviceName, thêm danh sách dịch vụ thực tế
+        if (parsedData.missingFields && parsedData.missingFields.includes('serviceName')) {
+          const services = await Service.find({ status: 'Active' })
+            .select('serviceName category')
+            .sort({ category: 1, serviceName: 1 })
+            .lean();
+          
+          if (services && services.length > 0) {
+            // Group by category (nếu có)
+            const groupedServices = {};
+            services.forEach(s => {
+              const category = s.category || 'Khác';
+              if (!groupedServices[category]) {
+                groupedServices[category] = [];
+              }
+              groupedServices[category].push(s.serviceName);
+            });
+            
+            // Format with category headers
+            let servicesList = '';
+            Object.keys(groupedServices).forEach(category => {
+              if (Object.keys(groupedServices).length > 1 && groupedServices[category].length > 0) {
+                servicesList += `\n📋 ${category}:\n`;
+              }
+              groupedServices[category].forEach(name => {
+                servicesList += `  • ${name}\n`;
+              });
+            });
+            
+            enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`;
+          }
+        }
+        
         return {
           success: false,
           needsMoreInfo: true,
           missingFields: parsedData.missingFields || [],
-          followUpQuestion: parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin về dịch vụ và ngày đặt lịch không?',
+          followUpQuestion: enrichedQuestion,
           parsedData // Trả về để frontend có thể track conversation context
         };
       }
