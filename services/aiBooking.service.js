@@ -62,8 +62,11 @@ class AIBookingService {
 
   /**
    * Parse user prompt để extract thông tin đặt lịch
+   * @param {string} userPrompt - Câu mô tả của người dùng
+   * @param {string} patientUserId - ID của bệnh nhân
+   * @param {array} conversationHistory - Lịch sử hội thoại [{ role: 'user'|'assistant', content: '...' }]
    */
-  async parseBookingPrompt(userPrompt, patientUserId) {
+  async parseBookingPrompt(userPrompt, patientUserId, conversationHistory = []) {
     try {
       // 1. Lấy danh sách services và doctors để cung cấp context cho AI
       const services = await Service.find({ status: 'Active' })
@@ -103,16 +106,36 @@ class AIBookingService {
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowStr = tomorrow.toISOString().split('T')[0];
 
-      // 4. Gọi OpenAI API với context về ngày
+      // 4. Build messages array từ conversation history
+      const messages = [
+        { role: "system", content: systemPrompt }
+      ];
+      
+      // Thêm conversation history (nếu có)
+      if (conversationHistory && conversationHistory.length > 0) {
+        console.log(`📜 [AI] Adding ${conversationHistory.length} messages from conversation history`);
+        conversationHistory.forEach(msg => {
+          if (msg.role === 'user' || msg.role === 'assistant') {
+            messages.push({
+              role: msg.role,
+              content: msg.content
+            });
+          }
+        });
+      }
+      
+      // Thêm user prompt mới nhất
+      messages.push({ 
+        role: "user", 
+        content: `Hôm nay là ${todayStr}. ${userPrompt}\n\nLưu ý: "ngày mai" = ${tomorrowStr}, "hôm nay" = ${todayStr}`
+      });
+      
+      console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI (1 system + ${messages.length - 1} conversation)`);
+      
+      // 5. Gọi OpenAI API với full conversation context
       const completion = await openai.chat.completions.create({
         model: "gpt-4.1-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { 
-            role: "user", 
-            content: `Hôm nay là ${todayStr}. ${userPrompt}\n\nLưu ý: "ngày mai" = ${tomorrowStr}, "hôm nay" = ${todayStr}`
-          }
-        ],
+        messages: messages,
         temperature: 0.3, // Lower temperature để tăng độ chính xác
         response_format: { type: "json_object" }, // Force JSON output
         max_tokens: 500
@@ -341,10 +364,10 @@ class AIBookingService {
   /**
    * Tạo appointment từ AI parsed data
    */
-  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self') {
+  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
     try {
-      // 1. Parse prompt
-      const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId);
+      // 1. Parse prompt (with conversation history for context)
+      const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId, conversationHistory);
 
       // 2. Handle different user intents
       const intent = parsedData.userIntent;
