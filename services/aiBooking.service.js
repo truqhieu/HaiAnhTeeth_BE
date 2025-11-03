@@ -425,9 +425,30 @@ class AIBookingService {
             .select('fullName specialization')
             .lean();
           
-          const matchedDoctors = doctors.filter(d => 
-            d.fullName.toLowerCase().includes(parsedData.doctorName.toLowerCase())
+          const inputLower = parsedData.doctorName.toLowerCase().trim();
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedDoctors = doctors.filter(d => 
+            d.fullName.toLowerCase() === inputLower
           );
+          
+          // ✅ PRIORITY 2: Nếu không có exact match, thử exact match bỏ "bác sĩ" prefix
+          if (matchedDoctors.length === 0) {
+            // Nếu input có "bác sĩ" ở đầu, bỏ nó ra và thử lại
+            const withoutPrefix = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+            matchedDoctors = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              return doctorNameClean === withoutPrefix;
+            });
+          }
+          
+          // ✅ PRIORITY 3: Nếu vẫn không có, thử fuzzy match (nhưng CHỈ nếu input KHÔNG có "bác sĩ" prefix)
+          if (matchedDoctors.length === 0 && !inputLower.startsWith('bác sĩ') && !inputLower.startsWith('bs')) {
+            matchedDoctors = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              return doctorNameClean.includes(inputLower) || d.fullName.toLowerCase().includes(inputLower);
+            });
+          }
           
           // ❌ Nếu KHÔNG TÌM THẤY bác sĩ nào
           if (matchedDoctors.length === 0) {
