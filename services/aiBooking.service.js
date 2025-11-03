@@ -70,6 +70,107 @@ class AIBookingService {
           };
         }
         
+        case 'find_service_by_name': {
+          const { serviceName, category } = functionArgs;
+          
+          if (!serviceName) {
+            return { error: 'Missing serviceName parameter' };
+          }
+          
+          const query = { status: 'Active' };
+          if (category) {
+            query.category = category;
+          }
+          
+          const services = await Service.find(query)
+            .select('_id serviceName category durationMinutes')
+            .sort({ category: 1, serviceName: 1 })
+            .lean();
+          
+          // Check nếu input là số thứ tự
+          const numberMatch = serviceName.match(/^\d+$/);
+          if (numberMatch) {
+            const index = parseInt(serviceName) - 1; // Convert to 0-based index
+            if (index >= 0 && index < services.length) {
+              const selectedService = services[index];
+              return {
+                found: true,
+                service: {
+                  id: selectedService._id.toString(),
+                  name: selectedService.serviceName,
+                  category: selectedService.category,
+                  durationMinutes: selectedService.durationMinutes || 30
+                }
+              };
+            }
+          }
+          
+          // Fuzzy matching by name
+          const inputLower = serviceName.toLowerCase().trim();
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedServices = services.filter(s => 
+            s.serviceName.toLowerCase() === inputLower
+          );
+          
+          // ✅ PRIORITY 2: Contains match
+          if (matchedServices.length === 0) {
+            matchedServices = services.filter(s => 
+              s.serviceName.toLowerCase().includes(inputLower) ||
+              inputLower.includes(s.serviceName.toLowerCase())
+            );
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching
+          if (matchedServices.length === 0) {
+            const inputWords = inputLower.split(/\s+/).filter(w => w.length > 0);
+            matchedServices = services.filter(s => {
+              const serviceWords = s.serviceName.toLowerCase().split(/\s+/);
+              return inputWords.some(inputWord => 
+                serviceWords.some(serviceWord => serviceWord.includes(inputWord) || inputWord.includes(serviceWord))
+              );
+            });
+          }
+          
+          // ❌ Không tìm thấy
+          if (matchedServices.length === 0) {
+            return { 
+              error: 'Không tìm thấy dịch vụ',
+              suggestions: services.slice(0, 10).map(s => ({
+                id: s._id.toString(),
+                name: s.serviceName,
+                category: s.category,
+                durationMinutes: s.durationMinutes || 30
+              }))
+            };
+          }
+          
+          // ✅ Chỉ có 1 dịch vụ match → Auto-select
+          if (matchedServices.length === 1) {
+            return {
+              found: true,
+              service: {
+                id: matchedServices[0]._id.toString(),
+                name: matchedServices[0].serviceName,
+                category: matchedServices[0].category,
+                durationMinutes: matchedServices[0].durationMinutes || 30
+              }
+            };
+          }
+          
+          // ⚠️ Nhiều dịch vụ match → Trả về danh sách để user chọn
+          return {
+            found: true,
+            multiple: true,
+            services: matchedServices.map(s => ({
+              id: s._id.toString(),
+              name: s.serviceName,
+              category: s.category,
+              durationMinutes: s.durationMinutes || 30
+            }))
+          };
+        }
+        
         case 'validate_service': {
           const { serviceId } = functionArgs;
           
