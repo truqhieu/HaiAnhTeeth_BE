@@ -791,6 +791,24 @@ class AIBookingService {
               parsedData: { ...parsedData, doctorName: selectedDoctor.fullName }
             };
           }
+          // ⚠️ Nếu KHÔNG TÌM THẤY bác sĩ nào (bác sĩ không tồn tại trong hệ thống)
+          else if (matchedDoctors.length === 0) {
+            console.log(`⚠️ [AI] Doctor "${parsedData.doctorName}" NOT FOUND in system → Ask again`);
+            enrichedQuestion = `Xin lỗi, mình không tìm thấy bác sĩ "${parsedData.doctorName}" trong hệ thống. Bạn muốn chọn bác sĩ nào trong danh sách sau ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
+            doctors.forEach((d, idx) => {
+              const spec = d.specialization ? ` (${d.specialization})` : '';
+              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
+            });
+            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ.';
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: enrichedQuestion,
+              parsedData
+            };
+          }
         }
         
         // Trường hợp chung: Hiển thị tất cả bác sĩ với số thứ tự
