@@ -442,12 +442,27 @@ class AIBookingService {
             });
           }
           
-          // ✅ PRIORITY 3: Nếu vẫn không có, thử fuzzy match (nhưng CHỈ nếu input KHÔNG có "bác sĩ" prefix)
-          if (matchedDoctors.length === 0 && !inputLower.startsWith('bác sĩ') && !inputLower.startsWith('bs')) {
-            matchedDoctors = doctors.filter(d => {
-              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-              return doctorNameClean.includes(inputLower) || d.fullName.toLowerCase().includes(inputLower);
-            });
+          // ✅ PRIORITY 3: Word-based matching (match theo TỪ, không phải substring)
+          if (matchedDoctors.length === 0) {
+            // Bỏ prefix "bác sĩ" nếu có
+            const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+            
+            // Split input thành các TỪ
+            const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+            
+            // Nếu có ít nhất 1 từ, thì matching
+            if (inputWords.length > 0) {
+              matchedDoctors = doctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                // Split tên bác sĩ thành các TỪ
+                const doctorWords = doctorNameClean.split(/\s+/);
+                
+                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+                return inputWords.every(inputWord => 
+                  doctorWords.some(doctorWord => doctorWord === inputWord)
+                );
+              });
+            }
           }
           
           // ❌ Nếu KHÔNG TÌM THẤY bác sĩ nào
