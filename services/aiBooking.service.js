@@ -310,6 +310,17 @@ class AIBookingService {
             .lean();
           
           if (services && services.length > 0) {
+            // Map category sang tên tiếng Việt thân thiện
+            const categoryMap = {
+              'Consultation': '💬 Tư vấn online',
+              'Examination': '🏥 Khám trực tiếp',
+              'Treatment': '⚕️ Điều trị',
+              'Cosmetic': '✨ Thẩm mỹ',
+              'Surgery': '🔬 Phẫu thuật',
+              'Orthodontics': '🦷 Niềng răng',
+              'Prevention': '🛡️ Phòng ngừa'
+            };
+            
             // Group by category (nếu có)
             const groupedServices = {};
             services.forEach(s => {
@@ -320,15 +331,17 @@ class AIBookingService {
               groupedServices[category].push(s.serviceName);
             });
             
-            // Format with category headers
+            // Format with category headers (tiếng Việt)
             let servicesList = '';
             Object.keys(groupedServices).forEach(category => {
-              if (Object.keys(groupedServices).length > 1 && groupedServices[category].length > 0) {
-                servicesList += `\n📋 ${category}:\n`;
+              if (groupedServices[category].length > 0) {
+                // Dùng tên tiếng Việt nếu có, không thì giữ nguyên
+                const displayName = categoryMap[category] || `📋 ${category}`;
+                servicesList += `\n${displayName}:\n`;
+                groupedServices[category].forEach(name => {
+                  servicesList += `  • ${name}\n`;
+                });
               }
-              groupedServices[category].forEach(name => {
-                servicesList += `  • ${name}\n`;
-              });
             });
             
             enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`;
