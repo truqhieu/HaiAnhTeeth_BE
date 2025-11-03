@@ -230,28 +230,36 @@ class AIBookingService {
           }
           
           const inputLower = doctorName.toLowerCase().trim();
+          const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+          const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+          
+          // Tập hợp tất cả matches (không return ngay, để check xem có nhiều match không)
+          let matchedDoctors = [];
           
           // ✅ PRIORITY 1: Exact match (case-insensitive)
-          let matchedDoctors = doctors.filter(d => 
+          const exactMatches = doctors.filter(d => 
             d.fullName.toLowerCase() === inputLower
           );
-          
-          // ✅ PRIORITY 2: Nếu không có exact match, thử exact match bỏ "bác sĩ" prefix
-          if (matchedDoctors.length === 0) {
-            const withoutPrefix = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-            matchedDoctors = doctors.filter(d => {
-              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-              return doctorNameClean === withoutPrefix;
-            });
+          if (exactMatches.length > 0) {
+            matchedDoctors = exactMatches;
           }
           
-          // ✅ PRIORITY 3: Word-based matching (match theo TỪ, không phải substring)
+          // ✅ PRIORITY 2: Exact match bỏ "bác sĩ" prefix
           if (matchedDoctors.length === 0) {
-            const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-            const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
-            
+            const prefixMatches = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              return doctorNameClean === inputClean;
+            });
+            if (prefixMatches.length > 0) {
+              matchedDoctors = prefixMatches;
+            }
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching (match theo TỪ)
+          // Nếu vẫn chưa có match hoặc có nhiều match từ PRIORITY 2, thử word-based
+          if (matchedDoctors.length === 0 || matchedDoctors.length > 1) {
             if (inputWords.length > 0) {
-              matchedDoctors = doctors.filter(d => {
+              const wordMatches = doctors.filter(d => {
                 const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
                 const doctorWords = doctorNameClean.split(/\s+/);
                 
@@ -260,6 +268,11 @@ class AIBookingService {
                   doctorWords.some(doctorWord => doctorWord === inputWord)
                 );
               });
+              
+              // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
+              if (wordMatches.length > 0) {
+                matchedDoctors = wordMatches;
+              }
             }
           }
           
@@ -460,11 +473,25 @@ class AIBookingService {
             const [startHour, startMin] = startTimeStr.split(':').map(Number);
             const [endHour, endMin] = endTimeStr.split(':').map(Number);
             
-            const shiftStart = new Date(searchDate);
-            shiftStart.setHours(startHour, startMin, 0, 0);
+            // Tạo Date object với giờ VN (workingHours là giờ VN trong DB)
+            // Sử dụng UTC để tránh timezone conversion
+            const shiftStart = new Date(Date.UTC(
+              searchDate.getFullYear(),
+              searchDate.getMonth(),
+              searchDate.getDate(),
+              startHour - 7, // Convert VN time (UTC+7) to UTC
+              startMin,
+              0
+            ));
             
-            const shiftEnd = new Date(searchDate);
-            shiftEnd.setHours(endHour, endMin, 0, 0);
+            const shiftEnd = new Date(Date.UTC(
+              searchDate.getFullYear(),
+              searchDate.getMonth(),
+              searchDate.getDate(),
+              endHour - 7, // Convert VN time (UTC+7) to UTC
+              endMin,
+              0
+            ));
             
             // Combine booked appointments (doctor + patient) và filter theo shift (overlap với shift)
             const allBooked = [...bookedAppts, ...(patientBooked || [])]
@@ -503,14 +530,15 @@ class AIBookingService {
               });
             }
             
-            // Format time cho display (HH:mm)
+            // Format time cho display (HH:mm) - Format từ hour/minute của Date, convert về VN time (UTC+7)
             const formatTime = (date) => {
-              return date.toLocaleTimeString('vi-VN', {
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: false,
-                timeZone: 'Asia/Ho_Chi_Minh'
-              });
+              // Lấy UTC hour và minute, rồi cộng 7 để convert về VN time
+              const hour = date.getUTCHours() + 7;
+              const minute = date.getUTCMinutes();
+              // Nếu hour >= 24, trừ 24 (vì đã qua ngày hôm sau)
+              const vnHour = hour >= 24 ? hour - 24 : hour;
+              // Format thành HH:mm
+              return `${String(vnHour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
             };
             
             return freeBlocks.map(block => ({
