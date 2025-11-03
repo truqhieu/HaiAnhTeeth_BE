@@ -43,6 +43,23 @@ const createAppointmentByAI = async (req, res) => {
       appointmentFor || 'self'
     );
 
+    // Check if AI needs more information (multi-turn conversation)
+    if (result.needsMoreInfo) {
+      console.log('🤖 [AI Booking] Needs more info. Missing fields:', result.missingFields);
+      return res.status(200).json({
+        success: false,
+        needsMoreInfo: true,
+        data: {
+          needsMoreInfo: true,
+          missingFields: result.missingFields,
+          followUpQuestion: result.followUpQuestion,
+          parsedData: result.parsedData
+        },
+        message: result.followUpQuestion || 'Cần thêm thông tin để đặt lịch'
+      });
+    }
+
+    // Success - appointment created
     return res.status(200).json({
       success: true,
       message: 'Đặt lịch thành công!',
