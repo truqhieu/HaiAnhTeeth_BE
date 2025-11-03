@@ -415,6 +415,118 @@ class AIBookingService {
       if (parsedData.needsMoreInfo) {
         let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';
         
+        // ⚠️ PRE-VALIDATION: Nếu user ĐÃ cung cấp doctorName hoặc serviceName trong input ban đầu
+        // → Validate NGAY xem có tồn tại trong hệ thống không, TRƯỚC KHI hỏi các field còn thiếu
+        
+        // 🔍 Validate bác sĩ (nếu user đã cung cấp)
+        if (parsedData.doctorName) {
+          console.log(`🔍 [PRE-VALIDATION] Checking if doctor "${parsedData.doctorName}" exists...`);
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('fullName specialization')
+            .lean();
+          
+          const matchedDoctors = doctors.filter(d => 
+            d.fullName.toLowerCase().includes(parsedData.doctorName.toLowerCase())
+          );
+          
+          // ❌ Nếu KHÔNG TÌM THẤY bác sĩ nào
+          if (matchedDoctors.length === 0) {
+            console.log(`❌ [PRE-VALIDATION] Doctor "${parsedData.doctorName}" NOT FOUND!`);
+            let doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
+            doctors.forEach((d, idx) => {
+              const spec = d.specialization ? ` (${d.specialization})` : '';
+              doctorsList += `  ${idx + 1}. ${d.fullName}${spec}\n`;
+            });
+            doctorsList += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ.';
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: `Xin lỗi, mình không tìm thấy bác sĩ "${parsedData.doctorName}" trong hệ thống. Bạn muốn chọn bác sĩ nào trong danh sách sau ạ?${doctorsList}`,
+              parsedData: { ...parsedData, doctorName: null } // Reset doctorName
+            };
+          }
+          
+          // ⚠️ Nếu tìm thấy NHIỀU bác sĩ match (ví dụ: user nhập "Huy" có 4 bác sĩ)
+          if (matchedDoctors.length > 1) {
+            console.log(`⚠️ [PRE-VALIDATION] Found ${matchedDoctors.length} doctors matching "${parsedData.doctorName}"`);
+            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên liên quan đến "${parsedData.doctorName}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
+            matchedDoctors.forEach((d, idx) => {
+              const spec = d.specialization ? ` (${d.specialization})` : '';
+              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
+            });
+            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ đầy đủ.';
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: enrichedQuestion,
+              parsedData
+            };
+          }
+          
+          // ✅ Nếu chỉ tìm thấy 1 bác sĩ → OK, tiếp tục flow
+          console.log(`✅ [PRE-VALIDATION] Doctor "${matchedDoctors[0].fullName}" found!`);
+        }
+        
+        // 🔍 Validate dịch vụ (nếu user đã cung cấp TÊN CHÍNH XÁC)
+        if (parsedData.serviceName && !parsedData.serviceCategory) {
+          console.log(`🔍 [PRE-VALIDATION] Checking if service "${parsedData.serviceName}" exists...`);
+          const services = await Service.find({ status: 'Active' })
+            .select('serviceName category')
+            .lean();
+          
+          const matchedServices = services.filter(s => 
+            s.serviceName.toLowerCase().includes(parsedData.serviceName.toLowerCase())
+          );
+          
+          // ❌ Nếu KHÔNG TÌM THẤY dịch vụ nào
+          if (matchedServices.length === 0) {
+            console.log(`❌ [PRE-VALIDATION] Service "${parsedData.serviceName}" NOT FOUND!`);
+            
+            // Group by category
+            const groupedServices = {};
+            services.forEach(s => {
+              const category = s.category || 'Khác';
+              if (!groupedServices[category]) {
+                groupedServices[category] = [];
+              }
+              groupedServices[category].push(s.serviceName);
+            });
+            
+            const categoryMap = {
+              'Consultation': '💬 Tư vấn online',
+              'Examination': '🏥 Khám trực tiếp',
+              'Treatment': '⚕️ Điều trị',
+              'Cosmetic': '✨ Thẩm mỹ',
+              'Surgery': '🔬 Phẫu thuật',
+              'Orthodontics': '🦷 Niềng răng',
+              'Prevention': '🛡️ Phòng ngừa'
+            };
+            
+            let servicesList = '';
+            Object.keys(groupedServices).forEach(category => {
+              if (groupedServices[category].length > 0) {
+                const displayName = categoryMap[category] || `📋 ${category}`;
+                servicesList += `\n${displayName}:\n`;
+                groupedServices[category].forEach(name => {
+                  servicesList += `  • ${name}\n`;
+                });
+              }
+            });
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['serviceName'],
+              followUpQuestion: `Xin lỗi, mình không tìm thấy dịch vụ "${parsedData.serviceName}" trong hệ thống. Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`,
+              parsedData: { ...parsedData, serviceName: null } // Reset serviceName
+            };
+          }
+        }
+        
         // BƯỚC 1: Ưu tiên hỏi NGÀY trước tiên
         if (parsedData.missingFields && parsedData.missingFields.includes('date')) {
           enrichedQuestion = 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)';
