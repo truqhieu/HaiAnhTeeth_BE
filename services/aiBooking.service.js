@@ -392,11 +392,24 @@ class AIBookingService {
       }
 
       // 3. Check if AI needs more info (multi-turn conversation) - for booking intent
+      // ƯU TIÊN theo thứ tự: Ngày → Dịch vụ → Bác sĩ → Giờ
       if (parsedData.needsMoreInfo) {
-        // Enrich followUpQuestion với danh sách dịch vụ thực tế từ DB
         let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';
         
-        // Nếu thiếu serviceName, thêm danh sách dịch vụ thực tế
+        // BƯỚC 1: Ưu tiên hỏi NGÀY trước tiên
+        if (parsedData.missingFields && parsedData.missingFields.includes('date')) {
+          enrichedQuestion = 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)';
+          
+          return {
+            success: false,
+            needsMoreInfo: true,
+            missingFields: ['date'],
+            followUpQuestion: enrichedQuestion,
+            parsedData
+          };
+        }
+        
+        // BƯỚC 2: Nếu có ngày rồi, mới hỏi DỊCH VỤ
         if (parsedData.missingFields && parsedData.missingFields.includes('serviceName')) {
           // Lấy tất cả dịch vụ active
           let services = await Service.find({ status: 'Active' })
@@ -484,37 +497,49 @@ class AIBookingService {
               enrichedQuestion += servicesList;
             }
           }
+          
+          return {
+            success: false,
+            needsMoreInfo: true,
+            missingFields: ['serviceName'],
+            followUpQuestion: enrichedQuestion,
+            parsedData
+          };
         }
         
+        // BƯỚC 3 & 4: Bác sĩ và giờ (optional, có thể bỏ qua)
+        // Nếu vẫn cần thông tin khác
         return {
           success: false,
           needsMoreInfo: true,
           missingFields: parsedData.missingFields || [],
           followUpQuestion: enrichedQuestion,
-          parsedData // Trả về để frontend có thể track conversation context
+          parsedData
         };
       }
 
       // 4. Map to IDs
       const mappedData = await this.mapParsedDataToIds(parsedData);
 
-      // 5. Validate required data (double-check)
-      if (!mappedData.serviceId) {
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: ['serviceName'],
-          followUpQuestion: 'Xin lỗi, mình không tìm thấy dịch vụ phù hợp. Bạn muốn đặt lịch dịch vụ nào? (Khám răng, Nhổ răng, Trám răng, Tư vấn...)',
-          parsedData
-        };
-      }
-
+      // 5. Validate required data (double-check theo thứ tự: Ngày → Dịch vụ)
+      // BƯỚC 1: Validate ngày trước
       if (!mappedData.date) {
         return {
           success: false,
           needsMoreInfo: true,
           missingFields: ['date'],
-          followUpQuestion: 'Bạn muốn đặt lịch vào ngày nào? (Ví dụ: ngày mai, thứ 3 tuần sau, 15/11...)',
+          followUpQuestion: 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)',
+          parsedData
+        };
+      }
+
+      // BƯỚC 2: Validate dịch vụ sau
+      if (!mappedData.serviceId) {
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: ['serviceName'],
+          followUpQuestion: 'Xin lỗi, mình không tìm thấy dịch vụ phù hợp. Bạn muốn đặt lịch dịch vụ nào ạ? (Khám răng, Nhổ răng, Trám răng, Tư vấn...)',
           parsedData
         };
       }
