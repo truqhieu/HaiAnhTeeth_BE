@@ -43,7 +43,12 @@ class AIBookingService {
       }));
 
       // 3. Build system prompt từ template (Zero-shot - không cần examples)
-      const systemPrompt = promptConfig.systemPromptTemplate
+      // Support both string and array format
+      const templateString = Array.isArray(promptConfig.systemPromptTemplate)
+        ? promptConfig.systemPromptTemplate.join('\n')
+        : promptConfig.systemPromptTemplate;
+      
+      const systemPrompt = templateString
         .replace('{{SERVICES_LIST}}', JSON.stringify(servicesList, null, 2))
         .replace('{{DOCTORS_LIST}}', JSON.stringify(doctorsList, null, 2));
 
@@ -393,10 +398,48 @@ class AIBookingService {
         
         // Nếu thiếu serviceName, thêm danh sách dịch vụ thực tế
         if (parsedData.missingFields && parsedData.missingFields.includes('serviceName')) {
-          const services = await Service.find({ status: 'Active' })
+          // Lấy tất cả dịch vụ active
+          let services = await Service.find({ status: 'Active' })
             .select('serviceName category')
             .sort({ category: 1, serviceName: 1 })
             .lean();
+          
+          // Fuzzy matching: Nếu user nhập từ khóa chung (ví dụ: "răng"), filter các dịch vụ liên quan
+          const userInput = userPrompt.toLowerCase().trim();
+          const keywords = [
+            'răng', 'khám', 'tẩy', 'trồng', 'nhổ', 'niềng', 'bọc', 
+            'làm sạch', 'tím', 'hàm', 'sâu', 'trắng', 'tư vấn',
+            'điều trị', 'phục hồi', 'mặt', 'lắc', 'tủy', 'chỉnh nha',
+            'thẩm mỹ', 'phòng ngừa', 'cao vôi'
+          ];
+          
+          // Check xem user có nhập từ khóa chung không
+          let keyword = null;
+          for (const kw of keywords) {
+            if (userInput.includes(kw)) {
+              keyword = kw;
+              break;
+            }
+          }
+          
+          // Nếu có từ khóa, filter services
+          if (keyword && services.length > 0) {
+            const filteredServices = services.filter(s => 
+              s.serviceName.toLowerCase().includes(keyword)
+            );
+            
+            // Nếu tìm thấy nhiều dịch vụ liên quan
+            if (filteredServices.length > 1) {
+              services = filteredServices;
+              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ? Các dịch vụ liên quan đến "${keyword}":`;
+            }
+            // Nếu chỉ có 1 dịch vụ match, AI sẽ tự chọn (không vào đây)
+            else if (filteredServices.length === 1) {
+              // Let AI auto-select this service in the next turn
+              services = filteredServices;
+              enrichedQuestion = `Bạn có muốn đặt lịch dịch vụ "${filteredServices[0].serviceName}" không ạ?`;
+            }
+          }
           
           if (services && services.length > 0) {
             // Map category sang tên tiếng Việt thân thiện
@@ -433,7 +476,13 @@ class AIBookingService {
               }
             });
             
-            enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`;
+            // Chỉ override enrichedQuestion nếu chưa được set bởi fuzzy matching
+            if (!keyword) {
+              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`;
+            } else {
+              // Đã filter rồi, append servicesList
+              enrichedQuestion += servicesList;
+            }
           }
         }
         
