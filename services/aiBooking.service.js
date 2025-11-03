@@ -307,47 +307,8 @@ class AIBookingService {
 
       // Handle greeting
       if (intent === 'greeting') {
-        // Enrich với danh sách dịch vụ
-        const services = await Service.find({ status: 'Active' })
-          .select('serviceName category')
-          .sort({ category: 1, serviceName: 1 })
-          .lean();
-        
-        let servicesList = '';
-        if (services && services.length > 0) {
-          const categoryMap = {
-            'Consultation': '💬 Tư vấn online',
-            'Examination': '🏥 Khám trực tiếp',
-            'Treatment': '⚕️ Điều trị',
-            'Cosmetic': '✨ Thẩm mỹ',
-            'Surgery': '🔬 Phẫu thuật',
-            'Orthodontics': '🦷 Niềng răng',
-            'Prevention': '🛡️ Phòng ngừa'
-          };
-          
-          const groupedServices = {};
-          services.forEach(s => {
-            const category = s.category || 'Khác';
-            if (!groupedServices[category]) {
-              groupedServices[category] = [];
-            }
-            groupedServices[category].push(s.serviceName);
-          });
-          
-          Object.keys(groupedServices).forEach(category => {
-            if (groupedServices[category].length > 0) {
-              const displayName = categoryMap[category] || `📋 ${category}`;
-              servicesList += `\n${displayName}:\n`;
-              groupedServices[category].forEach(name => {
-                servicesList += `  • ${name}\n`;
-              });
-            }
-          });
-        }
-        
-        const greetingMessage = servicesList 
-          ? `Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`
-          : parsedData.followUpQuestion || 'Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn muốn đặt lịch dịch vụ nào ạ?';
+        // Chỉ chào và hỏi có muốn đặt lịch không, KHÔNG hiển thị list services ngay
+        const greetingMessage = parsedData.followUpQuestion || 'Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn có muốn đặt lịch không ạ?';
         
         return {
           success: false,
@@ -514,10 +475,65 @@ class AIBookingService {
           
           if (tempMappedData.serviceId && tempMappedData.date) {
             // Fetch available doctors for this service + date
-            const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            let doctors = await User.find({ role: 'Doctor', status: 'Active' })
               .select('fullName specialization')
               .lean();
             
+            // Fuzzy matching: Nếu user nhập từ khóa chung về bác sĩ (ví dụ: "Huy đê" có chữ "Huy")
+            const userInput = userPrompt.toLowerCase().trim();
+            let matchedDoctors = null;
+            let keyword = null;
+            
+            // Check xem user có nhập keyword nào liên quan đến tên bác sĩ không
+            for (const doctor of doctors) {
+              const doctorNameParts = doctor.fullName.toLowerCase().split(' ');
+              for (const part of doctorNameParts) {
+                if (part.length >= 2 && userInput.includes(part)) {
+                  keyword = part;
+                  break;
+                }
+              }
+              if (keyword) break;
+            }
+            
+            // Nếu có keyword, filter doctors
+            if (keyword) {
+              matchedDoctors = doctors.filter(d => 
+                d.fullName.toLowerCase().includes(keyword)
+              );
+              
+              // Nếu tìm thấy nhiều bác sĩ có cùng keyword (ví dụ: 4 bác sĩ "Huy")
+              if (matchedDoctors.length > 1) {
+                doctors = matchedDoctors;
+                enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên "${keyword}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
+                matchedDoctors.forEach(d => {
+                  const spec = d.specialization ? ` (${d.specialization})` : '';
+                  enrichedQuestion += `  • ${d.fullName}${spec}\n`;
+                });
+                
+                return {
+                  success: false,
+                  needsMoreInfo: true,
+                  missingFields: ['doctorName'],
+                  followUpQuestion: enrichedQuestion,
+                  parsedData
+                };
+              }
+              // Nếu chỉ có 1 bác sĩ match
+              else if (matchedDoctors.length === 1) {
+                enrichedQuestion = `Bạn có muốn chọn bác sĩ "${matchedDoctors[0].fullName}" không ạ?`;
+                
+                return {
+                  success: false,
+                  needsMoreInfo: true,
+                  missingFields: ['doctorName'],
+                  followUpQuestion: enrichedQuestion,
+                  parsedData
+                };
+              }
+            }
+            
+            // Trường hợp chung: Hiển thị tất cả bác sĩ
             if (doctors && doctors.length > 0) {
               let doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
               doctors.forEach(d => {
@@ -635,10 +651,55 @@ class AIBookingService {
 
       // BƯỚC 3: Validate bác sĩ
       if (!mappedData.doctorId) {
-        const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+        let doctors = await User.find({ role: 'Doctor', status: 'Active' })
           .select('fullName specialization')
           .lean();
         
+        // ✅ Fuzzy matching: Nếu user đã nhập tên (ví dụ: "Huy đê")
+        // Kiểm tra xem có bác sĩ nào match với keyword không
+        const userInput = userPrompt.toLowerCase().trim();
+        let keyword = null;
+        let enrichedQuestion = '';
+        
+        // Tìm keyword từ user input (ví dụ: "huy" từ "Huy đê")
+        if (parsedData.doctorName) {
+          const inputKeyword = parsedData.doctorName.toLowerCase().trim();
+          const matchedDoctors = doctors.filter(d => 
+            d.fullName.toLowerCase().includes(inputKeyword)
+          );
+          
+          // Nếu có nhiều bác sĩ match (ví dụ: 4 bác sĩ "Huy")
+          if (matchedDoctors.length > 1) {
+            doctors = matchedDoctors;
+            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên liên quan đến "${parsedData.doctorName}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
+            matchedDoctors.forEach(d => {
+              const spec = d.specialization ? ` (${d.specialization})` : '';
+              enrichedQuestion += `  • ${d.fullName}${spec}\n`;
+            });
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: enrichedQuestion,
+              parsedData
+            };
+          }
+          // Nếu chỉ có 1 bác sĩ match → Hỏi xác nhận
+          else if (matchedDoctors.length === 1) {
+            enrichedQuestion = `Bạn có muốn chọn bác sĩ "${matchedDoctors[0].fullName}" không ạ?`;
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: enrichedQuestion,
+              parsedData
+            };
+          }
+        }
+        
+        // Trường hợp chung: Hiển thị tất cả bác sĩ
         let doctorsList = '';
         if (doctors && doctors.length > 0) {
           doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
