@@ -16,6 +16,12 @@ app.use(morgan('combined'));
 // QUAN TRỌNG: Đặt CORS trước các middleware khác
 // Nhưng BYPASS CORS cho webhook endpoint (server-to-server)
 app.use((req, res, next) => {
+  // Log CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    console.log('🔄 [CORS] OPTIONS preflight request from:', req.headers.origin);
+    console.log('📋 [CORS] Request headers:', JSON.stringify(req.headers, null, 2));
+  }
+  
   // Webhook từ Sepay không cần CORS check
   if (req.path.includes('/webhook')) {
     return next();

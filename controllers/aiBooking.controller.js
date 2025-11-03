@@ -6,10 +6,19 @@ const aiBookingService = require('../services/aiBooking.service');
  */
 const createAppointmentByAI = async (req, res) => {
   try {
+    console.log('🤖 [AI Booking Controller] ===== REQUEST RECEIVED =====');
+    console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('📋 Body:', JSON.stringify(req.body, null, 2));
+    console.log('📋 User:', JSON.stringify(req.user || null, null, 2));
+    console.log('📋 Origin:', req.headers.origin || 'No origin header');
+    
     const { prompt, appointmentFor } = req.body;
     const patientUserId = req.user?.userId;
 
     if (!patientUserId) {
+      console.log('❌ [AI Booking Controller] No patientUserId - User not authenticated');
+      console.log('📋 Request user object:', req.user);
+      console.log('📋 Auth header:', req.headers.authorization);
       return res.status(401).json({
         success: false,
         message: 'Vui lòng đăng nhập để sử dụng tính năng đặt lịch tự động'
