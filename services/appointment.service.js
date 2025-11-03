@@ -278,18 +278,16 @@ class AppointmentService {
       select: 'startTime endTime'
     });
 
-    // Filter appointments có overlap thời gian (bao gồm buffer time)
-    const userBufferTime = 10; // 10 phút buffer
-    const slotEndWithBuffer = new Date(slotEnd.getTime() + userBufferTime * 60000);
-    
+    // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
     for (const apt of sameDayAppointments) {
       if (!apt.timeslotId) continue;
 
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
       
-      // Check overlap: (start1 < end2) AND (end1WithBuffer > start2)
-      const hasTimeOverlap = (slotStart < aptEnd && slotEndWithBuffer > aptStart);
+      // Check overlap: (start1 < end2) AND (end1 > start2) - không cộng buffer time
+      // Cho phép đặt liên tiếp: 08:20-08:50 và 08:50-09:20
+      const hasTimeOverlap = (slotStart < aptEnd && slotEnd > aptStart);
       
       if (hasTimeOverlap) {
         const aptDateVN = aptStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
@@ -339,19 +337,16 @@ class AppointmentService {
         select: 'fullName email'
       });
 
-      // Filter appointments có overlap thời gian (bao gồm buffer time)
+      // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
       for (const apt of overlappingAppointments) {
         if (!apt.timeslotId || !apt.customerId) continue;
 
         const aptStart = new Date(apt.timeslotId.startTime);
         const aptEnd = new Date(apt.timeslotId.endTime);
 
-        // ⭐ THÊM: Tính buffer time (10 phút)
-        const customerBufferTime = 10; // 10 phút buffer
-        const slotEndWithBuffer = new Date(slotEnd.getTime() + customerBufferTime * 60000);
-
-        // Check overlap: (start1 < end2) AND (end1WithBuffer > start2)
-        const hasTimeOverlap = (slotStart < aptEnd && slotEndWithBuffer > aptStart);
+        // Check overlap: (start1 < end2) AND (end1 > start2) - không cộng buffer time
+        // Cho phép đặt liên tiếp cho cùng một customer
+        const hasTimeOverlap = (slotStart < aptEnd && slotEnd > aptStart);
 
         if (hasTimeOverlap) {
           // Có trùng thời gian → check xem có trùng customer không
@@ -395,7 +390,7 @@ class AppointmentService {
       serviceId,
       startTime: new Date(selectedSlot.startTime),
       endTime: new Date(selectedSlot.endTime),
-      breakAfterMinutes: 10,
+      breakAfterMinutes: 0, // ⭐ Đặt = 0 vì đã bỏ logic nghỉ 10 phút - cho phép đặt liên tiếp
       // ⭐ FIXED: Nếu dịch vụ cần thanh toán trước, slot là "Reserved" (chưa xác nhận)
       // Khi thanh toán xong mới thành "Booked"
       status: service.isPrepaid ? 'Reserved' : 'Booked',

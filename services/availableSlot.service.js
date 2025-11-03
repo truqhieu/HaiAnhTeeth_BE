@@ -1475,20 +1475,23 @@ class AvailableSlotService {
         return slotDate.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0];
       });
 
-      // Cả 'self' và 'other' đều chỉ exclude slots của bác sĩ hiện tại
-      // Cho phép đặt trùng giờ cùng ngày với bác sĩ khác
+      // ⭐ EXCLUDE TẤT CẢ appointments của bệnh nhân (BẤT KỲ bác sĩ nào) - tránh đặt trùng thời gian
+      // Bệnh nhân không thể đặt 2 bác sĩ khác nhau cùng lúc
       userBookedSlots = userAppointmentsOnDate
-        .filter(apt => apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId)
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
           end: new Date(apt.timeslotId.endTime),
-          breakAfter: 10 // Default buffer time
+          // Không cần breakAfter vì đã bỏ buffer time
+          doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null
         }));
       
       if (appointmentFor === 'self') {
-        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments with doctor ${doctorUserId} on this date (appointmentFor=self) - EXCLUDING ONLY THIS DOCTOR`);
+        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=self) - EXCLUDING ALL DOCTORS`);
+        userBookedSlots.forEach((slot, idx) => {
+          console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
+        });
       } else if (appointmentFor === 'other') {
-        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments with doctor ${doctorUserId} on this date (appointmentFor=other) - EXCLUDING ONLY THIS DOCTOR`);
+        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=other) - EXCLUDING ALL DOCTORS`);
       }
     }
 
