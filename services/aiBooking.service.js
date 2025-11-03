@@ -297,17 +297,96 @@ class AIBookingService {
       // 1. Parse prompt
       const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId);
 
-      // 2. Check if input is invalid (not related to dental services)
-      if (parsedData.isValidInput === false) {
+      // 2. Handle different user intents
+      const intent = parsedData.userIntent;
+
+      // Handle greeting
+      if (intent === 'greeting') {
+        // Enrich với danh sách dịch vụ
+        const services = await Service.find({ status: 'Active' })
+          .select('serviceName category')
+          .sort({ category: 1, serviceName: 1 })
+          .lean();
+        
+        let servicesList = '';
+        if (services && services.length > 0) {
+          const categoryMap = {
+            'Consultation': '💬 Tư vấn online',
+            'Examination': '🏥 Khám trực tiếp',
+            'Treatment': '⚕️ Điều trị',
+            'Cosmetic': '✨ Thẩm mỹ',
+            'Surgery': '🔬 Phẫu thuật',
+            'Orthodontics': '🦷 Niềng răng',
+            'Prevention': '🛡️ Phòng ngừa'
+          };
+          
+          const groupedServices = {};
+          services.forEach(s => {
+            const category = s.category || 'Khác';
+            if (!groupedServices[category]) {
+              groupedServices[category] = [];
+            }
+            groupedServices[category].push(s.serviceName);
+          });
+          
+          Object.keys(groupedServices).forEach(category => {
+            if (groupedServices[category].length > 0) {
+              const displayName = categoryMap[category] || `📋 ${category}`;
+              servicesList += `\n${displayName}:\n`;
+              groupedServices[category].forEach(name => {
+                servicesList += `  • ${name}\n`;
+              });
+            }
+          });
+        }
+        
+        const greetingMessage = servicesList 
+          ? `Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`
+          : parsedData.followUpQuestion || 'Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn muốn đặt lịch dịch vụ nào ạ?';
+        
+        return {
+          success: false,
+          needsMoreInfo: true,
+          userIntent: 'greeting',
+          followUpQuestion: greetingMessage,
+          parsedData
+        };
+      }
+
+      // Handle rejection/goodbye
+      if (intent === 'rejection' || intent === 'goodbye') {
+        return {
+          success: false,
+          isConversationEnd: true,
+          userIntent: intent,
+          followUpQuestion: parsedData.followUpQuestion || 'Dạ được ạ! Hẹn gặp lại bạn. Chúc bạn một ngày tốt lành! 😊',
+          parsedData
+        };
+      }
+
+      // Handle ambiguous input
+      if (intent === 'ambiguous') {
+        return {
+          success: false,
+          needsMoreInfo: true,
+          userIntent: 'ambiguous',
+          followUpQuestion: parsedData.followUpQuestion || 'Mình chưa hiểu rõ yêu cầu của bạn. Bạn muốn đặt lịch khám răng không ạ?',
+          parsedData
+        };
+      }
+
+      // Handle off-topic (invalid input)
+      if (parsedData.isValidInput === false || intent === 'off_topic') {
         return {
           success: false,
           isInvalidInput: true,
+          userIntent: 'off_topic',
           rejectionReason: parsedData.rejectionReason || 'Xin lỗi, mình chỉ hỗ trợ đặt lịch khám răng và các dịch vụ nha khoa thôi ạ.',
           parsedData
         };
       }
 
-      // 3. Check if AI needs more info (multi-turn conversation)
+      // 3. Check if AI needs more info (multi-turn conversation) - for booking intent
       if (parsedData.needsMoreInfo) {
         // Enrich followUpQuestion với danh sách dịch vụ thực tế từ DB
         let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';

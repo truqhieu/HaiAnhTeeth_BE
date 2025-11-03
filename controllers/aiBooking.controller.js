@@ -43,6 +43,21 @@ const createAppointmentByAI = async (req, res) => {
       appointmentFor || 'self'
     );
 
+    // Check if conversation ended (rejection/goodbye)
+    if (result.isConversationEnd) {
+      console.log('🤖 [AI Booking] Conversation ended:', result.userIntent);
+      return res.status(200).json({
+        success: false,
+        data: {
+          isConversationEnd: true,
+          userIntent: result.userIntent,
+          followUpQuestion: result.followUpQuestion,
+          parsedData: result.parsedData
+        },
+        message: result.followUpQuestion
+      });
+    }
+
     // Check if input is invalid (not related to dental services)
     if (result.isInvalidInput) {
       console.log('🤖 [AI Booking] Invalid input detected');
