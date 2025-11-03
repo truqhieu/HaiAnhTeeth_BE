@@ -207,7 +207,25 @@ class AIBookingService {
           
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
             .select('_id fullName specialization')
+            .sort({ fullName: 1 }) // Sort để có thứ tự cố định
             .lean();
+          
+          // Check nếu input là số thứ tự
+          const numberMatch = doctorName.match(/^\d+$/);
+          if (numberMatch) {
+            const index = parseInt(doctorName) - 1; // Convert to 0-based index
+            if (index >= 0 && index < doctors.length) {
+              const selectedDoctor = doctors[index];
+              return {
+                found: true,
+                doctor: {
+                  id: selectedDoctor._id.toString(),
+                  name: selectedDoctor.fullName,
+                  specialization: selectedDoctor.specialization || ''
+                }
+              };
+            }
+          }
           
           const inputLower = doctorName.toLowerCase().trim();
           
