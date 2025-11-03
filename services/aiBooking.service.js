@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const Service = require('../models/service.model');
 const User = require('../models/user.model');
+const DoctorSchedule = require('../models/doctorSchedule.model');
+const Appointment = require('../models/appointment.model');
 const availableSlotService = require('./availableSlot.service');
 const appointmentService = require('./appointment.service');
 
@@ -355,41 +357,132 @@ class AIBookingService {
           
           const serviceDuration = service.durationMinutes || 30;
           
-          // Gọi generateAvailableSlotsByDate (KHÔNG có doctorId parameter - nó trả về tất cả bác sĩ)
-          const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
-            date,
-        serviceId,
-            patientUserId // Exclude patient's existing appointments
-          });
+          // Parse date
+          const searchDate = new Date(date);
+          searchDate.setHours(0, 0, 0, 0);
           
-          // slotsResult format: { date, slots: Array<{ startTime, endTime, displayTime, doctor, doctorScheduleId }>, totalSlots }
-          if (!slotsResult || !slotsResult.slots || slotsResult.slots.length === 0) {
-            return { error: 'Không có khung giờ nào khả dụng cho ngày này' };
+          // Lấy DoctorSchedule của bác sĩ cho ngày đó (Morning và Afternoon)
+          const schedules = await DoctorSchedule.find({
+            doctorUserId: doctorId,
+            date: searchDate,
+            status: 'Available'
+          }).lean();
+          
+          if (schedules.length === 0) {
+            return { error: `Bác sĩ này không có lịch làm việc vào ngày ${date}` };
           }
           
-          // Filter slots theo doctorId
-          const doctorSlots = slotsResult.slots.filter(slot => {
-            if (!slot.doctor || !slot.doctor.doctorUserId) {
-              return false;
+          // Lấy working hours từ schedule (lấy từ schedule đầu tiên, vì tất cả đều có cùng workingHours)
+          const workingHours = schedules[0].workingHours || {
+            morningStart: '08:00',
+            morningEnd: '12:00',
+            afternoonStart: '13:00',
+            afternoonEnd: '17:00'
+          };
+          
+          // Lấy tất cả appointments đã book của bác sĩ trong ngày đó
+          const startOfDay = new Date(searchDate);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(searchDate);
+          endOfDay.setHours(23, 59, 59, 999);
+          
+          const appointments = await Appointment.find({
+            doctorUserId: doctorId,
+            status: { $in: ['Pending', 'Approved', 'CheckedIn', 'PendingPayment'] },
+            timeslotId: { $exists: true }
+          })
+          .populate({
+            path: 'timeslotId',
+            select: 'startTime endTime',
+            match: {
+              startTime: { $gte: startOfDay, $lt: endOfDay }
             }
-            // doctorUserId có thể là ObjectId hoặc string
-            const slotDoctorId = slot.doctor.doctorUserId.toString();
-            return slotDoctorId === doctorId.toString();
-          });
+          })
+          .lean();
           
-          if (doctorSlots.length === 0) {
-            return { error: `Bác sĩ này không có khung giờ khả dụng vào ngày ${date}` };
+          // Lọc appointments có timeslot hợp lệ
+          const bookedAppointments = appointments
+            .filter(apt => apt.timeslotId && apt.timeslotId.startTime)
+            .map(apt => ({
+              start: new Date(apt.timeslotId.startTime),
+              end: new Date(apt.timeslotId.endTime)
+            }))
+            .sort((a, b) => a.start - b.start);
+          
+          // Exclude appointments của patient nếu có
+          let patientBookedSlots = [];
+          if (patientUserId) {
+            const patientAppointments = await Appointment.find({
+              patientUserId: patientUserId,
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            })
+            .populate({
+              path: 'timeslotId',
+              select: 'startTime endTime',
+              match: {
+                startTime: { $gte: startOfDay, $lt: endOfDay }
+              }
+            })
+            .lean();
+            
+            patientBookedSlots = patientAppointments
+              .filter(apt => apt.timeslotId && apt.timeslotId.startTime)
+              .map(apt => ({
+                start: new Date(apt.timeslotId.startTime),
+                end: new Date(apt.timeslotId.endTime)
+              }));
           }
           
-          // Group by morning/afternoon (dựa trên startTime là Date object)
-          const morningSlots = [];
-          const afternoonSlots = [];
-          
-          doctorSlots.forEach(slot => {
-            const startDate = new Date(slot.startTime);
-            const hour = startDate.getHours();
+          // Helper function: Tính continuous free blocks từ start-end và booked appointments
+          const calculateFreeBlocks = (startTimeStr, endTimeStr, bookedAppts, patientBooked) => {
+            const [startHour, startMin] = startTimeStr.split(':').map(Number);
+            const [endHour, endMin] = endTimeStr.split(':').map(Number);
             
-            // Format time cho display
+            const shiftStart = new Date(searchDate);
+            shiftStart.setHours(startHour, startMin, 0, 0);
+            
+            const shiftEnd = new Date(searchDate);
+            shiftEnd.setHours(endHour, endMin, 0, 0);
+            
+            // Combine booked appointments (doctor + patient) và filter theo shift (overlap với shift)
+            const allBooked = [...bookedAppts, ...(patientBooked || [])]
+              .filter(apt => {
+                // Chỉ lấy appointments overlap với shift này (appointment end > shift start và appointment start < shift end)
+                return apt.end > shiftStart && apt.start < shiftEnd;
+              })
+              .map(apt => ({
+                // Clamp appointment vào shift boundaries
+                start: apt.start < shiftStart ? shiftStart : apt.start,
+                end: apt.end > shiftEnd ? shiftEnd : apt.end
+              }))
+              .sort((a, b) => a.start - b.start);
+            
+            // Tính free blocks
+            const freeBlocks = [];
+            let currentStart = shiftStart;
+            
+            for (const booked of allBooked) {
+              if (currentStart < booked.start) {
+                // Có khoảng trống trước appointment
+                freeBlocks.push({
+                  start: currentStart,
+                  end: booked.start
+                });
+              }
+              // Cập nhật currentStart = end của appointment
+              currentStart = booked.end > currentStart ? booked.end : currentStart;
+            }
+            
+            // Khoảng trống cuối cùng (nếu còn)
+            if (currentStart < shiftEnd) {
+              freeBlocks.push({
+                start: currentStart,
+                end: shiftEnd
+              });
+            }
+            
+            // Format time cho display (HH:mm)
             const formatTime = (date) => {
               return date.toLocaleTimeString('vi-VN', {
                 hour: '2-digit',
@@ -399,30 +492,44 @@ class AIBookingService {
               });
             };
             
-            const slotInfo = {
-              startTime: formatTime(startDate),
-              endTime: formatTime(new Date(slot.endTime)),
-              startTimeISO: slot.startTime,
-              endTimeISO: slot.endTime,
-              displayTime: slot.displayTime || `${formatTime(startDate)} - ${formatTime(new Date(slot.endTime))}`
-            };
-            
-            if (hour < 12) {
-              morningSlots.push(slotInfo);
-            } else {
-              afternoonSlots.push(slotInfo);
-            }
-          });
+            return freeBlocks.map(block => ({
+              startTime: formatTime(block.start),
+              endTime: formatTime(block.end),
+              displayTime: `${formatTime(block.start)}-${formatTime(block.end)}`
+            }));
+          };
           
-        return {
+          // Filter appointments theo morning/afternoon
+          const morningBooked = bookedAppointments.filter(apt => apt.start.getHours() < 12);
+          const afternoonBooked = bookedAppointments.filter(apt => apt.start.getHours() >= 12);
+          const morningPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() < 12);
+          const afternoonPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() >= 12);
+          
+          // Tính free blocks cho buổi sáng
+          const morningBlocks = calculateFreeBlocks(
+            workingHours.morningStart,
+            workingHours.morningEnd,
+            morningBooked,
+            morningPatientBooked
+          );
+          
+          // Tính free blocks cho buổi chiều
+          const afternoonBlocks = calculateFreeBlocks(
+            workingHours.afternoonStart,
+            workingHours.afternoonEnd,
+            afternoonBooked,
+            afternoonPatientBooked
+          );
+          
+          return {
             success: true,
             serviceName: service.serviceName,
             durationMinutes: serviceDuration,
             date: date,
             doctorId: doctorId,
-            morning: morningSlots,
-            afternoon: afternoonSlots,
-            totalSlots: doctorSlots.length
+            morning: morningBlocks,
+            afternoon: afternoonBlocks,
+            totalFreeBlocks: morningBlocks.length + afternoonBlocks.length
           };
         }
         
