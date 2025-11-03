@@ -5,8 +5,11 @@ const Service = require('../models/service.model');
 const User = require('../models/user.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
 const Appointment = require('../models/appointment.model');
+const Timeslot = require('../models/timeslot.model');
+const Customer = require('../models/customer.model');
 const availableSlotService = require('./availableSlot.service');
 const appointmentService = require('./appointment.service');
+const { calculateServicePrice } = require('../utils/promotionHelper');
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -586,57 +589,262 @@ class AIBookingService {
           const { serviceId, doctorId, date, time, notes } = functionArgs;
           
           if (!serviceId || !doctorId || !date || !time) {
-            return { error: 'Missing required parameters' };
+            return { error: 'Vui lòng nhập đầy đủ thông tin để đặt lịch.' };
           }
           
-          // Find service and doctor
-          const service = await Service.findById(serviceId);
-          const doctor = await User.findById(doctorId);
-          
-          if (!service || !doctor) {
-            return { error: 'Service or doctor not found' };
+          try {
+            // 1. Validate patient
+            const patient = await User.findById(patientUserId);
+            if (!patient) {
+              return { error: 'Tài khoản của bạn không hợp lệ. Vui lòng đăng nhập lại.' };
+            }
+            
+            // 2. Validate service
+            const service = await Service.findById(serviceId);
+            if (!service) {
+              return { error: 'Dịch vụ bạn chọn không tồn tại. Vui lòng chọn dịch vụ khác.' };
+            }
+            if (service.status !== 'Active') {
+              return { error: 'Dịch vụ này hiện không khả dụng' };
+            }
+            
+            // 3. Validate doctor
+            const doctor = await User.findById(doctorId);
+            if (!doctor) {
+              return { error: 'Bác sĩ bạn chọn không tồn tại. Vui lòng chọn bác sĩ khác.' };
+            }
+            if (doctor.role !== 'Doctor') {
+              return { error: 'Bác sĩ bạn chọn không hợp lệ. Vui lòng chọn bác sĩ khác.' };
+            }
+            if (doctor.status !== 'Active') {
+              return { error: 'Bác sĩ bạn chọn hiện không khả dụng. Vui lòng chọn bác sĩ khác.' };
+            }
+            
+            // 4. Parse date and time
+            const appointmentDate = new Date(date);
+            appointmentDate.setHours(0, 0, 0, 0);
+            
+            // Parse time (format: HH:mm)
+            const [hours, minutes] = time.split(':').map(Number);
+            if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+              return { error: 'Thời gian không hợp lệ. Vui lòng nhập theo format HH:mm (ví dụ: 09:00)' };
+            }
+            
+            // Create startTime and endTime (VN timezone)
+            const slotStartTime = new Date(Date.UTC(
+              appointmentDate.getFullYear(),
+              appointmentDate.getMonth(),
+              appointmentDate.getDate(),
+              hours - 7, // Convert VN time (UTC+7) to UTC
+              minutes,
+              0
+            ));
+            
+            const slotEndTime = new Date(slotStartTime);
+            slotEndTime.setMinutes(slotEndTime.getMinutes() + service.durationMinutes);
+            
+            // 5. Validate time không ở quá khứ
+            const nowUtc = new Date();
+            if (slotStartTime.getTime() < nowUtc.getTime()) {
+              return { error: 'Không thể đặt thời gian ở quá khứ' };
+            }
+            
+            // 6. Validate slot duration phải khớp với service duration
+            const slotDurationMinutes = (slotEndTime - slotStartTime) / 60000;
+            if (slotDurationMinutes !== service.durationMinutes) {
+              return { 
+                error: `Khung giờ không hợp lệ. Dịch vụ "${service.serviceName}" cần ${service.durationMinutes} phút, nhưng thời gian bạn chọn là ${slotDurationMinutes} phút. Vui lòng chọn lại.` 
+              };
+            }
+            
+            // 7. Find doctor schedule
+            const schedules = await DoctorSchedule.find({
+              doctorUserId: doctorId,
+              date: appointmentDate,
+              status: 'Available'
+            }).lean();
+            
+            if (schedules.length === 0) {
+              return { error: 'Bác sĩ này không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.' };
+            }
+            
+            // Find schedule that matches the time slot (morning or afternoon)
+            // hours và minutes đã được parse từ input (VN time)
+            const schedule = schedules.find(s => {
+              const workingHours = s.workingHours || {
+                morningStart: '08:00',
+                morningEnd: '12:00',
+                afternoonStart: '13:00',
+                afternoonEnd: '17:00'
+              };
+              
+              if (s.shift === 'Morning') {
+                const [startHour, startMin] = workingHours.morningStart.split(':').map(Number);
+                const [endHour, endMin] = workingHours.morningEnd.split(':').map(Number);
+                const slotTimeMinutes = hours * 60 + minutes;
+                const startTimeMinutes = startHour * 60 + startMin;
+                const endTimeMinutes = endHour * 60 + endMin;
+                return slotTimeMinutes >= startTimeMinutes && slotTimeMinutes < endTimeMinutes;
+              } else if (s.shift === 'Afternoon') {
+                const [startHour, startMin] = workingHours.afternoonStart.split(':').map(Number);
+                const [endHour, endMin] = workingHours.afternoonEnd.split(':').map(Number);
+                const slotTimeMinutes = hours * 60 + minutes;
+                const startTimeMinutes = startHour * 60 + startMin;
+                const endTimeMinutes = endHour * 60 + endMin;
+                return slotTimeMinutes >= startTimeMinutes && slotTimeMinutes < endTimeMinutes;
+              }
+              return false;
+            });
+            
+            if (!schedule) {
+              return { error: 'Khung giờ này không nằm trong lịch làm việc của bác sĩ. Vui lòng chọn thời gian khác.' };
+            }
+            
+            // 8. Check conflict với timeslots đã có
+            const conflictingTimeslots = await Timeslot.find({
+              doctorUserId: doctorId,
+              startTime: { $lt: slotEndTime },
+              endTime: { $gt: slotStartTime },
+              status: { $in: ['Reserved', 'Booked'] }
+            });
+            
+            if (conflictingTimeslots.length > 0) {
+              return { error: 'Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.' };
+            }
+            
+            // 9. Check conflict với appointments của patient (BẤT KỲ bác sĩ nào) - không được đặt 2 bác sĩ khác nhau cùng giờ
+            const patientConflictAppointments = await Appointment.find({
+              patientUserId: patientUserId,
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            }).populate({
+              path: 'timeslotId',
+              select: 'startTime endTime doctorUserId'
+            });
+            
+            const hasConflict = patientConflictAppointments.some(apt => {
+              if (!apt.timeslotId) return false;
+              
+              const aptStartTime = new Date(apt.timeslotId.startTime);
+              const aptEndTime = new Date(apt.timeslotId.endTime);
+              
+              // Conflict nếu: slotStartTime < aptEndTime && slotEndTime > aptStartTime
+              return slotStartTime < aptEndTime && slotEndTime > aptStartTime;
+            });
+            
+            if (hasConflict) {
+              return { error: 'Bạn đã có lịch khám vào khung giờ này với bác sĩ khác. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!' };
+            }
+            
+            // 10. Check conflict với appointments của patient với cùng bác sĩ này
+            const sameDayAppointments = await Appointment.find({
+              patientUserId,
+              doctorUserId: doctorId,
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            }).populate({
+              path: 'timeslotId',
+              select: 'startTime endTime'
+            });
+            
+            for (const apt of sameDayAppointments) {
+              if (!apt.timeslotId) continue;
+              
+              const aptStart = new Date(apt.timeslotId.startTime);
+              const aptEnd = new Date(apt.timeslotId.endTime);
+              
+              // Check overlap: (start1 < end2) AND (end1 > start2)
+              if (slotStartTime < aptEnd && slotEndTime > aptStart) {
+                const aptDateVN = aptStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+                const aptStartVN = aptStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                const aptEndVN = aptEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                
+                return {
+                  error: `Bạn đã có lịch hẹn với bác sĩ này vào ${aptDateVN} từ ${aptStartVN} - ${aptEndVN}. Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
+                };
+              }
+            }
+            
+            // 11. Calculate price với promotion
+            const promotionData = await calculateServicePrice(serviceId, service.price);
+            const finalPrice = promotionData.finalPrice;
+            const originalPrice = promotionData.originalPrice;
+            
+            // 12. Xác định appointment mode và type
+            let appointmentMode = 'Online';
+            let appointmentType = 'Consultation';
+            if (service.category === 'Consultation') {
+              appointmentMode = 'Online';
+              appointmentType = 'Consultation';
+            } else if (service.category === 'Examination') {
+              appointmentMode = 'Offline';
+              appointmentType = 'Examination';
+            }
+            
+            // 13. Xác định status dựa vào isPrepaid
+            let appointmentStatus = 'Pending';
+            let paymentHoldExpiresAt = null;
+            if (service.isPrepaid) {
+              appointmentStatus = 'PendingPayment';
+              paymentHoldExpiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 phút
+            }
+            
+            // 14. Tạo Timeslot
+            const newTimeslot = await Timeslot.create({
+              doctorScheduleId: schedule._id,
+              doctorUserId,
+              serviceId,
+              startTime: slotStartTime,
+              endTime: slotEndTime,
+              breakAfterMinutes: 0,
+              status: service.isPrepaid ? 'Reserved' : 'Booked',
+              appointmentId: null // Sẽ update sau
+            });
+            
+            // 15. Tạo Appointment
+            const newAppointment = await Appointment.create({
+              patientUserId,
+              customerId: null, // Đặt cho bản thân
+              doctorUserId,
+              serviceId,
+              timeslotId: newTimeslot._id,
+              status: appointmentStatus,
+              type: appointmentType,
+              mode: appointmentMode,
+              notes: notes || null,
+              bookedByUserId: patientUserId,
+              paymentHoldExpiresAt: paymentHoldExpiresAt,
+              appointmentFor: 'self',
+              promotionId: promotionData.promotionInfo?.promotionId || null,
+              originalPrice: originalPrice,
+              finalPrice: finalPrice,
+              discountAmount: promotionData.discountAmount
+            });
+            
+            // 16. Update timeslot với appointmentId
+            await Timeslot.findByIdAndUpdate(newTimeslot._id, {
+              appointmentId: newAppointment._id,
+              status: service.isPrepaid ? 'Reserved' : 'Booked'
+            });
+            
+            // 17. Nếu cần thanh toán trước, tạo payment record (tạm thời skip, vì AI booking không có payment flow)
+            
+            return {
+              success: true,
+              appointmentId: newAppointment._id.toString(),
+              service: service.serviceName,
+              doctor: doctor.fullName,
+              date: date,
+              time: time,
+              status: appointmentStatus,
+              finalPrice: finalPrice,
+              originalPrice: originalPrice,
+              needsPayment: service.isPrepaid
+            };
+          } catch (error) {
+            console.error('❌ [AI create_appointment] Error:', error);
+            return { error: error.message || 'Đã xảy ra lỗi khi tạo lịch hẹn. Vui lòng thử lại.' };
           }
-          
-          // Find available slot
-          const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
-            date,
-            serviceId,
-            doctorId,
-            patientUserId
-          });
-          
-          if (!slotsResult.success || !slotsResult.data) {
-            return { error: 'No available slots' };
-          }
-          
-          const selectedSlot = slotsResult.data.find(s => s.startTime === time);
-          if (!selectedSlot) {
-            return { error: 'Selected time slot is not available' };
-          }
-          
-          // Create appointment
-          const appointmentData = {
-            serviceId,
-            doctorUserId: doctorId,
-            doctorScheduleId: slotsResult.scheduleId || null,
-            selectedSlot,
-            notes: notes || '',
-            appointmentFor: 'self'
-          };
-          
-          const appointment = await appointmentService.createAppointment(
-            appointmentData,
-            patientUserId
-          );
-
-      return {
-        success: true,
-            appointmentId: appointment._id.toString(),
-            service: service.serviceName,
-            doctor: doctor.fullName,
-            date,
-            time
-          };
         }
         
         default:
