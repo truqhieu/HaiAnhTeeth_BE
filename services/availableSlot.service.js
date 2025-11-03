@@ -367,12 +367,12 @@ class AvailableSlotService {
       }
     }
 
-    // 6. Tạo danh sách khoảng thời gian đã bận
+    // 6. Tạo danh sách khoảng thời gian đã bận (KHÔNG cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
     const busySlots = validAppointments.map(apt => {
       if (apt.timeslotId) {
         return {
           start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() + breakAfterMinutes * 60000 // + break time
+          end: new Date(apt.timeslotId.endTime).getTime() // Không cộng break time nữa
         };
       }
       return null;
@@ -383,7 +383,7 @@ class AvailableSlotService {
       if (apt.timeslotId) {
         return {
           start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() + breakAfterMinutes * 60000
+          end: new Date(apt.timeslotId.endTime).getTime() // Không cộng break time nữa
         };
       }
       return null;
@@ -394,7 +394,7 @@ class AvailableSlotService {
     // ⭐ THÊM: Thêm timeslots của bệnh nhân vào busy slots (để exclude khung giờ họ đã book)
     const patientTimeslotBusySlots = patientTimeslots.map(ts => ({
       start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() + breakAfterMinutes * 60000
+      end: new Date(ts.endTime).getTime() // Không cộng break time nữa
     }));
     
     busySlots.push(...patientTimeslotBusySlots);
@@ -402,7 +402,7 @@ class AvailableSlotService {
     // ⭐ THÊM: Thêm Reserved/Booked timeslots vào busySlots
     const reservedBusySlots = reservedTimeslots.map(ts => ({
       start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() + breakAfterMinutes * 60000
+      end: new Date(ts.endTime).getTime() // Không cộng break time nữa
     }));
     
     busySlots.push(...reservedBusySlots);
@@ -519,8 +519,8 @@ class AvailableSlotService {
         });
       }
 
-      // Tính thời gian bắt đầu slot tiếp theo
-      currentStart = new Date(currentEnd.getTime() + breakTime * 60000);
+      // Tính thời gian bắt đầu slot tiếp theo (không cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
+      currentStart = new Date(currentEnd);
     }
 
     return slots;
@@ -1203,19 +1203,17 @@ class AvailableSlotService {
         breakAfterMinutes
       });
 
-      // Lọc bỏ các slots đã được book (bởi bất kỳ ai)
+      // Lọc bỏ các slots đã được book (bởi bất kỳ ai) - KHÔNG cộng break time
       const bookedSlots = bookedSlotsByDoctor[doctorId] || [];
       let availableSlots = slots.filter(slot => {
         const slotStart = new Date(slot.startTime);
         const slotEnd = new Date(slot.endTime);
         
-        // ⭐ THÊM: Tính buffer time cho slot mới
-        const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-        
-        // Kiểm tra xem slot có bị trung với booked slot nào không (bao gồm buffer time)
+        // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã book
+        // Kiểm tra xem slot có bị trung với booked slot nào không
         return !bookedSlots.some(booked => {
-          // Conflict nếu: slotStart < booked.end && slotEndWithBuffer > booked.start
-          return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+          // Conflict nếu: slotStart < booked.end && slotEnd > booked.start
+          return (slotStart < booked.end && slotEnd > booked.start);
         });
       });
 
@@ -1238,12 +1236,10 @@ class AvailableSlotService {
           const slotStart = new Date(slot.startTime);
           const slotEnd = new Date(slot.endTime);
           
-          // ⭐ THÊM: Tính buffer time cho slot mới
-          const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-          
-          // Kiểm tra xem slot có trùng với slots user đã đặt không (bao gồm buffer time)
+          // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã book
+          // Kiểm tra xem slot có trùng với slots user đã đặt không
           const isBooked = patientBookedSlots.some(booked => {
-            return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+            return (slotStart < booked.end && slotEnd > booked.start);
           });
           
           if (isBooked) {
@@ -1279,11 +1275,9 @@ class AvailableSlotService {
           const slotStart = new Date(slot.startTime);
           const slotEnd = new Date(slot.endTime);
           
-          // ⭐ THÊM: Tính buffer time cho slot mới
-          const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-          
+          // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã book
           const isBooked = customerBookedSlots.some(booked => {
-            return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+            return (slotStart < booked.end && slotEnd > booked.start);
           });
           
           if (isBooked) {
@@ -1536,18 +1530,17 @@ class AvailableSlotService {
       return `${hours}:${minutes}`;
     };
 
-    // Function tính available gaps cho một shift (bao gồm buffer time)
+    // Function tính available gaps cho một shift (KHÔNG cộng buffer time - slot tiếp theo có thể bắt đầu ngay sau)
     const calculateAvailableGaps = (shiftStart, shiftEnd, bookedSlots) => {
       const gaps = [];
       let currentStart = new Date(shiftStart);
 
       for (const slot of bookedSlots) {
-        // ⭐ THÊM: Tính buffer time cho slot đã booked
-        const bufferTime = 10; // 10 phút buffer
-        const slotEndWithBuffer = new Date(slot.end.getTime() + bufferTime * 60000);
+        // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
+        const slotEnd = new Date(slot.end);
 
         // Nếu slot nằm ngoài shift này, skip
-        if (slotEndWithBuffer <= shiftStart || slot.start >= shiftEnd) continue;
+        if (slotEnd <= shiftStart || slot.start >= shiftEnd) continue;
 
         // Nếu có khoảng trống trước slot này
         if (currentStart < slot.start) {
@@ -1557,8 +1550,8 @@ class AvailableSlotService {
           });
         }
 
-        // Di chuyển currentStart đến sau slot này + buffer time
-        currentStart = slotEndWithBuffer > currentStart ? slotEndWithBuffer : new Date(slotEndWithBuffer);
+        // Di chuyển currentStart đến sau slot này (không cộng buffer time)
+        currentStart = slotEnd > currentStart ? slotEnd : new Date(slotEnd);
       }
 
       // Nếu còn khoảng trống sau slot cuối cùng
@@ -1582,10 +1575,10 @@ class AvailableSlotService {
     const searchDateStr = searchDate.toISOString().split('T')[0]; // yyyy-mm-dd
     const isToday = todayDateStr === searchDateStr;
     
-    // Helper function: Filter và adjust gaps theo thời gian thực + service duration + buffer time
+    // Helper function: Filter và adjust gaps theo thời gian thực + service duration (KHÔNG cộng buffer time)
     const filterRealTimeGaps = (gaps) => {
-      const bufferTime = 10; // 10 phút buffer
-      const totalTimeNeeded = serviceDurationMs + (bufferTime * 60 * 1000); // Service + buffer
+      // Không cộng buffer time nữa - chỉ cần thời gian cho service
+      const totalTimeNeeded = serviceDurationMs; // Chỉ service duration, không cộng buffer
       
       return gaps
         .map(gap => {
@@ -1608,10 +1601,10 @@ class AvailableSlotService {
             }
           }
           
-          // ⭐ Kiểm tra gap có đủ thời gian cho service + buffer không (áp dụng cho mọi ngày)
+          // ⭐ Kiểm tra gap có đủ thời gian cho service không (áp dụng cho mọi ngày, KHÔNG cộng buffer)
           const gapDuration = new Date(gap.end).getTime() - new Date(gap.start).getTime();
           if (gapDuration < totalTimeNeeded) {
-            return null; // Gap không đủ thời gian (service + buffer)
+            return null; // Gap không đủ thời gian cho service
           }
           
           return gap;

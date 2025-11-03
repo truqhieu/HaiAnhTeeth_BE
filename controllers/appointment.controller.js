@@ -649,21 +649,20 @@ const getRescheduleAvailableSlots = async (req, res) => {
       console.log(`   Booked ${index + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
     });
 
-    // ⭐ SỬA LỖI: Sử dụng logic buffer time giống như availableSlot service
+    // ⭐ SỬA LỖI: Bỏ logic buffer time - slot tiếp theo có thể bắt đầu ngay sau slot đã book
     const appointmentServiceDuration = appointment.serviceId.durationMinutes || 30; // Lấy thời gian dịch vụ
-    const breakAfterMinutes = 10; // 10 phút buffer (giống như availableSlot service)
     
     console.log(`⏱️ Service duration: ${appointmentServiceDuration} minutes`);
-    console.log(`⏱️ Break after minutes: ${breakAfterMinutes} minutes`);
+    console.log(`⏱️ Break after minutes: 0 (đã bỏ logic 10 phút)`);
 
-    // Tạo danh sách booked slots đã cộng buffer ở cuối
-    const bookedSlotsWithBuffer = bookedSlots.map(b => ({
+    // Tạo danh sách booked slots (KHÔNG cộng buffer - slot tiếp theo có thể bắt đầu ngay sau)
+    const bookedSlotsWithoutBuffer = bookedSlots.map(b => ({
       start: new Date(b.start),
-      end: new Date(new Date(b.end).getTime() + breakAfterMinutes * 60000)
+      end: new Date(b.end) // Không cộng break time nữa
     }));
 
     // Hàm kiểm tra xem có thể đặt lịch tại thời điểm startTime không
-    // Sử dụng logic giống như availableSlot service
+    // Bỏ logic buffer time - slot tiếp theo có thể bắt đầu ngay sau slot đã book
     const canBookAtTime = (startTimeStr) => {
       const [startHour, startMinute] = startTimeStr.split(':').map(Number);
       const startDate = new Date(searchDate);
@@ -671,17 +670,15 @@ const getRescheduleAvailableSlots = async (req, res) => {
       
       const endDate = new Date(startDate.getTime() + appointmentServiceDuration * 60000);
       
-      // Kiểm tra xem có conflict với lịch đã có không
-      // Sử dụng logic giống như availableSlot service: slotStart < booked.end && slotEndWithBuffer > booked.start
-      const hasConflict = bookedSlotsWithBuffer.some(booked => {
+      // Kiểm tra xem có conflict với lịch đã có không (KHÔNG cộng buffer time)
+      // Conflict nếu: startDate < bookedEnd && endDate > bookedStart
+      const hasConflict = bookedSlotsWithoutBuffer.some(booked => {
         const bookedStart = new Date(booked.start);
         const bookedEnd = new Date(booked.end);
         
-        // Tính buffer time cho slot mới (giống như availableSlot service)
-        const slotEndWithBuffer = new Date(endDate.getTime() + breakAfterMinutes * 60000);
-        
-        // Conflict nếu: startDate < bookedEnd && slotEndWithBuffer > bookedStart
-        return startDate < bookedEnd && slotEndWithBuffer > bookedStart;
+        // Không cộng buffer time nữa
+        // Conflict nếu: startDate < bookedEnd && endDate > bookedStart
+        return startDate < bookedEnd && endDate > bookedStart;
       });
       
       return !hasConflict;
