@@ -437,39 +437,57 @@ class AIBookingService {
             .lean();
           
           // Fuzzy matching: Nếu user nhập từ khóa chung (ví dụ: "răng"), filter các dịch vụ liên quan
-          const userInput = userPrompt.toLowerCase().trim();
-          const keywords = [
-            'răng', 'khám', 'tẩy', 'trồng', 'nhổ', 'niềng', 'bọc', 
-            'làm sạch', 'tím', 'hàm', 'sâu', 'trắng', 'tư vấn',
-            'điều trị', 'phục hồi', 'mặt', 'lắc', 'tủy', 'chỉnh nha',
-            'thẩm mỹ', 'phòng ngừa', 'cao vôi'
-          ];
-          
-          // Check xem user có nhập từ khóa chung không
+          // ✅ PRIORITY 1: Nếu AI đã parse được serviceCategory (ví dụ: "khám" → "Examination")
           let keyword = null;
-          for (const kw of keywords) {
-            if (userInput.includes(kw)) {
-              keyword = kw;
-              break;
+          if (parsedData.serviceCategory) {
+            console.log(`✅ [AI] User specified category: ${parsedData.serviceCategory}`);
+            const filteredServices = services.filter(s => s.category === parsedData.serviceCategory);
+            
+            if (filteredServices.length > 0) {
+              services = filteredServices;
+              const categoryMap = {
+                'Consultation': 'Tư vấn online',
+                'Examination': 'Khám trực tiếp'
+              };
+              const categoryName = categoryMap[parsedData.serviceCategory] || parsedData.serviceCategory;
+              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ ${categoryName} nào ạ? Các dịch vụ ${categoryName}:`;
             }
           }
-          
-          // Nếu có từ khóa, filter services
-          if (keyword && services.length > 0) {
-            const filteredServices = services.filter(s => 
-              s.serviceName.toLowerCase().includes(keyword)
-            );
+          // ✅ PRIORITY 2: Fuzzy matching với từ khóa từ userPrompt (nếu không có serviceCategory)
+          else {
+            const userInput = userPrompt.toLowerCase().trim();
+            const keywords = [
+              'răng', 'tẩy', 'trồng', 'nhổ', 'niềng', 'bọc', 
+              'làm sạch', 'tím', 'hàm', 'sâu', 'trắng',
+              'điều trị', 'phục hồi', 'mặt', 'lắc', 'tủy', 'chỉnh nha',
+              'thẩm mỹ', 'phòng ngừa', 'cao vôi'
+            ];
             
-            // Nếu tìm thấy nhiều dịch vụ liên quan
-            if (filteredServices.length > 1) {
-              services = filteredServices;
-              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ? Các dịch vụ liên quan đến "${keyword}":`;
+            // Check xem user có nhập từ khóa chung không
+            for (const kw of keywords) {
+              if (userInput.includes(kw)) {
+                keyword = kw;
+                break;
+              }
             }
-            // Nếu chỉ có 1 dịch vụ match, AI sẽ tự chọn (không vào đây)
-            else if (filteredServices.length === 1) {
-              // Let AI auto-select this service in the next turn
-              services = filteredServices;
-              enrichedQuestion = `Bạn có muốn đặt lịch dịch vụ "${filteredServices[0].serviceName}" không ạ?`;
+            
+            // Nếu có từ khóa, filter services
+            if (keyword && services.length > 0) {
+              const filteredServices = services.filter(s => 
+                s.serviceName.toLowerCase().includes(keyword)
+              );
+              
+              // Nếu tìm thấy nhiều dịch vụ liên quan
+              if (filteredServices.length > 1) {
+                services = filteredServices;
+                enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ? Các dịch vụ liên quan đến "${keyword}":`;
+              }
+              // Nếu chỉ có 1 dịch vụ match, AI sẽ tự chọn (không vào đây)
+              else if (filteredServices.length === 1) {
+                // Let AI auto-select this service in the next turn
+                services = filteredServices;
+                enrichedQuestion = `Bạn có muốn đặt lịch dịch vụ "${filteredServices[0].serviceName}" không ạ?`;
+              }
             }
           }
           
