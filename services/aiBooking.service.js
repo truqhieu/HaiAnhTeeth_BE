@@ -42,27 +42,10 @@ class AIBookingService {
         name: d.fullName
       }));
 
-      // 3. Build instructions từ config
-      const instructionsText = promptConfig.instructions.rules.map(rule => {
-        let text = `${rule.id}. ${rule.description}`;
-        if (rule.details && Array.isArray(rule.details)) {
-          text += '\n' + rule.details.map(d => `   - ${d}`).join('\n');
-        }
-        return text;
-      }).join('\n');
-
-      // 4. Build examples từ config
-      const examplesText = 'Ví dụ parse (few-shot examples):\n' + 
-        promptConfig.examples.map(ex => {
-          return `- Input: "${ex.input}"\n  Output: ${JSON.stringify(ex.output, null, 2)}`;
-        }).join('\n\n');
-
-      // 5. Build system prompt từ template
+      // 3. Build system prompt từ template (Zero-shot - không cần examples)
       const systemPrompt = promptConfig.systemPromptTemplate
         .replace('{{SERVICES_LIST}}', JSON.stringify(servicesList, null, 2))
-        .replace('{{DOCTORS_LIST}}', JSON.stringify(doctorsList, null, 2))
-        .replace('{{INSTRUCTIONS}}', instructionsText)
-        .replace('{{EXAMPLES}}', examplesText);
+        .replace('{{DOCTORS_LIST}}', JSON.stringify(doctorsList, null, 2));
 
       // 3.5. Parse ngày hiện tại để AI biết context
       const today = new Date();
@@ -73,7 +56,7 @@ class AIBookingService {
 
       // 4. Gọi OpenAI API với context về ngày
       const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: "gpt-4.1-mini",
         messages: [
           { role: "system", content: systemPrompt },
           { 
@@ -314,16 +297,39 @@ class AIBookingService {
       // 1. Parse prompt
       const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId);
 
-      // 2. Map to IDs
+      // 2. Check if AI needs more info (multi-turn conversation)
+      if (parsedData.needsMoreInfo) {
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: parsedData.missingFields || [],
+          followUpQuestion: parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin về dịch vụ và ngày đặt lịch không?',
+          parsedData // Trả về để frontend có thể track conversation context
+        };
+      }
+
+      // 3. Map to IDs
       const mappedData = await this.mapParsedDataToIds(parsedData);
 
-      // 3. Validate required data
+      // 4. Validate required data (double-check)
       if (!mappedData.serviceId) {
-        throw new Error('Không tìm thấy dịch vụ phù hợp. Vui lòng chỉ định rõ dịch vụ bạn muốn đặt lịch.');
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: ['serviceName'],
+          followUpQuestion: 'Xin lỗi, mình không tìm thấy dịch vụ phù hợp. Bạn muốn đặt lịch dịch vụ nào? (Khám răng, Nhổ răng, Trám răng, Tư vấn...)',
+          parsedData
+        };
       }
 
       if (!mappedData.date) {
-        throw new Error('Không thể xác định ngày đặt lịch. Vui lòng chỉ định rõ ngày (ví dụ: "ngày mai", "15/11").');
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: ['date'],
+          followUpQuestion: 'Bạn muốn đặt lịch vào ngày nào? (Ví dụ: ngày mai, thứ 3 tuần sau, 15/11...)',
+          parsedData
+        };
       }
 
       // 4. Find available slots
