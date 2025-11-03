@@ -6,11 +6,11 @@ const {createAccount, getAllAccounts, viewDetailAccount, updateAccount,lockAccou
 // ⭐ Chỉ Admin được phép quản lý tài khoản
 router.post('/accounts',verifyToken, verifyRole('Admin'), createAccount)
 router.get('/accounts',verifyToken, verifyRole('Admin'),  getAllAccounts)
-router.get('/accounts/:id', verifyToken, verifyRole('Admin'),viewDetailAccount)
-router.patch('/accounts/:id', verifyToken, verifyRole('Admin'), updateAccount)
 router.patch('/accounts/lock', verifyToken, verifyRole('Admin'), lockAccounts)
 router.patch('/accounts/unlock', verifyToken, verifyRole('Admin'), unlockAccounts)
 router.patch('/accounts/change-password/:id', verifyToken, verifyRole('Admin'), changePassword)
 router.patch('/accounts/assign-role/:id', verifyToken, verifyRole('Admin'), assignRole)
+router.get('/accounts/:id', verifyToken, verifyRole('Admin'),viewDetailAccount)
+router.patch('/accounts/:id', verifyToken, verifyRole('Admin'), updateAccount)
 
 module.exports = router;

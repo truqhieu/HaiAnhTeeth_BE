@@ -4,7 +4,9 @@ const Service = require('../models/service.model');
 const User = require('../models/user.model');
 const Customer = require('../models/customer.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
+const EmailService = require('../config/emailConfig')
 const { calculateServicePrice } = require('../utils/promotionHelper');
+const emailService = require('./email.service');
 
 class AppointmentService {
 
@@ -1251,6 +1253,170 @@ class AppointmentService {
       throw error;
     }
   }
+
+
+  
+async assignDoctorToAppointment(appointmentId, newDoctorId) {
+  try {
+    // 1. Tìm lịch khám + populate đầy đủ
+    const appointment = await Appointment.findById(appointmentId)
+      .populate('patientUserId', 'fullName email')
+      .populate('doctorUserId', 'fullName')
+      .populate('serviceId', 'serviceName')
+      .populate('timeslotId', 'startTime endTime date');
+
+    if (!appointment) {
+      throw new Error('Lịch khám không tồn tại');
+    }
+
+    if(!(appointment.status === 'Pending' || !appointment.status === 'Approved')){
+      throw new Error('Trạng thái lịch khám không khả dụng')
+    }
+
+    // 2. Lấy bác sĩ mới
+    const newDoctor = await User.findById(newDoctorId).select('fullName');
+    if (!newDoctor) {
+      throw new Error('Bác sĩ không tồn tại');
+    }
+
+    // 3. Xác định bác sĩ cũ
+    const oldDoctorName = appointment.replacedDoctorUserId?.fullName 
+                       || appointment.doctorUserId?.fullName 
+                       || null;
+
+    // 4. Cập nhật bác sĩ mới + set confirmDeadline 24h
+    const updated = await Appointment.findByIdAndUpdate(
+      appointmentId,
+      { 
+        replacedDoctorUserId: newDoctorId,
+        confirmDeadline: new Date(Date.now() + 24*60*60*1000),
+      },
+      { new: true }
+      ).populate('replacedDoctorUserId', 'fullName');
+
+    console.log(`✅ Gán bác sĩ thành công: ${newDoctor.fullName}`);
+
+    // 5. Chuẩn bị dữ liệu gửi email
+    const emailData = {
+      patientName: appointment.patientUserId.fullName,
+      serviceName: appointment.serviceId.serviceName,
+      oldDoctorName: oldDoctorName,
+      newDoctorName: newDoctor.fullName,
+      appointmentDate: appointment.timeslotId.date,
+      appointmentStart: appointment.timeslotId.startTime,
+      appointmentEnd: appointment.timeslotId.endTime,
+      clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải An'
+    };
+
+    // 6. Gửi email
+    await emailService.sendDoctorAssignedEmail(appointment.patientUserId.email, emailData);
+
+    console.log(`📧 Đã gửi email đến: ${appointment.patientUserId.email}`);
+
+    return updated;
+
+  } catch (error) {
+    console.error('❌ Lỗi gán bác sĩ:', error.message);
+    throw error;
+  }
+}
+
+async confirmChangeDoctor(appointmentId, options = { auto: false }) {
+  try {
+    // 1. Tìm appointment
+    const appointment = await Appointment.findById(appointmentId)
+      .populate('patientUserId', 'fullName email phoneNumber')
+      .populate('doctorUserId', 'fullName email')
+      .populate('serviceId', 'serviceName price durationMinutes category')
+      .populate('timeslotId', 'startTime endTime');
+
+    if (!appointment) throw new Error('Lịch khám không tồn tại');
+
+    if (!appointment.replacedDoctorUserId) {
+      throw new Error('Không có yêu cầu đổi bác sĩ');
+    }
+
+    // 2. Tìm lịch làm việc bác sĩ mới
+    const schedule = await DoctorSchedule.findOne({
+      doctorUserId: appointment.replacedDoctorUserId,
+      startTime: { $lte: appointment.timeslotId.startTime },
+      endTime: { $gte: appointment.timeslotId.endTime },
+    });
+
+    if (!schedule) throw new Error('Không tìm thấy lịch làm việc của bác sĩ mới');
+
+    // 3. Hủy timeslot cũ
+    const oldTimeSlot = await Timeslot.findById(appointment.timeslotId);
+    if (oldTimeSlot) {
+      await Timeslot.findByIdAndDelete(oldTimeSlot._id);
+    }
+
+    // 4. Tạo timeslot mới
+    const newTimeslot = new Timeslot({
+      doctorScheduleId: schedule._id,
+      doctorUserId: appointment.replacedDoctorUserId,
+      serviceId: appointment.serviceId._id,
+      startTime: oldTimeSlot.startTime,
+      endTime: oldTimeSlot.endTime,
+      breakAfterMinutes: 10,
+      status: 'Booked',
+      appointmentId: appointmentId,
+    });
+    await newTimeslot.save();
+
+    // 5. Cập nhật appointment
+    await Appointment.findByIdAndUpdate(appointmentId, {
+      doctorUserId: appointment.replacedDoctorUserId,
+      timeslotId: newTimeslot._id,
+      replacedDoctorUserId: null,
+      confirmDeadline: null, // xóa confirmDeadline sau khi auto confirm
+    });
+
+    // 6. Gửi email (nếu cần)
+    if (options.auto) {
+      console.log(`⏰ Appointment ${appointmentId} đã được auto-confirm bác sĩ mới do quá hạn 24h.`);
+      // TODO: gửi email thông báo auto-confirm
+    } else {
+      console.log(`✅ Patient đã xác nhận đổi bác sĩ thành công: ${appointmentId}`);
+      // TODO: gửi email patient confirm như bình thường
+    }
+
+    // 7. Lấy dữ liệu đầy đủ sau khi cập nhật
+    const updatedAppointment = await Appointment.findById(appointmentId)
+      .populate('patientUserId', 'fullName email phoneNumber')
+      .populate('doctorUserId', 'fullName email')
+      .populate('serviceId', 'serviceName price durationMinutes category')
+      .populate('timeslotId', 'startTime endTime');
+
+    return updatedAppointment;
+  } catch (error) {
+    console.error('❌ Lỗi confirmChangeDoctor:', error.message);
+    throw error;
+  }
+}
+
+
+async cancelChangeDoctor(appointmentId) {
+    try {
+      //Kiểm tra lịch khám có tồn tại không
+      const appointment = await Appointment.findById(appointmentId);
+      if(!appointment){
+        throw new Error('Lịch khám không tồn tại')
+      }      
+
+      //Cập nhật lịch khám của bệnh nhân
+      const update = await Appointment.findByIdAndUpdate(
+        appointmentId,
+        {replacedDoctorUserId : null},
+        {new : true},
+      )
+      console.log('❌Từ chối đổi bác sĩ mới thành công')
+    } catch (error) {
+    console.error('❌ Lỗi từ chối đổi bác sĩ mới', error);
+    throw error;     
+    }
+  }
+  
 
 }
 

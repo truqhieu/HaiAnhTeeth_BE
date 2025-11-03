@@ -819,6 +819,101 @@ HaiAnhTeeth Team
   };
 };
 
+const getDoctorAssignedEmailTemplate = (data) => {
+  const {
+    patientName,
+    serviceName,
+    oldDoctorName = null,
+    newDoctorName,
+    appointmentDate,
+    appointmentStart,
+    appointmentEnd,
+    clinicName = 'Phòng khám Hải An'
+  } = data;
+
+  // Kiểm tra và format ngày giờ an toàn
+  const formattedDate = appointmentDate ? DateHelper.formatVietnameseDate(appointmentDate) : 'Chưa xác định';
+  const formattedStart = appointmentStart ? DateHelper.formatVietnameseTime(appointmentStart) : '';
+  const formattedEnd = appointmentEnd ? DateHelper.formatVietnameseTime(appointmentEnd) : '';
+
+  const hasOldDoctor = oldDoctorName && oldDoctorName.trim();
+  const reason = hasOldDoctor
+    ? `Do bác sĩ ${oldDoctorName} bận, chúng tôi đã chỉ định bác sĩ ${newDoctorName} thay thế.`
+    : `Chúng tôi đã chỉ định bác sĩ ${newDoctorName} khám cho bạn.`;
+
+  const supportEmail = process.env.SUPPORT_EMAIL || process.env.EMAIL_USER || 'support@haianteeth.com';
+
+  return {
+    subject: `Cập nhật bác sĩ khám - ${clinicName}`,
+    text: `
+Xin chào ${patientName},
+
+${reason}
+
+📅 THÔNG TIN LỊCH KHÁM:
+- Dịch vụ: ${serviceName}
+- Bác sĩ: ${newDoctorName}${hasOldDoctor ? ` (thay thế ${oldDoctorName})` : ''}
+- Thời gian: ${formattedStart} - ${formattedEnd}, ${formattedDate}
+- Địa điểm: ${clinicName}
+
+Vui lòng đến đúng giờ để đảm bảo chất lượng khám chữa bệnh.
+
+Mọi thắc mắc xin liên hệ: ${supportEmail}
+
+Trân trọng,
+${clinicName}
+    `.trim(),
+    html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; padding: 20px; color: #333; }
+    .email-container { max-width: 600px; margin: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
+    .email-header { background: #007bff; color: white; padding: 20px; text-align: center; font-size: 20px; font-weight: bold; }
+    .email-body { padding: 25px; font-size: 15px; line-height: 1.6; }
+    .highlight { background: #e2f0d9; padding: 12px; border-radius: 6px; margin: 20px 0; }
+    .highlight strong { color: #2c3e50; }
+    .doctor-change { background: #fff3cd; padding: 12px; border-radius: 6px; font-weight: 600; color: #856404; text-align: center; margin-bottom: 20px; }
+    .email-footer { background: #f1f1f1; padding: 15px; text-align: center; font-size: 13px; color: #666; }
+    a { color: #007bff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      Cập nhật bác sĩ khám
+    </div>
+    <div class="email-body">
+      <p>Xin chào <strong>${patientName}</strong>,</p>
+      <p>${reason}</p>
+      <div class="doctor-change">
+        ${hasOldDoctor 
+          ? `Bác sĩ <span style="text-decoration: line-through;">${oldDoctorName}</span> → <strong>${newDoctorName}</strong>` 
+          : `<strong>${newDoctorName}</strong> được chỉ định khám cho bạn`}
+      </div>
+      <div class="highlight">
+        <strong>Dịch vụ:</strong> ${serviceName}<br>
+        <strong>Bác sĩ:</strong> ${newDoctorName}${hasOldDoctor ? ` (thay thế ${oldDoctorName})` : ''}<br>
+        <strong>Thời gian:</strong> ${formattedStart} - ${formattedEnd}, ${formattedDate}<br>
+        <strong>Địa điểm:</strong> ${clinicName}
+      </div>
+      <p>Vui lòng đến đúng giờ để đảm bảo chất lượng khám chữa bệnh.</p>
+      <p>Mọi thắc mắc xin liên hệ: <a href="mailto:${supportEmail}">${supportEmail}</a></p>
+    </div>
+    <div class="email-footer">
+      ${clinicName} • Email tự động
+    </div>
+  </div>
+</body>
+</html>
+    `.trim()
+  };
+};
+
+
+
 module.exports = {
   createTransporter,
   getVerificationEmailTemplate,
@@ -827,7 +922,8 @@ module.exports = {
   getAppointmentApprovedEmailTemplate,
   getAppointmentCancelledEmailTemplate,
   getRequestApprovedEmailTemplate,
-  getRequestRejectedEmailTemplate
+  getRequestRejectedEmailTemplate,
+  getDoctorAssignedEmailTemplate
 };
 
 // ⭐ Template: Yêu cầu đã được duyệt (Đổi lịch/Đổi bác sĩ)
@@ -984,3 +1080,6 @@ Trân trọng,
 
   return { subject, text, html };
 }
+
+
+

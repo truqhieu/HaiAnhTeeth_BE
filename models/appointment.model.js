@@ -82,6 +82,10 @@ const appointmentSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  confirmDeadline : {
+    type : Date,
+    default : null,
+  },
   cancelReason: {
     type: String,
     default: null

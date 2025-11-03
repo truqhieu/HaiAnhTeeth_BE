@@ -90,6 +90,10 @@ class TempRegisterService {
       isExpired: tempUser.tokenExpireAt < new Date()
     };
   }
+
+  async sendEmailChangeDoctor(email){
+    
+  }
 }
 
 module.exports = new TempRegisterService();

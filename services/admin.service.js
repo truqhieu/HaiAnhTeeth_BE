@@ -3,7 +3,7 @@ const Doctor = require('../models/doctor.model');
 const Staff = require('../models/staff.model');
 const Patient = require('../models/patient.model');
 
-const ROLE_ACCOUNT = ['Doctor', 'Nurse', 'Staff', 'Patient', 'Manager'];
+const ROLE_ACCOUNT = ['Doctor', 'Nurse', 'Staff', 'Manager'];
 
 class AdminService {
 

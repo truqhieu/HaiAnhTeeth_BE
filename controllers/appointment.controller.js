@@ -1417,6 +1417,80 @@ const getAllDoctors = async (req, res) => {
   }
 };
 
+// ⭐ Gán bác sĩ mới thay thế bác sĩ cũ vắng mặt
+const assignDoctorToAppointment = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    const { newDoctorId } = req.body;
+
+
+    const data = await appointmentService.assignDoctorToAppointment(
+      appointmentId,
+      newDoctorId
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Gán bác sĩ thành công',
+      data
+    });
+  } catch (error) {
+    console.error('❌ Error in assignDoctorToAppointment:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
+  }
+};
+
+// ⭐ Xác nhận đổi bác sĩ mới thay thế bác sĩ cũ
+const confirmChangeDoctor = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+
+    // Patient confirm thủ công → auto = false
+    const data = await appointmentService.confirmChangeDoctor(appointmentId, { auto: false });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Xác nhận đổi bác sĩ mới thành công',
+      data
+    });
+  } catch (error) {
+    console.error('❌ Error in confirmChangeDoctor:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
+  }
+};
+
+
+
+// ⭐ Từ chối đổi bác sĩ mới thay thế bác sĩ cũ 
+const cancelChangeDoctor = async(req,res) =>{
+  try {
+    const {appointmentId} = req.params;
+    const data = await appointmentService.cancelChangeDoctor(appointmentId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Tù chối đổi bác sĩ mới thành công',
+      data
+    });     
+  } catch (error) {
+    console.error('❌ Error in cancelChangeDoctor:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });        
+  }
+}
+
+
 module.exports = {
   createConsultationAppointment,
   reviewAppointment,
@@ -1432,5 +1506,8 @@ module.exports = {
   requestChangeDoctor,
   getRescheduleAvailableSlots,
   getAvailableDoctorsForTimeSlot,
-  getAllDoctors
+  getAllDoctors,
+  assignDoctorToAppointment,
+  confirmChangeDoctor,
+  cancelChangeDoctor,
 };

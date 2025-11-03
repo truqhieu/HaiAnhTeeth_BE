@@ -15,7 +15,10 @@ const {
   requestChangeDoctor,
   getRescheduleAvailableSlots,
   getAvailableDoctorsForTimeSlot,
-  getAllDoctors
+  getAllDoctors,
+  assignDoctorToAppointment,
+  confirmChangeDoctor,
+  cancelChangeDoctor
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
@@ -75,5 +78,14 @@ router.get('/:appointmentId/available-doctors', verifyToken, getAvailableDoctors
 
 // ⭐ Patient xem hồ sơ khám bệnh (read-only)
 router.get('/:appointmentId/medical-record', verifyToken, verifyRole('Patient'), getMedicalRecordForPatient);
+
+// ⭐ Staff gán bác sĩ mới thay thế bác sĩ cũ vắng mặt
+router.post('/:appointmentId/assign-replace-doctor', verifyToken, verifyRole('Staff'), assignDoctorToAppointment);
+
+// ⭐ Xác nhận đổi bác sĩ mới thay thế bác sĩ cũ
+router.post('/:appointmentId/confirm-change-doctor', verifyToken, verifyRole('Patient'), confirmChangeDoctor);
+
+// ⭐ Từ chối đổi bác sĩ mới thay thế bác sĩ cũ
+router.post('/:appointmentId/cancel-change-doctor', verifyToken, verifyRole('Patient'), cancelChangeDoctor);
 
 module.exports = router;

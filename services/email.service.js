@@ -6,7 +6,8 @@ const {
   getAppointmentApprovedEmailTemplate, 
   getAppointmentCancelledEmailTemplate,
   getRequestApprovedEmailTemplate,
-  getRequestRejectedEmailTemplate
+  getRequestRejectedEmailTemplate,
+  getDoctorAssignedEmailTemplate
 } = require('../config/emailConfig');
 
 // Import SendGrid
@@ -220,6 +221,23 @@ class EmailService {
       }
     }
   }
+
+  async sendDoctorAssignedEmail(email, data) {
+  const template = getDoctorAssignedEmailTemplate(data); 
+
+  if (this.useSendGrid) {
+    return this._sendViaSendGrid(email, template.subject, template.text, template.html);
+  }
+
+  const transporter = createTransporter();
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER || 'noreply@haianteeth.com',
+    to: email,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+  });
+}
 }
 
 module.exports = new EmailService();

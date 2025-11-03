@@ -14,19 +14,28 @@ class LeaveRequestService {
       throw new Error('Vui lòng nhập đầy đủ thông tin');
     }
 
-    const now = new Date();
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const normalizeDay = (d) =>{
+      const time = new Date(d);
+      if(isNaN(time.getTime())) return null;
+      time.setHours(0,0,0,0);
+      return time;
+    }
 
-    if (isNaN(start.getTime())) {
+    const start = normalizeDay(startDate);
+    const end = normalizeDay(endDate);
+
+
+    if (!start) {
       throw new Error('Ngày bắt đầu không hợp lệ');
     }
+
+    const now = normalizeDay(Date.now());
 
     if (start < now) {
       throw new Error('Ngày bắt đầu phải tính từ hiện tại');
     }
 
-    if (end <= start) {
+    if (end < start) {
       throw new Error('Ngày kết thúc phải lớn hơn ngày bắt đầu');
     }
 
@@ -54,11 +63,24 @@ class LeaveRequestService {
       throw new Error('Bạn đã có đơn nghỉ được duyệt trong khoảng thời gian này');
     }
 
+    // Format real time
+
+    const rightNow = new Date();
+    
+    const startToSave = new Date(start);
+    startToSave.setHours(
+      rightNow.getHours(),
+      rightNow.getMinutes(),
+    )
+
+    const endToSave = new Date(end);
+    endToSave.setHours(23, 59, 59, 999);
+
     const newRequest = new LeaveRequest({
       userId,
-      startDate,
-      endDate,
-      reason,
+      startDate : startToSave,
+      endDate : endToSave,
+      reason : cleanReason,
     });
 
     await newRequest.save();
