@@ -145,13 +145,10 @@ class AppointmentService {
             const slotStartTime = new Date(selectedSlot.startTime);
             const slotEndTime = new Date(selectedSlot.endTime);
             
-            // ⭐ THÊM: Tính buffer time (10 phút)
-            const bufferTime = 10; // 10 phút buffer
-            const slotEndTimeWithBuffer = new Date(slotEndTime.getTime() + bufferTime * 60000);
-            
-            // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTimeWithBuffer > appointmentStartTime
-            if (slotStartTime < appointmentEndTime && slotEndTimeWithBuffer > appointmentStartTime) {
-              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này (bao gồm buffer time)`);
+            // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
+            // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime
+            if (slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime) {
+              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này`);
               throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
             }
           }
@@ -167,9 +164,7 @@ class AppointmentService {
     const slotStartTime = new Date(selectedSlot.startTime);
     const slotEndTime = new Date(selectedSlot.endTime);
     
-    // ⭐ THÊM: Tính buffer time (10 phút)
-    const timeslotBufferTime = 10; // 10 phút buffer
-    const slotEndTimeWithBuffer = new Date(slotEndTime.getTime() + timeslotBufferTime * 60000);
+    // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     
     // ⭐ Không cho đặt thời gian ở quá khứ
     const nowUtc = new Date();
@@ -177,10 +172,10 @@ class AppointmentService {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
     
-    // Kiểm tra conflict với timeslots đã có (bao gồm buffer time)
+    // Kiểm tra conflict với timeslots đã có (KHÔNG cộng buffer time)
     const conflictingTimeslots = await Timeslot.find({
       doctorUserId: doctorUserId,
-      startTime: { $lt: slotEndTimeWithBuffer },
+      startTime: { $lt: slotEndTime },
       endTime: { $gt: slotStartTime },
       status: { $in: ['Reserved', 'Booked'] }
     });

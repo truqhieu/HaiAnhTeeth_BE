@@ -1867,13 +1867,12 @@ class AvailableSlotService {
     }
 
     // ⭐ 6. Check conflict với timeslots đã Reserved/Booked (đang chờ thanh toán hoặc đã đặt)
+    // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     const Timeslot = require('../models/timeslot.model');
-    const timeslotBufferTime = 10; // 10 phút buffer
-    const endTimeWithBuffer = new Date(endTimeObj.getTime() + timeslotBufferTime * 60000);
     
     const conflictingTimeslots = await Timeslot.find({
       doctorUserId: doctorUserId,
-      startTime: { $lt: endTimeWithBuffer },
+      startTime: { $lt: endTimeObj },
       endTime: { $gt: startTimeObj },
       status: { $in: ['Reserved', 'Booked'] }
     });
