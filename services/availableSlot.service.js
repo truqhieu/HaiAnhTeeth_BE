@@ -349,11 +349,35 @@ class AvailableSlotService {
     // ⭐ THÊM: Lấy tất cả timeslots đã được Reserved hoặc Booked trong ngày
     // Để tránh conflict ngay cả khi chưa confirm appointment
     const Timeslot = require('../models/timeslot.model');
-    const reservedTimeslots = await Timeslot.find({
+    const allReservedTimeslots = await Timeslot.find({
       doctorUserId,
       status: { $in: ['Reserved', 'Booked'] },
       startTime: { $gte: startOfDay, $lte: endOfDay }
-    }).sort({ startTime: 1 });
+    }).populate('appointmentId', 'timeslotId').sort({ startTime: 1 });
+
+    // ⭐ FIX: Chỉ lấy timeslots có appointmentId VÀ appointment đó vẫn còn reference đến timeslot này
+    // (Tránh lấy timeslot cũ sau khi reschedule)
+    const reservedTimeslots = allReservedTimeslots.filter(timeslot => {
+      // Nếu timeslot không có appointmentId, vẫn tính (có thể là Reserved chưa có appointment)
+      if (!timeslot.appointmentId) {
+        return true;
+      }
+      
+      // Nếu timeslot có appointmentId, kiểm tra appointment có còn reference đến timeslot này không
+      const appointment = timeslot.appointmentId;
+      if (!appointment || !appointment.timeslotId) {
+        // Appointment không còn reference đến timeslot này → timeslot đã được giải phóng
+        return false;
+      }
+      
+      // Kiểm tra appointment.timeslotId có matching với timeslot._id không
+      const appointmentTimeslotId = appointment.timeslotId.toString();
+      const timeslotId = timeslot._id.toString();
+      
+      return appointmentTimeslotId === timeslotId;
+    });
+
+    console.log(`🔍 [getAvailableSlots] Filtered to ${reservedTimeslots.length} valid timeslots (after excluding orphaned slots from ${allReservedTimeslots.length} total)`);
 
     // ⭐ THÊM: Lấy tất cả timeslots từ appointments của bệnh nhân hiện tại trong ngày
     // Để exclude các khung giờ bệnh nhân đã book
@@ -1417,7 +1441,7 @@ class AvailableSlotService {
         $lt: new Date(searchDate.getTime() + 24 * 60 * 60 * 1000)
       },
       status: { $in: ['Reserved', 'Booked'] }
-    });
+    }).populate('appointmentId', 'timeslotId');
 
     console.log(`🔍 [getDoctorScheduleRange] Found ${allTimeslots.length} timeslots (Reserved/Booked) for doctor ${doctorUserId} on ${searchDate.toISOString().split('T')[0]}`);
 
@@ -1434,8 +1458,32 @@ class AvailableSlotService {
         breakAfter: apt.timeslotId.breakAfterMinutes || 10
       }));
 
+    // ⭐ FIX: Chỉ lấy timeslots có appointmentId VÀ appointment đó vẫn còn reference đến timeslot này
+    // (Tránh lấy timeslot cũ sau khi reschedule - đã được set về 'Available' nhưng có thể có delay)
+    const validTimeslots = allTimeslots.filter(timeslot => {
+      // Nếu timeslot không có appointmentId, vẫn tính (có thể là Reserved chưa có appointment)
+      if (!timeslot.appointmentId) {
+        return true;
+      }
+      
+      // Nếu timeslot có appointmentId, kiểm tra appointment có còn reference đến timeslot này không
+      const appointment = timeslot.appointmentId;
+      if (!appointment || !appointment.timeslotId) {
+        // Appointment không còn reference đến timeslot này → timeslot đã được giải phóng
+        return false;
+      }
+      
+      // Kiểm tra appointment.timeslotId có matching với timeslot._id không
+      const appointmentTimeslotId = appointment.timeslotId.toString();
+      const timeslotId = timeslot._id.toString();
+      
+      return appointmentTimeslotId === timeslotId;
+    });
+
+    console.log(`🔍 [getDoctorScheduleRange] Filtered to ${validTimeslots.length} valid timeslots (after excluding orphaned slots)`);
+
     // Thêm timeslots từ bảng Timeslot
-    const bookedSlotsFromTimeslots = allTimeslots.map(timeslot => ({
+    const bookedSlotsFromTimeslots = validTimeslots.map(timeslot => ({
       start: new Date(timeslot.startTime),
       end: new Date(timeslot.endTime),
       breakAfter: 10 // Default buffer time
