@@ -163,6 +163,49 @@ class AppointmentService {
     // Để tránh race condition: 2 request cùng lúc
     const slotStartTime = new Date(selectedSlot.startTime);
     const slotEndTime = new Date(selectedSlot.endTime);
+
+    // ⭐ THÊM: Check conflict khi đặt cho bản thân - không được đặt 2 bác sĩ khác nhau cùng giờ
+    if (appointmentFor === 'self' || !appointmentFor) {
+      console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId}`);
+      
+      // Lấy tất cả appointments của bệnh nhân này (BẤT KỲ bác sĩ nào) vào cùng thời gian
+      const patientConflictAppointments = await Appointment.find({
+        patientUserId: patientUserId,
+        status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+        timeslotId: { $exists: true }
+      }).populate({
+        path: 'timeslotId',
+        select: 'startTime endTime doctorUserId'
+      });
+
+      // Kiểm tra xem có appointment nào của bệnh nhân trùng thời gian không
+      const hasConflict = patientConflictAppointments.some(apt => {
+        if (!apt.timeslotId) return false;
+        
+        const aptStartTime = new Date(apt.timeslotId.startTime);
+        const aptEndTime = new Date(apt.timeslotId.endTime);
+        
+        // Conflict nếu: slotStartTime < aptEndTime && slotEndTime > aptStartTime
+        // (không cộng buffer time - slot tiếp theo có thể bắt đầu ngay sau)
+        const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
+        
+        if (isConflict) {
+          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này:`);
+          console.log(`   - Appointment ID: ${apt._id}`);
+          console.log(`   - Doctor ID: ${apt.doctorUserId} (current: ${doctorUserId})`);
+          console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
+          console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
+        }
+        
+        return isConflict;
+      });
+
+      if (hasConflict) {
+        throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ khác. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!');
+      }
+
+      console.log(`✅ Patient ${patientUserId} không có conflict với appointments của chính họ`);
+    }
     
     // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     
