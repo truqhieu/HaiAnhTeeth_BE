@@ -346,13 +346,34 @@ class AIBookingService {
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
           }
           
-          // Lấy thông tin dịch vụ để có durationMinutes
-          const service = await Service.findById(serviceId)
-            .select('_id serviceName durationMinutes')
-            .lean();
+          // Xử lý serviceId: có thể là ObjectId hoặc số thứ tự
+          let service = null;
+          const serviceIdStr = serviceId.toString();
+          
+          // Check nếu serviceId là số thứ tự
+          const numberMatch = serviceIdStr.match(/^\d+$/);
+          if (numberMatch) {
+            // Lấy danh sách dịch vụ và chọn theo index
+            const services = await Service.find({ status: 'Active' })
+              .select('_id serviceName durationMinutes')
+              .sort({ category: 1, serviceName: 1 })
+              .lean();
+            
+            const index = parseInt(serviceIdStr) - 1; // Convert to 0-based index
+            if (index >= 0 && index < services.length) {
+              service = services[index];
+            } else {
+              return { error: `Số thứ tự ${serviceIdStr} không hợp lệ. Vui lòng chọn lại dịch vụ.` };
+            }
+          } else {
+            // Dùng serviceId trực tiếp (ObjectId)
+            service = await Service.findById(serviceId)
+              .select('_id serviceName durationMinutes')
+              .lean();
+          }
           
           if (!service) {
-            return { error: 'Dịch vụ không tồn tại' };
+            return { error: 'Dịch vụ không tồn tại. Vui lòng chọn lại dịch vụ.' };
           }
           
           const serviceDuration = service.durationMinutes || 30;
