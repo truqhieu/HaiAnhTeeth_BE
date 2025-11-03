@@ -21,7 +21,11 @@ const {
   cancelChangeDoctor
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
+const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
+
+// ⭐ AI tự động đặt lịch từ prompt
+router.post('/ai-create', verifyToken, verifyRole('Patient'), createAppointmentByAI);
 
 // ⭐ Patient đặt lịch tư vấn/khám - Cần đăng nhập
 router.post('/consultation/create', verifyToken, verifyRole('Patient'), createConsultationAppointment);

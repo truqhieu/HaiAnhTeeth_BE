@@ -303,10 +303,13 @@ class AvailableSlotService {
     endOfDay.setHours(23, 59, 59, 999);
 
     // ⭐ FIXED: Query appointments có timeslot rảnh trong ngày (không dùng createdAt)
+    // ⭐ Loại trừ appointments của chính bệnh nhân này - cho phép họ đặt nhiều slots liên tiếp
     const bookedAppointments = await Appointment.find({
       doctorUserId,
       status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
-      timeslotId: { $exists: true }
+      timeslotId: { $exists: true },
+      // ⭐ THÊM: Loại trừ appointments của chính bệnh nhân này
+      ...(patientUserId ? { patientUserId: { $ne: patientUserId } } : {})
     })
     .populate({
       path: 'timeslotId',
@@ -346,11 +349,35 @@ class AvailableSlotService {
     // ⭐ THÊM: Lấy tất cả timeslots đã được Reserved hoặc Booked trong ngày
     // Để tránh conflict ngay cả khi chưa confirm appointment
     const Timeslot = require('../models/timeslot.model');
-    const reservedTimeslots = await Timeslot.find({
+    const allReservedTimeslots = await Timeslot.find({
       doctorUserId,
       status: { $in: ['Reserved', 'Booked'] },
       startTime: { $gte: startOfDay, $lte: endOfDay }
-    }).sort({ startTime: 1 });
+    }).populate('appointmentId', 'timeslotId').sort({ startTime: 1 });
+
+    // ⭐ FIX: Chỉ lấy timeslots có appointmentId VÀ appointment đó vẫn còn reference đến timeslot này
+    // (Tránh lấy timeslot cũ sau khi reschedule)
+    const reservedTimeslots = allReservedTimeslots.filter(timeslot => {
+      // Nếu timeslot không có appointmentId, vẫn tính (có thể là Reserved chưa có appointment)
+      if (!timeslot.appointmentId) {
+        return true;
+      }
+      
+      // Nếu timeslot có appointmentId, kiểm tra appointment có còn reference đến timeslot này không
+      const appointment = timeslot.appointmentId;
+      if (!appointment || !appointment.timeslotId) {
+        // Appointment không còn reference đến timeslot này → timeslot đã được giải phóng
+        return false;
+      }
+      
+      // Kiểm tra appointment.timeslotId có matching với timeslot._id không
+      const appointmentTimeslotId = appointment.timeslotId.toString();
+      const timeslotId = timeslot._id.toString();
+      
+      return appointmentTimeslotId === timeslotId;
+    });
+
+    console.log(`🔍 [getAvailableSlots] Filtered to ${reservedTimeslots.length} valid timeslots (after excluding orphaned slots from ${allReservedTimeslots.length} total)`);
 
     // ⭐ THÊM: Lấy tất cả timeslots từ appointments của bệnh nhân hiện tại trong ngày
     // Để exclude các khung giờ bệnh nhân đã book
@@ -367,42 +394,25 @@ class AvailableSlotService {
       }
     }
 
-    // 6. Tạo danh sách khoảng thời gian đã bận
+    // 6. Tạo danh sách khoảng thời gian đã bận (KHÔNG cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
     const busySlots = validAppointments.map(apt => {
       if (apt.timeslotId) {
         return {
           start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() + breakAfterMinutes * 60000 // + break time
+          end: new Date(apt.timeslotId.endTime).getTime() // Không cộng break time nữa
         };
       }
       return null;
     }).filter(slot => slot !== null);
 
-    // ⭐ THÊM: Thêm appointments của bệnh nhân vào busy slots
-    const patientBusySlots = patientAppointments.map(apt => {
-      if (apt.timeslotId) {
-        return {
-          start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() + breakAfterMinutes * 60000
-        };
-      }
-      return null;
-    }).filter(slot => slot !== null);
-    
-    busySlots.push(...patientBusySlots);
-
-    // ⭐ THÊM: Thêm timeslots của bệnh nhân vào busy slots (để exclude khung giờ họ đã book)
-    const patientTimeslotBusySlots = patientTimeslots.map(ts => ({
-      start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() + breakAfterMinutes * 60000
-    }));
-    
-    busySlots.push(...patientTimeslotBusySlots);
+    // ⭐ KHÔNG THÊM appointments của bệnh nhân vào busy slots
+    // Cho phép bệnh nhân đặt nhiều slots liên tiếp cho chính họ
+    // Không cần exclude patient appointments nữa vì họ có thể đặt liên tiếp
 
     // ⭐ THÊM: Thêm Reserved/Booked timeslots vào busySlots
     const reservedBusySlots = reservedTimeslots.map(ts => ({
       start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() + breakAfterMinutes * 60000
+      end: new Date(ts.endTime).getTime() // Không cộng break time nữa
     }));
     
     busySlots.push(...reservedBusySlots);
@@ -519,8 +529,8 @@ class AvailableSlotService {
         });
       }
 
-      // Tính thời gian bắt đầu slot tiếp theo
-      currentStart = new Date(currentEnd.getTime() + breakTime * 60000);
+      // Tính thời gian bắt đầu slot tiếp theo (không cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
+      currentStart = new Date(currentEnd);
     }
 
     return slots;
@@ -1052,22 +1062,36 @@ class AvailableSlotService {
       status: { $in: ['Pending', 'Approved', 'CheckedIn'] }
     }).populate('timeslotId', 'startTime endTime doctorUserId');
 
-    // 6.5. ⭐ Nếu có patientUserId, lấy thêm các appointments của user này để exclude
+    // 6.5. ⭐ Nếu có patientUserId, lấy TẤT CẢ appointments của user này (BẤT KỲ bác sĩ nào) để exclude
+    // Mục đích: Tránh đặt trùng thời gian với các bác sĩ khác nhau
     let patientBookedSlots = [];
     if (patientUserId) {
       const patientAppointments = await Appointment.find({
         patientUserId: patientUserId,
-        status: { $in: ['Pending', 'Approved', 'CheckedIn', 'Completed'] }
-      }).populate('timeslotId', 'startTime endTime');
+        status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+        timeslotId: { $exists: true }
+      }).populate({
+        path: 'timeslotId',
+        select: 'startTime endTime',
+        match: {
+          startTime: { 
+            $gte: new Date(searchDate.getTime()),
+            $lt: new Date(searchDate.getTime() + 24 * 60 * 60 * 1000)
+          }
+        }
+      });
 
       patientBookedSlots = patientAppointments
-        .filter(apt => apt.timeslotId)
+        .filter(apt => apt.timeslotId) // Chỉ lấy appointments có timeslot hợp lệ
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
           end: new Date(apt.timeslotId.endTime)
         }));
 
-      console.log(`👤 User ${patientUserId} đã đặt ${patientBookedSlots.length} slots`);
+      console.log(`👤 User ${patientUserId} đã đặt ${patientBookedSlots.length} slots (tất cả bác sĩ) trong ngày ${searchDate.toISOString().split('T')[0]}`);
+      patientBookedSlots.forEach((slot, idx) => {
+        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()}`);
+      });
     }
 
     // 6.6. ⭐ THÊM: Nếu đặt cho người khác, lấy appointments của người khác này để exclude
@@ -1203,59 +1227,50 @@ class AvailableSlotService {
         breakAfterMinutes
       });
 
-      // Lọc bỏ các slots đã được book (bởi bất kỳ ai)
+      // Lọc bỏ các slots đã được book (bởi bất kỳ ai) - KHÔNG cộng break time
       const bookedSlots = bookedSlotsByDoctor[doctorId] || [];
       let availableSlots = slots.filter(slot => {
         const slotStart = new Date(slot.startTime);
         const slotEnd = new Date(slot.endTime);
         
-        // ⭐ THÊM: Tính buffer time cho slot mới
-        const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-        
-        // Kiểm tra xem slot có bị trung với booked slot nào không (bao gồm buffer time)
+        // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã book
+        // Kiểm tra xem slot có bị trung với booked slot nào không
         return !bookedSlots.some(booked => {
-          // Conflict nếu: slotStart < booked.end && slotEndWithBuffer > booked.start
-          return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+          // Conflict nếu: slotStart < booked.end && slotEnd > booked.start
+          return (slotStart < booked.end && slotEnd > booked.start);
         });
       });
 
-      // ⭐ Exclude slots mà user hiện tại đã đặt với bác sĩ này
+      // ⭐ Exclude slots mà user hiện tại đã đặt với BẤT KỲ bác sĩ nào - tránh đặt trùng thời gian
+      // Bệnh nhân không thể đặt 2 bác sĩ khác nhau cùng lúc
       if (patientUserId && patientBookedSlots.length > 0) {
-        console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (appointmentFor=${appointmentFor}, only this doctor):`);
+        console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (tất cả bác sĩ):`);
         console.log(`   - patientUserId: ${patientUserId}`);
-        console.log(`   - patientBookedSlots count: ${patientBookedSlots.length}`);
+        console.log(`   - patientBookedSlots count: ${patientBookedSlots.length} (exclude để tránh đặt trùng thời gian với bác sĩ khác)`);
         patientBookedSlots.forEach((booked, idx) => {
           console.log(`   - Booked slot ${idx}: ${booked.start.toISOString()} - ${booked.end.toISOString()}`);
         });
         
         console.log(`   - availableSlots BEFORE exclude: ${availableSlots.length}`);
-        availableSlots.forEach((slot, idx) => {
-          console.log(`     [${idx}] ${slot.startTime} - ${slot.endTime}`);
-        });
         
         const slotsBeforeFilter = availableSlots.length;
         availableSlots = availableSlots.filter(slot => {
           const slotStart = new Date(slot.startTime);
           const slotEnd = new Date(slot.endTime);
           
-          // ⭐ THÊM: Tính buffer time cho slot mới
-          const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-          
-          // Kiểm tra xem slot có trùng với slots user đã đặt không (bao gồm buffer time)
+          // Exclude slots trùng với appointments của bệnh nhân (bất kể bác sĩ nào)
           const isBooked = patientBookedSlots.some(booked => {
-            return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+            return (slotStart < booked.end && slotEnd > booked.start);
           });
           
           if (isBooked) {
-            console.log(`     ❌ EXCLUDED: ${slot.startTime} - ${slot.endTime} (conflicts with user booked slot)`);
+            console.log(`     ❌ EXCLUDED: ${slot.startTime} - ${slot.endTime} (bệnh nhân đã có lịch với bác sĩ khác vào thời gian này)`);
           }
           
           return !isBooked;
         });
         
         console.log(`   - availableSlots AFTER exclude: ${availableSlots.length} (removed ${slotsBeforeFilter - availableSlots.length})`);
-      } else if (patientUserId && patientBookedSlots.length === 0) {
-        console.log(`\n✅ [Doctor ${doctor.fullName}] NO USER BOOKED SLOTS TO EXCLUDE (user has no appointments with this doctor)`);
       } else if (!patientUserId) {
         console.log(`\n🟢 [Doctor ${doctor.fullName}] NOT EXCLUDING USER SLOTS (no patientUserId)`);
       }
@@ -1279,11 +1294,9 @@ class AvailableSlotService {
           const slotStart = new Date(slot.startTime);
           const slotEnd = new Date(slot.endTime);
           
-          // ⭐ THÊM: Tính buffer time cho slot mới
-          const slotEndWithBuffer = new Date(slotEnd.getTime() + breakAfterMinutes * 60000);
-          
+          // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã book
           const isBooked = customerBookedSlots.some(booked => {
-            return (slotStart < booked.end && slotEndWithBuffer > booked.start);
+            return (slotStart < booked.end && slotEnd > booked.start);
           });
           
           if (isBooked) {
@@ -1428,7 +1441,7 @@ class AvailableSlotService {
         $lt: new Date(searchDate.getTime() + 24 * 60 * 60 * 1000)
       },
       status: { $in: ['Reserved', 'Booked'] }
-    });
+    }).populate('appointmentId', 'timeslotId');
 
     console.log(`🔍 [getDoctorScheduleRange] Found ${allTimeslots.length} timeslots (Reserved/Booked) for doctor ${doctorUserId} on ${searchDate.toISOString().split('T')[0]}`);
 
@@ -1445,8 +1458,32 @@ class AvailableSlotService {
         breakAfter: apt.timeslotId.breakAfterMinutes || 10
       }));
 
+    // ⭐ FIX: Chỉ lấy timeslots có appointmentId VÀ appointment đó vẫn còn reference đến timeslot này
+    // (Tránh lấy timeslot cũ sau khi reschedule - đã được set về 'Available' nhưng có thể có delay)
+    const validTimeslots = allTimeslots.filter(timeslot => {
+      // Nếu timeslot không có appointmentId, vẫn tính (có thể là Reserved chưa có appointment)
+      if (!timeslot.appointmentId) {
+        return true;
+      }
+      
+      // Nếu timeslot có appointmentId, kiểm tra appointment có còn reference đến timeslot này không
+      const appointment = timeslot.appointmentId;
+      if (!appointment || !appointment.timeslotId) {
+        // Appointment không còn reference đến timeslot này → timeslot đã được giải phóng
+        return false;
+      }
+      
+      // Kiểm tra appointment.timeslotId có matching với timeslot._id không
+      const appointmentTimeslotId = appointment.timeslotId.toString();
+      const timeslotId = timeslot._id.toString();
+      
+      return appointmentTimeslotId === timeslotId;
+    });
+
+    console.log(`🔍 [getDoctorScheduleRange] Filtered to ${validTimeslots.length} valid timeslots (after excluding orphaned slots)`);
+
     // Thêm timeslots từ bảng Timeslot
-    const bookedSlotsFromTimeslots = allTimeslots.map(timeslot => ({
+    const bookedSlotsFromTimeslots = validTimeslots.map(timeslot => ({
       start: new Date(timeslot.startTime),
       end: new Date(timeslot.endTime),
       breakAfter: 10 // Default buffer time
@@ -1486,20 +1523,23 @@ class AvailableSlotService {
         return slotDate.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0];
       });
 
-      // Cả 'self' và 'other' đều chỉ exclude slots của bác sĩ hiện tại
-      // Cho phép đặt trùng giờ cùng ngày với bác sĩ khác
+      // ⭐ EXCLUDE TẤT CẢ appointments của bệnh nhân (BẤT KỲ bác sĩ nào) - tránh đặt trùng thời gian
+      // Bệnh nhân không thể đặt 2 bác sĩ khác nhau cùng lúc
       userBookedSlots = userAppointmentsOnDate
-        .filter(apt => apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId)
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
           end: new Date(apt.timeslotId.endTime),
-          breakAfter: 10 // Default buffer time
+          // Không cần breakAfter vì đã bỏ buffer time
+          doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null
         }));
       
       if (appointmentFor === 'self') {
-        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments with doctor ${doctorUserId} on this date (appointmentFor=self) - EXCLUDING ONLY THIS DOCTOR`);
+        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=self) - EXCLUDING ALL DOCTORS`);
+        userBookedSlots.forEach((slot, idx) => {
+          console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
+        });
       } else if (appointmentFor === 'other') {
-        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments with doctor ${doctorUserId} on this date (appointmentFor=other) - EXCLUDING ONLY THIS DOCTOR`);
+        console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=other) - EXCLUDING ALL DOCTORS`);
       }
     }
 
@@ -1536,18 +1576,17 @@ class AvailableSlotService {
       return `${hours}:${minutes}`;
     };
 
-    // Function tính available gaps cho một shift (bao gồm buffer time)
+    // Function tính available gaps cho một shift (KHÔNG cộng buffer time - slot tiếp theo có thể bắt đầu ngay sau)
     const calculateAvailableGaps = (shiftStart, shiftEnd, bookedSlots) => {
       const gaps = [];
       let currentStart = new Date(shiftStart);
 
       for (const slot of bookedSlots) {
-        // ⭐ THÊM: Tính buffer time cho slot đã booked
-        const bufferTime = 10; // 10 phút buffer
-        const slotEndWithBuffer = new Date(slot.end.getTime() + bufferTime * 60000);
+        // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
+        const slotEnd = new Date(slot.end);
 
         // Nếu slot nằm ngoài shift này, skip
-        if (slotEndWithBuffer <= shiftStart || slot.start >= shiftEnd) continue;
+        if (slotEnd <= shiftStart || slot.start >= shiftEnd) continue;
 
         // Nếu có khoảng trống trước slot này
         if (currentStart < slot.start) {
@@ -1557,8 +1596,8 @@ class AvailableSlotService {
           });
         }
 
-        // Di chuyển currentStart đến sau slot này + buffer time
-        currentStart = slotEndWithBuffer > currentStart ? slotEndWithBuffer : new Date(slotEndWithBuffer);
+        // Di chuyển currentStart đến sau slot này (không cộng buffer time)
+        currentStart = slotEnd > currentStart ? slotEnd : new Date(slotEnd);
       }
 
       // Nếu còn khoảng trống sau slot cuối cùng
@@ -1582,10 +1621,10 @@ class AvailableSlotService {
     const searchDateStr = searchDate.toISOString().split('T')[0]; // yyyy-mm-dd
     const isToday = todayDateStr === searchDateStr;
     
-    // Helper function: Filter và adjust gaps theo thời gian thực + service duration + buffer time
+    // Helper function: Filter và adjust gaps theo thời gian thực + service duration (KHÔNG cộng buffer time)
     const filterRealTimeGaps = (gaps) => {
-      const bufferTime = 10; // 10 phút buffer
-      const totalTimeNeeded = serviceDurationMs + (bufferTime * 60 * 1000); // Service + buffer
+      // Không cộng buffer time nữa - chỉ cần thời gian cho service
+      const totalTimeNeeded = serviceDurationMs; // Chỉ service duration, không cộng buffer
       
       return gaps
         .map(gap => {
@@ -1608,10 +1647,10 @@ class AvailableSlotService {
             }
           }
           
-          // ⭐ Kiểm tra gap có đủ thời gian cho service + buffer không (áp dụng cho mọi ngày)
+          // ⭐ Kiểm tra gap có đủ thời gian cho service không (áp dụng cho mọi ngày, KHÔNG cộng buffer)
           const gapDuration = new Date(gap.end).getTime() - new Date(gap.start).getTime();
           if (gapDuration < totalTimeNeeded) {
-            return null; // Gap không đủ thời gian (service + buffer)
+            return null; // Gap không đủ thời gian cho service
           }
           
           return gap;
@@ -1847,10 +1886,14 @@ class AvailableSlotService {
     const searchDate = new Date(date);
     searchDate.setHours(0, 0, 0, 0);
 
+    // ⭐ Loại trừ appointments của chính bệnh nhân này khi check conflict
+    // Cho phép bệnh nhân đặt nhiều slots liên tiếp cho chính họ
     const bookedAppointments = await Appointment.find({
       doctorUserId,
       status: { $in: ['Pending', 'Approved', 'CheckedIn'] },
-      timeslotId: { $exists: true }
+      timeslotId: { $exists: true },
+      // ⭐ THÊM: Loại trừ appointments của chính bệnh nhân này
+      ...(patientUserId ? { patientUserId: { $ne: patientUserId } } : {})
     }).populate({
       path: 'timeslotId',
       select: 'startTime endTime',
@@ -1861,7 +1904,7 @@ class AvailableSlotService {
 
     const validAppointments = bookedAppointments.filter(apt => apt.timeslotId !== null);
 
-    // Check conflict
+    // Check conflict (chỉ với appointments của người khác, không bao gồm của chính bệnh nhân này)
     const hasConflict = validAppointments.some(apt => {
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
@@ -1874,13 +1917,12 @@ class AvailableSlotService {
     }
 
     // ⭐ 6. Check conflict với timeslots đã Reserved/Booked (đang chờ thanh toán hoặc đã đặt)
+    // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     const Timeslot = require('../models/timeslot.model');
-    const timeslotBufferTime = 10; // 10 phút buffer
-    const endTimeWithBuffer = new Date(endTimeObj.getTime() + timeslotBufferTime * 60000);
     
     const conflictingTimeslots = await Timeslot.find({
       doctorUserId: doctorUserId,
-      startTime: { $lt: endTimeWithBuffer },
+      startTime: { $lt: endTimeObj },
       endTime: { $gt: startTimeObj },
       status: { $in: ['Reserved', 'Booked'] }
     });

@@ -1,0 +1,264 @@
+{
+  "info": {
+    "name": "AI Booking - Tự động đặt lịch",
+    "description": "Collection để test API đặt lịch tự động bằng AI (GPT-4o)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "YOUR_TOKEN_HERE",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Login (Lấy token)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.success && jsonData.data && jsonData.data.token) {",
+              "        pm.collectionVariables.set('token', jsonData.data.token);",
+              "        console.log('✅ Token saved:', jsonData.data.token);",
+              "    }",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"patient@example.com\",\n  \"password\": \"password123\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/auth/login",
+          "host": ["{{baseUrl}}"],
+          "path": ["auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "2. AI Booking - Đặt lịch với đầy đủ thông tin",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Đặt lịch khám răng với bác sĩ Huy ngày mai lúc 9h sáng\",\n  \"appointmentFor\": \"self\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test với prompt đầy đủ: dịch vụ, bác sĩ, ngày, giờ"
+      }
+    },
+    {
+      "name": "3. AI Booking - Chỉ có dịch vụ và ngày",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Tôi muốn đặt lịch tư vấn nha khoa vào thứ 3 tuần sau\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test với prompt chỉ có dịch vụ và ngày, không có bác sĩ cụ thể"
+      }
+    },
+    {
+      "name": "4. AI Booking - Đặt lịch nhổ răng",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Đặt lịch nhổ răng ngày 15/11 lúc 14:30\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test với prompt có ngày và giờ cụ thể"
+      }
+    },
+    {
+      "name": "5. AI Booking - Chỉ có buổi sáng",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Khám răng với bác sĩ Huy vào buổi sáng ngày mai\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test với prompt chỉ có timePreference (buổi sáng), không có giờ cụ thể"
+      }
+    },
+    {
+      "name": "6. AI Booking - Đặt cho người khác",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Đặt lịch khám răng cho tôi vào ngày mai lúc 10h sáng\",\n  \"appointmentFor\": \"other\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test đặt lịch cho người khác (appointmentFor = 'other')"
+      }
+    },
+    {
+      "name": "7. AI Booking - Prompt ngắn gọn",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Tôi muốn khám răng sáng mai\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test với prompt ngắn gọn, AI sẽ tự suy luận"
+      }
+    },
+    {
+      "name": "8. AI Booking - Lỗi: Thiếu prompt",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"appointmentFor\": \"self\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test error case: không có prompt"
+      }
+    },
+    {
+      "name": "9. AI Booking - Lỗi: Không có token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"prompt\": \"Đặt lịch khám răng\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/appointments/ai-create",
+          "host": ["{{baseUrl}}"],
+          "path": ["appointments", "ai-create"]
+        },
+        "description": "Test error case: không có Authorization header"
+      }
+    }
+  ]
+}
+
