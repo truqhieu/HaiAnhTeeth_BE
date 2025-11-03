@@ -811,6 +811,49 @@ class AIBookingService {
           }
         }
         
+        // 4. Backup fuzzy matching: Nếu AI không parse được doctorName, nhưng userInput có keyword
+        // → Thử fuzzy match với userInput luôn (ví dụ: user chỉ nhập "huy", "hiếu"...)
+        const userKeywords = userInput.split(/\s+/).filter(w => w.length >= 2 && !['bác', 'sĩ', 'doctor', 'dr', 'bs'].includes(w));
+        if (userKeywords.length > 0) {
+          const matchedDoctors = doctors.filter(d => 
+            userKeywords.some(keyword => d.fullName.toLowerCase().includes(keyword))
+          );
+          
+          // Nếu tìm thấy doctors match với keyword từ userInput
+          if (matchedDoctors.length > 1) {
+            console.log(`✅ [AI] Found ${matchedDoctors.length} doctors matching userInput keywords: ${userKeywords.join(', ')}`);
+            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ phù hợp. Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
+            matchedDoctors.forEach((d, idx) => {
+              const spec = d.specialization ? ` (${d.specialization})` : '';
+              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
+            });
+            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ đầy đủ.';
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['doctorName'],
+              followUpQuestion: enrichedQuestion,
+              parsedData
+            };
+          }
+          // Nếu chỉ có 1 bác sĩ match → Auto-select
+          else if (matchedDoctors.length === 1) {
+            console.log(`✅ [AI] Auto-select doctor from userInput keyword: ${matchedDoctors[0].fullName}`);
+            const selectedDoctor = matchedDoctors[0];
+            mappedData.doctorId = selectedDoctor._id.toString();
+            mappedData.doctorName = selectedDoctor.fullName;
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              missingFields: ['time'],
+              followUpQuestion: `Đã chọn bác sĩ ${selectedDoctor.fullName}. Bạn muốn đặt lịch vào giờ nào ạ?`,
+              parsedData: { ...parsedData, doctorName: selectedDoctor.fullName }
+            };
+          }
+        }
+        
         // Trường hợp chung: Hiển thị tất cả bác sĩ với số thứ tự
         let doctorsList = '';
         if (doctors && doctors.length > 0) {
