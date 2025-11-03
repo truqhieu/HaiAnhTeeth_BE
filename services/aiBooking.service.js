@@ -34,12 +34,12 @@ class AIBookingService {
           const services = await Service.find(query)
             .select('_id serviceName category durationMinutes')
             .sort({ category: 1, serviceName: 1 })
-            .lean();
-      
+        .lean();
+
           return {
             services: services.map(s => ({
-              id: s._id.toString(),
-              name: s.serviceName,
+        id: s._id.toString(),
+        name: s.serviceName,
               category: s.category,
               durationMinutes: s.durationMinutes || 30 // Default 30 phút nếu không có
             }))
@@ -185,9 +185,9 @@ class AIBookingService {
           
           if (!service) {
             return { valid: false, error: 'Service not found or inactive' };
-          }
-          
-          return { 
+      }
+
+      return {
             valid: true, 
             service: {
               id: service._id.toString(),
@@ -293,9 +293,9 @@ class AIBookingService {
           
           if (!doctor) {
             return { valid: false, error: 'Doctor not found or inactive' };
-          }
-          
-          return { 
+        }
+
+        return {
             valid: true, 
             doctor: {
               id: doctor._id.toString(),
@@ -310,7 +310,7 @@ class AIBookingService {
             .select('_id fullName specialization')
             .lean();
           
-          return {
+        return {
             doctors: doctors.map(d => ({
         id: d._id.toString(),
               name: d.fullName,
@@ -326,37 +326,85 @@ class AIBookingService {
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
           }
           
+          // Lấy thông tin dịch vụ để có durationMinutes
+          const service = await Service.findById(serviceId)
+            .select('_id serviceName durationMinutes')
+            .lean();
+          
+          if (!service) {
+            return { error: 'Dịch vụ không tồn tại' };
+          }
+          
+          const serviceDuration = service.durationMinutes || 30;
+          
+          // Gọi generateAvailableSlotsByDate (KHÔNG có doctorId parameter - nó trả về tất cả bác sĩ)
           const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
             date,
-            serviceId,
-            doctorId,
+        serviceId,
             patientUserId // Exclude patient's existing appointments
           });
           
-          if (!slotsResult.success || !slotsResult.data || slotsResult.data.length === 0) {
-            return { error: 'Không có khung giờ nào khả dụng' };
+          // slotsResult format: { date, slots: Array<{ startTime, endTime, displayTime, doctor, doctorScheduleId }>, totalSlots }
+          if (!slotsResult || !slotsResult.slots || slotsResult.slots.length === 0) {
+            return { error: 'Không có khung giờ nào khả dụng cho ngày này' };
           }
           
-          // Group by morning/afternoon
-          const morningSlots = slotsResult.data.filter(s => {
-            const hour = parseInt(s.startTime.split(':')[0]);
-            return hour < 12;
+          // Filter slots theo doctorId
+          const doctorSlots = slotsResult.slots.filter(slot => {
+            if (!slot.doctor || !slot.doctor.doctorUserId) {
+              return false;
+            }
+            // doctorUserId có thể là ObjectId hoặc string
+            const slotDoctorId = slot.doctor.doctorUserId.toString();
+            return slotDoctorId === doctorId.toString();
           });
           
-          const afternoonSlots = slotsResult.data.filter(s => {
-            const hour = parseInt(s.startTime.split(':')[0]);
-            return hour >= 12;
+          if (doctorSlots.length === 0) {
+            return { error: `Bác sĩ này không có khung giờ khả dụng vào ngày ${date}` };
+          }
+          
+          // Group by morning/afternoon (dựa trên startTime là Date object)
+          const morningSlots = [];
+          const afternoonSlots = [];
+          
+          doctorSlots.forEach(slot => {
+            const startDate = new Date(slot.startTime);
+            const hour = startDate.getHours();
+            
+            // Format time cho display
+            const formatTime = (date) => {
+              return date.toLocaleTimeString('vi-VN', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'Asia/Ho_Chi_Minh'
+              });
+            };
+            
+            const slotInfo = {
+              startTime: formatTime(startDate),
+              endTime: formatTime(new Date(slot.endTime)),
+              startTimeISO: slot.startTime,
+              endTimeISO: slot.endTime,
+              displayTime: slot.displayTime || `${formatTime(startDate)} - ${formatTime(new Date(slot.endTime))}`
+            };
+            
+            if (hour < 12) {
+              morningSlots.push(slotInfo);
+            } else {
+              afternoonSlots.push(slotInfo);
+            }
           });
           
-          return {
-            morning: morningSlots.map(s => ({
-              startTime: s.startTime,
-              endTime: s.endTime
-            })),
-            afternoon: afternoonSlots.map(s => ({
-              startTime: s.startTime,
-              endTime: s.endTime
-            }))
+        return {
+            success: true,
+            serviceName: service.serviceName,
+            durationMinutes: serviceDuration,
+            date: date,
+            doctorId: doctorId,
+            morning: morningSlots,
+            afternoon: afternoonSlots,
+            totalSlots: doctorSlots.length
           };
         }
         
@@ -406,9 +454,9 @@ class AIBookingService {
             appointmentData,
             patientUserId
           );
-          
-          return {
-            success: true,
+
+      return {
+        success: true,
             appointmentId: appointment._id.toString(),
             service: service.serviceName,
             doctor: doctor.fullName,
