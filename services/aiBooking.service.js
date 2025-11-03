@@ -32,16 +32,95 @@ class AIBookingService {
           }
           
           const services = await Service.find(query)
-            .select('_id serviceName category')
+            .select('_id serviceName category durationMinutes')
             .sort({ category: 1, serviceName: 1 })
             .lean();
-          
+      
           return {
             services: services.map(s => ({
               id: s._id.toString(),
               name: s.serviceName,
-              category: s.category
+              category: s.category,
+              durationMinutes: s.durationMinutes || 30 // Default 30 phút nếu không có
             }))
+          };
+        }
+        
+        case 'get_service_info': {
+          const { serviceId } = functionArgs;
+          
+          if (!serviceId) {
+            return { error: 'Missing required parameter: serviceId' };
+          }
+          
+          const service = await Service.findById(serviceId)
+            .select('_id serviceName category durationMinutes description')
+            .lean();
+          
+          if (!service) {
+            return { error: 'Service not found' };
+          }
+          
+          return {
+            id: service._id.toString(),
+            name: service.serviceName,
+            category: service.category,
+            durationMinutes: service.durationMinutes || 30,
+            description: service.description || ''
+          };
+        }
+        
+        case 'validate_service': {
+          const { serviceId } = functionArgs;
+          
+          if (!serviceId) {
+            return { valid: false, error: 'Missing serviceId' };
+          }
+          
+          const service = await Service.findOne({ 
+            _id: serviceId, 
+            status: 'Active' 
+          }).lean();
+          
+          if (!service) {
+            return { valid: false, error: 'Service not found or inactive' };
+          }
+          
+          return { 
+            valid: true, 
+            service: {
+              id: service._id.toString(),
+              name: service.serviceName,
+              category: service.category,
+              durationMinutes: service.durationMinutes || 30
+            }
+          };
+        }
+        
+        case 'validate_doctor': {
+          const { doctorId } = functionArgs;
+          
+          if (!doctorId) {
+            return { valid: false, error: 'Missing doctorId' };
+          }
+          
+          const doctor = await User.findOne({ 
+            _id: doctorId, 
+            role: 'Doctor',
+            status: 'Active' 
+          }).lean();
+          
+          if (!doctor) {
+            return { valid: false, error: 'Doctor not found or inactive' };
+          }
+          
+          return { 
+            valid: true, 
+            doctor: {
+              id: doctor._id.toString(),
+              name: doctor.fullName,
+              specialization: doctor.specialization || ''
+            }
           };
         }
         
@@ -52,7 +131,7 @@ class AIBookingService {
           
           return {
             doctors: doctors.map(d => ({
-              id: d._id.toString(),
+        id: d._id.toString(),
               name: d.fullName,
               specialization: d.specialization || ''
             }))
@@ -165,7 +244,7 @@ class AIBookingService {
       return { error: error.message };
     }
   }
-  
+
   /**
    * 🆕 Chat với AI sử dụng Function Calling (linh hoạt như ChatGPT)
    */
@@ -278,8 +357,8 @@ class AIBookingService {
       }
       
       // Continuing conversation
-      return {
-        success: false,
+        return {
+          success: false,
         needsMoreInfo: true,
         response: finalResponse,
         conversationHistory: [...conversationHistory,
@@ -293,7 +372,7 @@ class AIBookingService {
       throw error;
     }
   }
-  
+
   /**
    * Tạo appointment từ AI với Function Calling (mới)
    */
