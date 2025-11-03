@@ -97,6 +97,86 @@ class AIBookingService {
           };
         }
         
+        case 'find_doctor_by_name': {
+          const { doctorName } = functionArgs;
+          
+          if (!doctorName) {
+            return { error: 'Missing doctorName parameter' };
+          }
+          
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('_id fullName specialization')
+            .lean();
+          
+          const inputLower = doctorName.toLowerCase().trim();
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedDoctors = doctors.filter(d => 
+            d.fullName.toLowerCase() === inputLower
+          );
+          
+          // ✅ PRIORITY 2: Nếu không có exact match, thử exact match bỏ "bác sĩ" prefix
+          if (matchedDoctors.length === 0) {
+            const withoutPrefix = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+            matchedDoctors = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              return doctorNameClean === withoutPrefix;
+            });
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching (match theo TỪ, không phải substring)
+          if (matchedDoctors.length === 0) {
+            const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+            const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+            
+            if (inputWords.length > 0) {
+              matchedDoctors = doctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                const doctorWords = doctorNameClean.split(/\s+/);
+                
+                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+                return inputWords.every(inputWord => 
+                  doctorWords.some(doctorWord => doctorWord === inputWord)
+                );
+              });
+            }
+          }
+          
+          // ❌ Không tìm thấy
+          if (matchedDoctors.length === 0) {
+            return { 
+              error: 'Không tìm thấy bác sĩ',
+              suggestions: doctors.slice(0, 5).map(d => ({
+                id: d._id.toString(),
+                name: d.fullName
+              }))
+            };
+          }
+          
+          // ✅ Chỉ có 1 bác sĩ match → Auto-select
+          if (matchedDoctors.length === 1) {
+            return {
+              found: true,
+              doctor: {
+                id: matchedDoctors[0]._id.toString(),
+                name: matchedDoctors[0].fullName,
+                specialization: matchedDoctors[0].specialization || ''
+              }
+            };
+          }
+          
+          // ⚠️ Nhiều bác sĩ match → Trả về danh sách để user chọn
+          return {
+            found: true,
+            multiple: true,
+            doctors: matchedDoctors.map(d => ({
+              id: d._id.toString(),
+              name: d.fullName,
+              specialization: d.specialization || ''
+            }))
+          };
+        }
+        
         case 'validate_doctor': {
           const { doctorId } = functionArgs;
           
