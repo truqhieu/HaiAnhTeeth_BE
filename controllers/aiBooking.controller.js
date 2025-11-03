@@ -82,6 +82,15 @@ const createAppointmentByAI = async (req, res) => {
       });
     }
 
+    // Handle OpenAI quota/billing errors
+    if (error.message?.includes('quota') || error.message?.includes('billing') || error.message?.includes('Quota OpenAI')) {
+      return res.status(402).json({
+        success: false,
+        message: error.message || 'Quota OpenAI đã hết. Vui lòng liên hệ quản trị viên.',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+
     // Generic error
     return res.status(500).json({
       success: false,

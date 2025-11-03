@@ -95,6 +95,20 @@ class AIBookingService {
       return parsedData;
     } catch (error) {
       console.error('❌ [AI] Error parsing prompt:', error);
+      
+      // Handle specific OpenAI API errors
+      if (error.response?.status === 429) {
+        throw new Error('Quota OpenAI đã hết. Vui lòng kiểm tra billing và nạp tiền tại: https://platform.openai.com/account/billing');
+      }
+      
+      if (error.response?.status === 401) {
+        throw new Error('OpenAI API key không hợp lệ. Vui lòng kiểm tra lại OPENAI_API_KEY trong .env');
+      }
+      
+      if (error.message?.includes('quota') || error.message?.includes('billing')) {
+        throw new Error('Quota OpenAI đã hết. Vui lòng nạp tiền vào tài khoản OpenAI.');
+      }
+      
       throw new Error(`Lỗi khi phân tích yêu cầu đặt lịch: ${error.message}`);
     }
   }
