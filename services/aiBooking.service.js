@@ -507,8 +507,97 @@ class AIBookingService {
           };
         }
         
-        // BƯỚC 3 & 4: Bác sĩ và giờ (optional, có thể bỏ qua)
-        // Nếu vẫn cần thông tin khác
+        // BƯỚC 3: Nếu có date + service, nhưng thiếu bác sĩ → Hiển thị list bác sĩ available
+        if (parsedData.missingFields && parsedData.missingFields.includes('doctorName')) {
+          // Map data để lấy serviceId và date
+          const tempMappedData = await this.mapParsedDataToIds(parsedData);
+          
+          if (tempMappedData.serviceId && tempMappedData.date) {
+            // Fetch available doctors for this service + date
+            const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+              .select('fullName specialization')
+              .lean();
+            
+            if (doctors && doctors.length > 0) {
+              let doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
+              doctors.forEach(d => {
+                const spec = d.specialization ? ` (${d.specialization})` : '';
+                doctorsList += `  • ${d.fullName}${spec}\n`;
+              });
+              
+              enrichedQuestion = `Bạn muốn chọn bác sĩ nào ạ?${doctorsList}`;
+            } else {
+              enrichedQuestion = 'Bạn muốn chọn bác sĩ nào ạ?';
+            }
+          }
+          
+          return {
+            success: false,
+            needsMoreInfo: true,
+            missingFields: ['doctorName'],
+            followUpQuestion: enrichedQuestion,
+            parsedData
+          };
+        }
+        
+        // BƯỚC 4: Nếu có date + service + doctor, nhưng thiếu giờ → Hiển thị slots available
+        if (parsedData.missingFields && parsedData.missingFields.includes('time')) {
+          // Map data để lấy đầy đủ thông tin
+          const tempMappedData = await this.mapParsedDataToIds(parsedData);
+          
+          if (tempMappedData.serviceId && tempMappedData.date && tempMappedData.doctorId) {
+            // Fetch available slots for this doctor + date + service
+            // ✅ EXCLUDE slots mà bệnh nhân này đã đặt để tránh trùng lịch
+            const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
+              date: tempMappedData.date,
+              serviceId: tempMappedData.serviceId,
+              doctorId: tempMappedData.doctorId,
+              patientUserId: patientUserId  // Exclude slots của chính bệnh nhân này
+            });
+            
+            if (slotsResult.success && slotsResult.data && slotsResult.data.length > 0) {
+              let slotsList = '\n\n🕐 Các khung giờ khả dụng:\n';
+              
+              // Group by morning/afternoon
+              const morningSlots = slotsResult.data.filter(s => {
+                const hour = parseInt(s.startTime.split(':')[0]);
+                return hour < 12;
+              });
+              const afternoonSlots = slotsResult.data.filter(s => {
+                const hour = parseInt(s.startTime.split(':')[0]);
+                return hour >= 12;
+              });
+              
+              if (morningSlots.length > 0) {
+                slotsList += '  🌅 Buổi sáng:\n';
+                morningSlots.forEach(s => {
+                  slotsList += `    • ${s.startTime} - ${s.endTime}\n`;
+                });
+              }
+              
+              if (afternoonSlots.length > 0) {
+                slotsList += '  🌆 Buổi chiều:\n';
+                afternoonSlots.forEach(s => {
+                  slotsList += `    • ${s.startTime} - ${s.endTime}\n`;
+                });
+              }
+              
+              enrichedQuestion = `Bạn muốn đặt lịch vào giờ nào ạ?${slotsList}`;
+            } else {
+              enrichedQuestion = 'Xin lỗi, không có khung giờ nào khả dụng cho bác sĩ này vào ngày đã chọn. Bạn có muốn chọn bác sĩ khác không?';
+            }
+          }
+          
+          return {
+            success: false,
+            needsMoreInfo: true,
+            missingFields: ['time'],
+            followUpQuestion: enrichedQuestion,
+            parsedData
+          };
+        }
+        
+        // Fallback: Nếu vẫn cần thông tin khác
         return {
           success: false,
           needsMoreInfo: true,
@@ -521,8 +610,8 @@ class AIBookingService {
       // 4. Map to IDs
       const mappedData = await this.mapParsedDataToIds(parsedData);
 
-      // 5. Validate required data (double-check theo thứ tự: Ngày → Dịch vụ)
-      // BƯỚC 1: Validate ngày trước
+      // 5. Validate required data (double-check theo thứ tự: Ngày → Dịch vụ → Bác sĩ → Giờ)
+      // BƯỚC 1: Validate ngày
       if (!mappedData.date) {
         return {
           success: false,
@@ -533,13 +622,77 @@ class AIBookingService {
         };
       }
 
-      // BƯỚC 2: Validate dịch vụ sau
+      // BƯỚC 2: Validate dịch vụ
       if (!mappedData.serviceId) {
         return {
           success: false,
           needsMoreInfo: true,
           missingFields: ['serviceName'],
           followUpQuestion: 'Xin lỗi, mình không tìm thấy dịch vụ phù hợp. Bạn muốn đặt lịch dịch vụ nào ạ? (Khám răng, Nhổ răng, Trám răng, Tư vấn...)',
+          parsedData
+        };
+      }
+
+      // BƯỚC 3: Validate bác sĩ
+      if (!mappedData.doctorId) {
+        const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+          .select('fullName specialization')
+          .lean();
+        
+        let doctorsList = '';
+        if (doctors && doctors.length > 0) {
+          doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
+          doctors.forEach(d => {
+            const spec = d.specialization ? ` (${d.specialization})` : '';
+            doctorsList += `  • ${d.fullName}${spec}\n`;
+          });
+        }
+        
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: ['doctorName'],
+          followUpQuestion: `Bạn muốn chọn bác sĩ nào ạ?${doctorsList}`,
+          parsedData
+        };
+      }
+
+      // BƯỚC 4: Validate giờ
+      if (!mappedData.time) {
+        // Fetch available slots
+        // ✅ EXCLUDE slots mà bệnh nhân này đã đặt để tránh trùng lịch
+        const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
+          date: mappedData.date,
+          serviceId: mappedData.serviceId,
+          doctorId: mappedData.doctorId,
+          patientUserId: patientUserId  // Exclude slots của chính bệnh nhân này
+        });
+        
+        let slotsList = '';
+        if (slotsResult.success && slotsResult.data && slotsResult.data.length > 0) {
+          slotsList = '\n\n🕐 Các khung giờ khả dụng:\n';
+          
+          const morningSlots = slotsResult.data.filter(s => parseInt(s.startTime.split(':')[0]) < 12);
+          const afternoonSlots = slotsResult.data.filter(s => parseInt(s.startTime.split(':')[0]) >= 12);
+          
+          if (morningSlots.length > 0) {
+            slotsList += '  🌅 Buổi sáng:\n';
+            morningSlots.forEach(s => slotsList += `    • ${s.startTime} - ${s.endTime}\n`);
+          }
+          
+          if (afternoonSlots.length > 0) {
+            slotsList += '  🌆 Buổi chiều:\n';
+            afternoonSlots.forEach(s => slotsList += `    • ${s.startTime} - ${s.endTime}\n`);
+          }
+        }
+        
+        return {
+          success: false,
+          needsMoreInfo: true,
+          missingFields: ['time'],
+          followUpQuestion: slotsList 
+            ? `Bạn muốn đặt lịch vào giờ nào ạ?${slotsList}`
+            : 'Xin lỗi, không có khung giờ nào khả dụng. Bạn có muốn chọn bác sĩ khác không?',
           parsedData
         };
       }
