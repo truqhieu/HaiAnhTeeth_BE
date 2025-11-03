@@ -11,1249 +11,310 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Load prompt configuration
-const promptConfigPath = path.join(__dirname, '../config/aiBooking.prompt.json');
-const promptConfig = JSON.parse(fs.readFileSync(promptConfigPath, 'utf8'));
+// Load function tools configuration
+const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
+const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
 class AIBookingService {
   /**
-   * Helper: Check if input indicates "any" or "doesn't matter"
+   * Execute function call từ OpenAI
    */
-  isAnyOrDoesntMatter(text) {
-    const anyKeywords = [
-      'bất kỳ', 'bất cứ', 'ai cũng được', 'gì cũng được', 'không quan trọng',
-      'tùy', 'tùy ý', 'random', 'any', 'anyone', 'whatever', 'anything',
-      'không chọn', 'không cần', 'thôi'
-    ];
-    const normalized = text.toLowerCase().trim();
-    return anyKeywords.some(keyword => normalized.includes(keyword));
-  }
-
-  /**
-   * Helper: Extract number/index from text (e.g., "số 1", "thứ 2", "1")
-   */
-  extractIndex(text) {
-    const normalized = text.toLowerCase().trim();
+  async executeFunction(functionName, functionArgs, patientUserId) {
+    console.log(`🔧 [AI] Executing function: ${functionName}`, functionArgs);
     
-    // Match patterns: "số 1", "thứ 1", "1", "đầu tiên", "thứ nhất"
-    const indexPatterns = [
-      /số\s*(\d+)/,
-      /thứ\s*(\d+)/,
-      /^(\d+)$/,
-      /đầu\s*tiên/i,
-      /thứ\s*nhất/i,
-      /thứ\s*hai/i,
-      /thứ\s*ba/i
-    ];
-    
-    for (const pattern of indexPatterns) {
-      const match = normalized.match(pattern);
-      if (match) {
-        if (match[1]) return parseInt(match[1]) - 1; // Convert to 0-indexed
-        // Handle text numbers
-        if (normalized.includes('đầu') || normalized.includes('nhất')) return 0;
-        if (normalized.includes('hai')) return 1;
-        if (normalized.includes('ba')) return 2;
-      }
-    }
-    
-    return null;
-  }
-
-  /**
-   * Parse user prompt để extract thông tin đặt lịch
-   * @param {string} userPrompt - Câu mô tả của người dùng
-   * @param {string} patientUserId - ID của bệnh nhân
-   * @param {array} conversationHistory - Lịch sử hội thoại [{ role: 'user'|'assistant', content: '...' }]
-   */
-  async parseBookingPrompt(userPrompt, patientUserId, conversationHistory = []) {
     try {
-      // 1. Lấy danh sách services và doctors để cung cấp context cho AI
-      const services = await Service.find({ status: 'Active' })
-        .select('_id serviceName category')
-        .lean();
+      switch (functionName) {
+        case 'get_services': {
+          const { category } = functionArgs;
+          const query = { status: 'Active' };
+          if (category) {
+            query.category = category;
+          }
+          
+          const services = await Service.find(query)
+            .select('_id serviceName category')
+            .sort({ category: 1, serviceName: 1 })
+            .lean();
+          
+          return {
+            services: services.map(s => ({
+              id: s._id.toString(),
+              name: s.serviceName,
+              category: s.category
+            }))
+          };
+        }
+        
+        case 'get_doctors': {
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('_id fullName specialization')
+            .lean();
+          
+          return {
+            doctors: doctors.map(d => ({
+              id: d._id.toString(),
+              name: d.fullName,
+              specialization: d.specialization || ''
+            }))
+          };
+        }
+        
+        case 'get_available_slots': {
+          const { doctorId, date, serviceId } = functionArgs;
+          
+          if (!doctorId || !date || !serviceId) {
+            return { error: 'Missing required parameters: doctorId, date, serviceId' };
+          }
+          
+          const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
+            date,
+            serviceId,
+            doctorId,
+            patientUserId // Exclude patient's existing appointments
+          });
+          
+          if (!slotsResult.success || !slotsResult.data || slotsResult.data.length === 0) {
+            return { error: 'Không có khung giờ nào khả dụng' };
+          }
+          
+          // Group by morning/afternoon
+          const morningSlots = slotsResult.data.filter(s => {
+            const hour = parseInt(s.startTime.split(':')[0]);
+            return hour < 12;
+          });
+          
+          const afternoonSlots = slotsResult.data.filter(s => {
+            const hour = parseInt(s.startTime.split(':')[0]);
+            return hour >= 12;
+          });
+          
+          return {
+            morning: morningSlots.map(s => ({
+              startTime: s.startTime,
+              endTime: s.endTime
+            })),
+            afternoon: afternoonSlots.map(s => ({
+              startTime: s.startTime,
+              endTime: s.endTime
+            }))
+          };
+        }
+        
+        case 'create_appointment': {
+          const { serviceId, doctorId, date, time, notes } = functionArgs;
+          
+          if (!serviceId || !doctorId || !date || !time) {
+            return { error: 'Missing required parameters' };
+          }
+          
+          // Find service and doctor
+          const service = await Service.findById(serviceId);
+          const doctor = await User.findById(doctorId);
+          
+          if (!service || !doctor) {
+            return { error: 'Service or doctor not found' };
+          }
+          
+          // Find available slot
+          const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
+            date,
+            serviceId,
+            doctorId,
+            patientUserId
+          });
+          
+          if (!slotsResult.success || !slotsResult.data) {
+            return { error: 'No available slots' };
+          }
+          
+          const selectedSlot = slotsResult.data.find(s => s.startTime === time);
+          if (!selectedSlot) {
+            return { error: 'Selected time slot is not available' };
+          }
+          
+          // Create appointment
+          const appointmentData = {
+            serviceId,
+            doctorUserId: doctorId,
+            doctorScheduleId: slotsResult.scheduleId || null,
+            selectedSlot,
+            notes: notes || '',
+            appointmentFor: 'self'
+          };
+          
+          const appointment = await appointmentService.createAppointment(
+            appointmentData,
+            patientUserId
+          );
+          
+          return {
+            success: true,
+            appointmentId: appointment._id.toString(),
+            service: service.serviceName,
+            doctor: doctor.fullName,
+            date,
+            time
+          };
+        }
+        
+        default:
+          return { error: `Unknown function: ${functionName}` };
+      }
+    } catch (error) {
+      console.error(`❌ [AI] Error executing function ${functionName}:`, error);
+      return { error: error.message };
+    }
+  }
+  
+  /**
+   * 🆕 Chat với AI sử dụng Function Calling (linh hoạt như ChatGPT)
+   */
+  async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
+    try {
+      console.log('🤖 [AI Function Calling] Starting chat...');
       
-      const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-        .select('_id fullName')
-        .lean();
-
-      // 2. Format data cho AI
-      const servicesList = services.map(s => ({
-        id: s._id.toString(),
-        name: s.serviceName,
-        category: s.category
-      })).slice(0, 50); // Limit để không quá dài
-
-      const doctorsList = doctors.map(d => ({
-        id: d._id.toString(),
-        name: d.fullName
-      }));
-
-      // 3. Build system prompt từ template (Zero-shot - không cần examples)
-      // Support both string and array format
-      const templateString = Array.isArray(promptConfig.systemPromptTemplate)
-        ? promptConfig.systemPromptTemplate.join('\n')
-        : promptConfig.systemPromptTemplate;
-      
-      const systemPrompt = templateString
-        .replace('{{SERVICES_LIST}}', JSON.stringify(servicesList, null, 2))
-        .replace('{{DOCTORS_LIST}}', JSON.stringify(doctorsList, null, 2));
-
-      // 3.5. Parse ngày hiện tại để AI biết context
+      // Prepare date context
       const today = new Date();
       const todayStr = today.toISOString().split('T')[0];
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowStr = tomorrow.toISOString().split('T')[0];
-
-      // 4. Build messages array từ conversation history
+      
+      // Build system prompt với date context
+      const systemPrompt = toolsConfig.systemPrompt
+        .replace('{TODAY}', todayStr)
+        .replace('{TOMORROW}', tomorrowStr);
+      
+      // Build messages array
       const messages = [
-        { role: "system", content: systemPrompt }
+        { role: "system", content: systemPrompt },
+        ...conversationHistory,
+        { role: "user", content: userPrompt }
       ];
       
-      // Thêm conversation history (nếu có)
-      if (conversationHistory && conversationHistory.length > 0) {
-        console.log(`📜 [AI] Adding ${conversationHistory.length} messages from conversation history`);
-        conversationHistory.forEach(msg => {
-          if (msg.role === 'user' || msg.role === 'assistant') {
-            messages.push({
-              role: msg.role,
-              content: msg.content
-            });
-          }
-        });
-      }
+      console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI with ${toolsConfig.tools.length} tools`);
       
-      // Thêm user prompt mới nhất
-      messages.push({ 
-        role: "user", 
-        content: `Hôm nay là ${todayStr}. ${userPrompt}\n\nLưu ý: "ngày mai" = ${tomorrowStr}, "hôm nay" = ${todayStr}`
-      });
-      
-      console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI (1 system + ${messages.length - 1} conversation)`);
-      
-      // 5. Gọi OpenAI API với full conversation context
-      const completion = await openai.chat.completions.create({
+      // Call OpenAI with function calling
+      let response = await openai.chat.completions.create({
         model: "gpt-4.1-mini",
         messages: messages,
-        temperature: 0.3, // Lower temperature để tăng độ chính xác
-        response_format: { type: "json_object" }, // Force JSON output
-        max_tokens: 500
+        tools: toolsConfig.tools,
+        tool_choice: "auto", // AI tự quyết định có gọi function hay không
+        temperature: 0.7 // Tăng để AI linh hoạt hơn
       });
-
-      // 5. Parse response
-      const responseText = completion.choices[0].message.content;
-      const parsedData = JSON.parse(responseText);
-
-      console.log('🤖 [AI] Parsed booking data:', parsedData);
-
-      return parsedData;
-    } catch (error) {
-      console.error('❌ [AI] Error parsing prompt:', error);
       
-      // Handle specific OpenAI API errors
-      if (error.response?.status === 429) {
-        throw new Error('Quota OpenAI đã hết. Vui lòng kiểm tra billing và nạp tiền tại: https://platform.openai.com/account/billing');
-      }
+      let assistantMessage = response.choices[0].message;
+      let functionResults = [];
       
-      if (error.response?.status === 401) {
-        throw new Error('OpenAI API key không hợp lệ. Vui lòng kiểm tra lại OPENAI_API_KEY trong .env');
-      }
+      // Loop để handle multiple function calls (AI có thể gọi nhiều function liên tiếp)
+      let maxIterations = 5; // Giới hạn để tránh infinite loop
+      let iteration = 0;
       
-      if (error.message?.includes('quota') || error.message?.includes('billing')) {
-        throw new Error('Quota OpenAI đã hết. Vui lòng nạp tiền vào tài khoản OpenAI.');
-      }
-      
-      throw new Error(`Lỗi khi phân tích yêu cầu đặt lịch: ${error.message}`);
-    }
-  }
-
-  /**
-   * Map parsed data từ AI sang serviceId và doctorUserId
-   */
-  async mapParsedDataToIds(parsedData) {
-    try {
-      let serviceId = null;
-      let doctorUserId = null;
-
-      // 1. Map serviceName → serviceId
-      if (parsedData.serviceName) {
-        const service = await Service.findOne({
-          serviceName: { $regex: new RegExp(parsedData.serviceName, 'i') },
-          status: 'Active'
+      while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
+        iteration++;
+        console.log(`🔄 [AI] Iteration ${iteration}: AI wants to call ${assistantMessage.tool_calls.length} function(s)`);
+        
+        // Execute all function calls
+        for (const toolCall of assistantMessage.tool_calls) {
+          const functionName = toolCall.function.name;
+          const functionArgs = JSON.parse(toolCall.function.arguments);
+          
+          // Execute function
+          const functionResult = await this.executeFunction(functionName, functionArgs, patientUserId);
+          
+          // Add function result to messages
+          messages.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [toolCall]
+          });
+          
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(functionResult)
+          });
+          
+          functionResults.push({
+            functionName,
+            functionArgs,
+            result: functionResult
+          });
+        }
+        
+        // Call OpenAI again với function results
+        response = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: messages,
+          tools: toolsConfig.tools,
+          tool_choice: "auto",
+          temperature: 0.7
         });
         
-        if (service) {
-          serviceId = service._id;
-          console.log(`✅ [AI] Mapped service "${parsedData.serviceName}" → ${serviceId}`);
-        } else {
-          console.warn(`⚠️ [AI] Không tìm thấy dịch vụ: ${parsedData.serviceName}`);
-        }
+        assistantMessage = response.choices[0].message;
       }
-
-      // 2. Map doctorName → doctorUserId
-      if (parsedData.doctorName) {
-        const doctor = await User.findOne({
-          role: 'Doctor',
-          status: 'Active',
-          fullName: { $regex: new RegExp(parsedData.doctorName, 'i') }
-        });
-
-        if (doctor) {
-          doctorUserId = doctor._id;
-          console.log(`✅ [AI] Mapped doctor "${parsedData.doctorName}" → ${doctorUserId}`);
-        } else {
-          console.warn(`⚠️ [AI] Không tìm thấy bác sĩ: ${parsedData.doctorName}`);
-        }
-      }
-
-      return {
-        serviceId,
-        doctorUserId,
-        date: parsedData.date,
-        time: parsedData.time,
-        timePreference: parsedData.timePreference || 'any',
-        notes: parsedData.notes || '',
-        confidence: parsedData.confidence || 'medium'
-      };
-    } catch (error) {
-      console.error('❌ [AI] Error mapping data:', error);
-      throw new Error(`Lỗi khi map dữ liệu: ${error.message}`);
-    }
-  }
-
-  /**
-   * Tìm available slots dựa trên parsed data
-   */
-  async findAvailableSlots(mappedData) {
-    try {
-      const { serviceId, doctorUserId, date, time, timePreference } = mappedData;
-
-      if (!serviceId || !date) {
-        throw new Error('Thiếu thông tin dịch vụ hoặc ngày');
-      }
-
-      // 1. Nếu có doctorUserId → tìm slots của doctor cụ thể
-      if (doctorUserId) {
-        const slotsResult = await availableSlotService.getAvailableSlots({
-          doctorUserId,
-          serviceId,
-          date: new Date(date),
-          patientUserId: null, // AI booking không exclude user's own appointments
-          breakAfterMinutes: 10
-        });
-
-        // Filter theo time nếu có
-        let availableSlots = slotsResult.availableSlots || [];
-        
-        if (time) {
-          // Parse time và tìm slot gần nhất
-          const [hours, minutes] = time.split(':').map(Number);
-          const targetTime = hours * 60 + minutes; // Convert to minutes
-
-          availableSlots = availableSlots.filter(slot => {
-            const slotStart = new Date(slot.startTime);
-            const slotHours = slotStart.getUTCHours() + 7; // Convert to VN time
-            const slotMinutes = slotStart.getUTCMinutes();
-            const slotTime = slotHours * 60 + slotMinutes;
-
-            // Chọn slot gần nhất trong khoảng ±30 phút
-            return Math.abs(slotTime - targetTime) <= 30;
-          }).sort((a, b) => {
-            // Sort theo độ gần với target time
-            const aTime = new Date(a.startTime).getUTCHours() * 60 + new Date(a.startTime).getUTCMinutes();
-            const bTime = new Date(b.startTime).getUTCHours() * 60 + new Date(b.startTime).getUTCMinutes();
-            const targetMinutes = hours * 60 + minutes;
-            return Math.abs(aTime - targetMinutes) - Math.abs(bTime - targetMinutes);
-          });
-        } else if (timePreference === 'morning') {
-          // Filter chỉ lấy slots buổi sáng (8h-12h VN time)
-          availableSlots = availableSlots.filter(slot => {
-            const slotStart = new Date(slot.startTime);
-            const vnHours = slotStart.getUTCHours() + 7;
-            return vnHours >= 8 && vnHours < 12;
-          });
-        } else if (timePreference === 'afternoon') {
-          // Filter chỉ lấy slots buổi chiều (14h-18h VN time)
-          availableSlots = availableSlots.filter(slot => {
-            const slotStart = new Date(slot.startTime);
-            const vnHours = slotStart.getUTCHours() + 7;
-            return vnHours >= 14 && vnHours < 18;
-          });
-        }
-
-        if (availableSlots.length === 0) {
-          return {
-            success: false,
-            message: doctorUserId 
-              ? 'Bác sĩ này không có slot khả dụng vào thời điểm này'
-              : 'Không có slot khả dụng vào thời điểm này',
-            slotsResult
-          };
-        }
-
+      
+      // Get final response from AI
+      const finalResponse = assistantMessage.content || "Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.";
+      
+      console.log('✅ [AI] Final response:', finalResponse.substring(0, 100) + '...');
+      
+      // Check if appointment was created
+      const appointmentCreated = functionResults.some(fr => 
+        fr.functionName === 'create_appointment' && fr.result.success
+      );
+      
+      if (appointmentCreated) {
+        const appointmentResult = functionResults.find(fr => fr.functionName === 'create_appointment').result;
         return {
           success: true,
-          slotsResult,
-          selectedSlot: availableSlots[0], // Chọn slot đầu tiên (gần nhất với yêu cầu)
-          doctorScheduleId: slotsResult.scheduleId || null
+          appointment: appointmentResult,
+          response: finalResponse,
+          conversationHistory: [...conversationHistory, 
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: finalResponse }
+          ]
         };
       }
-
-      // 2. Nếu không có doctorUserId → tìm tất cả doctors có slot
-      const doctorsResult = await availableSlotService.getAvailableDoctors({
-        serviceId,
-        date: new Date(date),
-        breakAfterMinutes: 10
-      });
-
-      if (!doctorsResult.availableDoctors || doctorsResult.availableDoctors.length === 0) {
-        return {
-          success: false,
-          message: 'Không có bác sĩ nào có slot khả dụng vào ngày này'
-        };
-      }
-
-      // Chọn doctor đầu tiên và lấy slots của doctor đó
-      const firstDoctor = doctorsResult.availableDoctors[0];
-      const slotsResult = await availableSlotService.getAvailableSlots({
-        doctorUserId: firstDoctor.doctorId,
-        serviceId,
-        date: new Date(date),
-        patientUserId: null, // AI booking không exclude user's own appointments
-        breakAfterMinutes: 10
-      });
-
-      // Filter theo time preference
-      let availableSlots = slotsResult.availableSlots || [];
-      if (timePreference === 'morning') {
-        availableSlots = availableSlots.filter(slot => {
-          const slotStart = new Date(slot.startTime);
-          const vnHours = slotStart.getUTCHours() + 7;
-          return vnHours >= 8 && vnHours < 12;
-        });
-      } else if (timePreference === 'afternoon') {
-        availableSlots = availableSlots.filter(slot => {
-          const slotStart = new Date(slot.startTime);
-          const vnHours = slotStart.getUTCHours() + 7;
-          return vnHours >= 14 && vnHours < 18;
-        });
-      }
-
-      if (availableSlots.length === 0) {
-        return {
-          success: false,
-          message: 'Không có slot khả dụng với yêu cầu này',
-          slotsResult
-        };
-      }
-
+      
+      // Continuing conversation
       return {
-        success: true,
-        slotsResult,
-        selectedSlot: availableSlots[0],
-        doctorUserId: firstDoctor.doctorId,
-        doctorScheduleId: slotsResult.scheduleId || null
+        success: false,
+        needsMoreInfo: true,
+        response: finalResponse,
+        conversationHistory: [...conversationHistory,
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: finalResponse }
+        ]
       };
+      
     } catch (error) {
-      console.error('❌ [AI] Error finding slots:', error);
-      throw new Error(`Lỗi khi tìm slot khả dụng: ${error.message}`);
+      console.error('❌ [AI Function Calling] Error:', error);
+      throw error;
     }
   }
-
+  
   /**
-   * Tạo appointment từ AI parsed data
+   * Tạo appointment từ AI với Function Calling (mới)
    */
   async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
     try {
-      // 1. Parse prompt (with conversation history for context)
-      const parsedData = await this.parseBookingPrompt(userPrompt, patientUserId, conversationHistory);
-
-      // 2. Handle different user intents
-      const intent = parsedData.userIntent;
-
-      // Handle greeting
-      if (intent === 'greeting') {
-        // Chỉ chào và hỏi có muốn đặt lịch không, KHÔNG hiển thị list services ngay
-        const greetingMessage = parsedData.followUpQuestion || 'Xin chào! Mình có thể giúp bạn đặt lịch khám răng. Bạn có muốn đặt lịch không ạ?';
-        
-        return {
-          success: false,
-          needsMoreInfo: true,
-          userIntent: 'greeting',
-          followUpQuestion: greetingMessage,
-          parsedData
-        };
-      }
-
-      // ✅ Handle affirmative (Đồng ý/Xác nhận) - User trả lời "có", "ok", "được"... 
-      // → Tự động chuyển sang hỏi ngày
-      if (intent === 'affirmative') {
-        console.log('✅ [AI] Detected affirmative intent → Ask for date');
-        return {
-          success: false,
-          needsMoreInfo: true,
-          userIntent: 'affirmative',
-          missingFields: ['date'],
-          followUpQuestion: 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)',
-          parsedData
-        };
-      }
-
-      // Handle rejection/goodbye
-      if (intent === 'rejection' || intent === 'goodbye') {
-        return {
-          success: false,
-          isConversationEnd: true,
-          userIntent: intent,
-          followUpQuestion: parsedData.followUpQuestion || 'Dạ được ạ! Hẹn gặp lại bạn. Chúc bạn một ngày tốt lành! 😊',
-          parsedData
-        };
-      }
-
-      // Handle ambiguous input
-      if (intent === 'ambiguous') {
-        return {
-          success: false,
-          needsMoreInfo: true,
-          userIntent: 'ambiguous',
-          followUpQuestion: parsedData.followUpQuestion || 'Mình chưa hiểu rõ yêu cầu của bạn. Bạn muốn đặt lịch khám răng không ạ?',
-          parsedData
-        };
-      }
-
-      // Handle off-topic (invalid input)
-      if (parsedData.isValidInput === false || intent === 'off_topic') {
-        return {
-          success: false,
-          isInvalidInput: true,
-          userIntent: 'off_topic',
-          rejectionReason: parsedData.rejectionReason || 'Xin lỗi, mình chỉ hỗ trợ đặt lịch khám răng và các dịch vụ nha khoa thôi ạ.',
-          parsedData
-        };
-      }
-
-      // 3. Check if AI needs more info (multi-turn conversation) - for booking intent
-      // ƯU TIÊN theo thứ tự: Ngày → Dịch vụ → Bác sĩ → Giờ
-      if (parsedData.needsMoreInfo) {
-        let enrichedQuestion = parsedData.followUpQuestion || 'Bạn có thể cung cấp thêm thông tin không?';
-        
-        // ⚠️ PRE-VALIDATION: Nếu user ĐÃ cung cấp doctorName hoặc serviceName trong input ban đầu
-        // → Validate NGAY xem có tồn tại trong hệ thống không, TRƯỚC KHI hỏi các field còn thiếu
-        
-        // 🔍 Validate bác sĩ (nếu user đã cung cấp)
-        if (parsedData.doctorName) {
-          console.log(`🔍 [PRE-VALIDATION] Checking if doctor "${parsedData.doctorName}" exists...`);
-          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-            .select('fullName specialization')
-            .lean();
-          
-          const inputLower = parsedData.doctorName.toLowerCase().trim();
-          
-          // ✅ PRIORITY 1: Exact match (case-insensitive)
-          let matchedDoctors = doctors.filter(d => 
-            d.fullName.toLowerCase() === inputLower
-          );
-          
-          // ✅ PRIORITY 2: Nếu không có exact match, thử exact match bỏ "bác sĩ" prefix
-          if (matchedDoctors.length === 0) {
-            // Nếu input có "bác sĩ" ở đầu, bỏ nó ra và thử lại
-            const withoutPrefix = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-            matchedDoctors = doctors.filter(d => {
-              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-              return doctorNameClean === withoutPrefix;
-            });
-          }
-          
-          // ✅ PRIORITY 3: Word-based matching (match theo TỪ, không phải substring)
-          if (matchedDoctors.length === 0) {
-            // Bỏ prefix "bác sĩ" nếu có
-            const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-            
-            // Split input thành các TỪ
-            const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
-            
-            // Nếu có ít nhất 1 từ, thì matching
-            if (inputWords.length > 0) {
-              matchedDoctors = doctors.filter(d => {
-                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-                // Split tên bác sĩ thành các TỪ
-                const doctorWords = doctorNameClean.split(/\s+/);
-                
-                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
-                return inputWords.every(inputWord => 
-                  doctorWords.some(doctorWord => doctorWord === inputWord)
-                );
-              });
-            }
-          }
-          
-          // ❌ Nếu KHÔNG TÌM THẤY bác sĩ nào
-          if (matchedDoctors.length === 0) {
-            console.log(`❌ [PRE-VALIDATION] Doctor "${parsedData.doctorName}" NOT FOUND!`);
-            let doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
-            doctors.forEach((d, idx) => {
-              const spec = d.specialization ? ` (${d.specialization})` : '';
-              doctorsList += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-            });
-            doctorsList += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ.';
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['doctorName'],
-              followUpQuestion: `Xin lỗi, mình không tìm thấy bác sĩ "${parsedData.doctorName}" trong hệ thống. Bạn muốn chọn bác sĩ nào trong danh sách sau ạ?${doctorsList}`,
-              parsedData: { ...parsedData, doctorName: null } // Reset doctorName
-            };
-          }
-          
-          // ⚠️ Nếu tìm thấy NHIỀU bác sĩ match (ví dụ: user nhập "Huy" có 4 bác sĩ)
-          if (matchedDoctors.length > 1) {
-            console.log(`⚠️ [PRE-VALIDATION] Found ${matchedDoctors.length} doctors matching "${parsedData.doctorName}"`);
-            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên liên quan đến "${parsedData.doctorName}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
-            matchedDoctors.forEach((d, idx) => {
-              const spec = d.specialization ? ` (${d.specialization})` : '';
-              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-            });
-            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ đầy đủ.';
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['doctorName'],
-              followUpQuestion: enrichedQuestion,
-              parsedData
-            };
-          }
-          
-          // ✅ Nếu chỉ tìm thấy 1 bác sĩ → OK, tiếp tục flow
-          console.log(`✅ [PRE-VALIDATION] Doctor "${matchedDoctors[0].fullName}" found!`);
-        }
-        
-        // 🔍 Validate dịch vụ (nếu user đã cung cấp TÊN CHÍNH XÁC)
-        if (parsedData.serviceName && !parsedData.serviceCategory) {
-          console.log(`🔍 [PRE-VALIDATION] Checking if service "${parsedData.serviceName}" exists...`);
-          const services = await Service.find({ status: 'Active' })
-            .select('serviceName category')
-            .lean();
-          
-          const matchedServices = services.filter(s => 
-            s.serviceName.toLowerCase().includes(parsedData.serviceName.toLowerCase())
-          );
-          
-          // ❌ Nếu KHÔNG TÌM THẤY dịch vụ nào
-          if (matchedServices.length === 0) {
-            console.log(`❌ [PRE-VALIDATION] Service "${parsedData.serviceName}" NOT FOUND!`);
-            
-            // Group by category
-            const groupedServices = {};
-            services.forEach(s => {
-              const category = s.category || 'Khác';
-              if (!groupedServices[category]) {
-                groupedServices[category] = [];
-              }
-              groupedServices[category].push(s.serviceName);
-            });
-            
-            const categoryMap = {
-              'Consultation': '💬 Tư vấn online',
-              'Examination': '🏥 Khám trực tiếp',
-              'Treatment': '⚕️ Điều trị',
-              'Cosmetic': '✨ Thẩm mỹ',
-              'Surgery': '🔬 Phẫu thuật',
-              'Orthodontics': '🦷 Niềng răng',
-              'Prevention': '🛡️ Phòng ngừa'
-            };
-            
-            let servicesList = '';
-            Object.keys(groupedServices).forEach(category => {
-              if (groupedServices[category].length > 0) {
-                const displayName = categoryMap[category] || `📋 ${category}`;
-                servicesList += `\n${displayName}:\n`;
-                groupedServices[category].forEach(name => {
-                  servicesList += `  • ${name}\n`;
-                });
-              }
-            });
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['serviceName'],
-              followUpQuestion: `Xin lỗi, mình không tìm thấy dịch vụ "${parsedData.serviceName}" trong hệ thống. Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`,
-              parsedData: { ...parsedData, serviceName: null } // Reset serviceName
-            };
-          }
-        }
-        
-        // BƯỚC 1: Ưu tiên hỏi NGÀY trước tiên
-        if (parsedData.missingFields && parsedData.missingFields.includes('date')) {
-          enrichedQuestion = 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)';
-          
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['date'],
-            followUpQuestion: enrichedQuestion,
-            parsedData
-          };
-        }
-        
-        // BƯỚC 2: Nếu có ngày rồi, mới hỏi DỊCH VỤ
-        if (parsedData.missingFields && parsedData.missingFields.includes('serviceName')) {
-          // Lấy tất cả dịch vụ active
-          let services = await Service.find({ status: 'Active' })
-            .select('serviceName category')
-            .sort({ category: 1, serviceName: 1 })
-            .lean();
-          
-          // Fuzzy matching: Nếu user nhập từ khóa chung (ví dụ: "răng"), filter các dịch vụ liên quan
-          // ✅ PRIORITY 1: Nếu AI đã parse được serviceCategory (ví dụ: "khám" → "Examination")
-          let keyword = null;
-          if (parsedData.serviceCategory) {
-            console.log(`✅ [AI] User specified category: ${parsedData.serviceCategory}`);
-            const filteredServices = services.filter(s => s.category === parsedData.serviceCategory);
-            
-            if (filteredServices.length > 0) {
-              services = filteredServices;
-              const categoryMap = {
-                'Consultation': 'Tư vấn online',
-                'Examination': 'Khám trực tiếp'
-              };
-              const categoryName = categoryMap[parsedData.serviceCategory] || parsedData.serviceCategory;
-              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ ${categoryName} nào ạ? Các dịch vụ ${categoryName}:`;
-            }
-          }
-          // ✅ PRIORITY 2: Fuzzy matching với từ khóa từ userPrompt (nếu không có serviceCategory)
-          else {
-            const userInput = userPrompt.toLowerCase().trim();
-            const keywords = [
-              'răng', 'tẩy', 'trồng', 'nhổ', 'niềng', 'bọc', 
-              'làm sạch', 'tím', 'hàm', 'sâu', 'trắng',
-              'điều trị', 'phục hồi', 'mặt', 'lắc', 'tủy', 'chỉnh nha',
-              'thẩm mỹ', 'phòng ngừa', 'cao vôi'
-            ];
-            
-            // Check xem user có nhập từ khóa chung không
-            for (const kw of keywords) {
-              if (userInput.includes(kw)) {
-                keyword = kw;
-                break;
-              }
-            }
-            
-            // Nếu có từ khóa, filter services
-            if (keyword && services.length > 0) {
-              const filteredServices = services.filter(s => 
-                s.serviceName.toLowerCase().includes(keyword)
-              );
-              
-              // Nếu tìm thấy nhiều dịch vụ liên quan
-              if (filteredServices.length > 1) {
-                services = filteredServices;
-                enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ? Các dịch vụ liên quan đến "${keyword}":`;
-              }
-              // Nếu chỉ có 1 dịch vụ match, AI sẽ tự chọn (không vào đây)
-              else if (filteredServices.length === 1) {
-                // Let AI auto-select this service in the next turn
-                services = filteredServices;
-                enrichedQuestion = `Bạn có muốn đặt lịch dịch vụ "${filteredServices[0].serviceName}" không ạ?`;
-              }
-            }
-          }
-          
-          if (services && services.length > 0) {
-            // Map category sang tên tiếng Việt thân thiện
-            const categoryMap = {
-              'Consultation': '💬 Tư vấn online',
-              'Examination': '🏥 Khám trực tiếp',
-              'Treatment': '⚕️ Điều trị',
-              'Cosmetic': '✨ Thẩm mỹ',
-              'Surgery': '🔬 Phẫu thuật',
-              'Orthodontics': '🦷 Niềng răng',
-              'Prevention': '🛡️ Phòng ngừa'
-            };
-            
-            // Group by category (nếu có)
-            const groupedServices = {};
-            services.forEach(s => {
-              const category = s.category || 'Khác';
-              if (!groupedServices[category]) {
-                groupedServices[category] = [];
-              }
-              groupedServices[category].push(s.serviceName);
-            });
-            
-            // Format with category headers (tiếng Việt)
-            let servicesList = '';
-            Object.keys(groupedServices).forEach(category => {
-              if (groupedServices[category].length > 0) {
-                // Dùng tên tiếng Việt nếu có, không thì giữ nguyên
-                const displayName = categoryMap[category] || `📋 ${category}`;
-                servicesList += `\n${displayName}:\n`;
-                groupedServices[category].forEach(name => {
-                  servicesList += `  • ${name}\n`;
-                });
-              }
-            });
-            
-            // Chỉ override enrichedQuestion nếu chưa được set bởi fuzzy matching
-            if (!keyword) {
-              enrichedQuestion = `Bạn muốn đặt lịch dịch vụ nào ạ?\n\nCác dịch vụ của chúng tôi:${servicesList}`;
-            } else {
-              // Đã filter rồi, append servicesList
-              enrichedQuestion += servicesList;
-            }
-          }
-          
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['serviceName'],
-            followUpQuestion: enrichedQuestion,
-            parsedData
-          };
-        }
-        
-        // BƯỚC 3: Nếu có date + service, nhưng thiếu bác sĩ → Hiển thị list bác sĩ available
-        if (parsedData.missingFields && parsedData.missingFields.includes('doctorName')) {
-          // Map data để lấy serviceId và date
-          const tempMappedData = await this.mapParsedDataToIds(parsedData);
-          
-          if (tempMappedData.serviceId && tempMappedData.date) {
-            // Fetch available doctors for this service + date
-            let doctors = await User.find({ role: 'Doctor', status: 'Active' })
-              .select('fullName specialization')
-              .lean();
-            
-            // Fuzzy matching: Nếu user nhập từ khóa chung về bác sĩ (ví dụ: "Huy đê" có chữ "Huy")
-            const userInput = userPrompt.toLowerCase().trim();
-            let matchedDoctors = null;
-            let keyword = null;
-            
-            // Check xem user có nhập keyword nào liên quan đến tên bác sĩ không
-            for (const doctor of doctors) {
-              const doctorNameParts = doctor.fullName.toLowerCase().split(' ');
-              for (const part of doctorNameParts) {
-                if (part.length >= 2 && userInput.includes(part)) {
-                  keyword = part;
-                  break;
-                }
-              }
-              if (keyword) break;
-            }
-            
-            // Nếu có keyword, filter doctors
-            if (keyword) {
-              matchedDoctors = doctors.filter(d => 
-                d.fullName.toLowerCase().includes(keyword)
-              );
-              
-              // Nếu tìm thấy nhiều bác sĩ có cùng keyword (ví dụ: 4 bác sĩ "Huy")
-              if (matchedDoctors.length > 1) {
-                doctors = matchedDoctors;
-                enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên "${keyword}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
-                matchedDoctors.forEach(d => {
-                  const spec = d.specialization ? ` (${d.specialization})` : '';
-                  enrichedQuestion += `  • ${d.fullName}${spec}\n`;
-                });
-                
-                return {
-                  success: false,
-                  needsMoreInfo: true,
-                  missingFields: ['doctorName'],
-                  followUpQuestion: enrichedQuestion,
-                  parsedData
-                };
-              }
-              // Nếu chỉ có 1 bác sĩ match
-              else if (matchedDoctors.length === 1) {
-                enrichedQuestion = `Bạn có muốn chọn bác sĩ "${matchedDoctors[0].fullName}" không ạ?`;
-                
-                return {
-                  success: false,
-                  needsMoreInfo: true,
-                  missingFields: ['doctorName'],
-                  followUpQuestion: enrichedQuestion,
-                  parsedData
-                };
-              }
-            }
-            
-            // Trường hợp chung: Hiển thị tất cả bác sĩ
-            if (doctors && doctors.length > 0) {
-              let doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
-              doctors.forEach(d => {
-                const spec = d.specialization ? ` (${d.specialization})` : '';
-                doctorsList += `  • ${d.fullName}${spec}\n`;
-              });
-              
-              enrichedQuestion = `Bạn muốn chọn bác sĩ nào ạ?${doctorsList}`;
-            } else {
-              enrichedQuestion = 'Bạn muốn chọn bác sĩ nào ạ?';
-            }
-          }
-          
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['doctorName'],
-            followUpQuestion: enrichedQuestion,
-            parsedData
-          };
-        }
-        
-        // BƯỚC 4: Nếu có date + service + doctor, nhưng thiếu giờ → Hiển thị slots available
-        if (parsedData.missingFields && parsedData.missingFields.includes('time')) {
-          // Map data để lấy đầy đủ thông tin
-          const tempMappedData = await this.mapParsedDataToIds(parsedData);
-          
-          if (tempMappedData.serviceId && tempMappedData.date && tempMappedData.doctorId) {
-            // Fetch available slots for this doctor + date + service
-            // ✅ EXCLUDE slots mà bệnh nhân này đã đặt để tránh trùng lịch
-            const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
-              date: tempMappedData.date,
-              serviceId: tempMappedData.serviceId,
-              doctorId: tempMappedData.doctorId,
-              patientUserId: patientUserId  // Exclude slots của chính bệnh nhân này
-            });
-            
-            if (slotsResult.success && slotsResult.data && slotsResult.data.length > 0) {
-              let slotsList = '\n\n🕐 Các khung giờ khả dụng:\n';
-              
-              // Group by morning/afternoon
-              const morningSlots = slotsResult.data.filter(s => {
-                const hour = parseInt(s.startTime.split(':')[0]);
-                return hour < 12;
-              });
-              const afternoonSlots = slotsResult.data.filter(s => {
-                const hour = parseInt(s.startTime.split(':')[0]);
-                return hour >= 12;
-              });
-              
-              if (morningSlots.length > 0) {
-                slotsList += '  🌅 Buổi sáng:\n';
-                morningSlots.forEach(s => {
-                  slotsList += `    • ${s.startTime} - ${s.endTime}\n`;
-                });
-              }
-              
-              if (afternoonSlots.length > 0) {
-                slotsList += '  🌆 Buổi chiều:\n';
-                afternoonSlots.forEach(s => {
-                  slotsList += `    • ${s.startTime} - ${s.endTime}\n`;
-                });
-              }
-              
-              enrichedQuestion = `Bạn muốn đặt lịch vào giờ nào ạ?${slotsList}`;
-            } else {
-              enrichedQuestion = 'Xin lỗi, không có khung giờ nào khả dụng cho bác sĩ này vào ngày đã chọn. Bạn có muốn chọn bác sĩ khác không?';
-            }
-          }
-          
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['time'],
-            followUpQuestion: enrichedQuestion,
-            parsedData
-          };
-        }
-        
-        // Fallback: Nếu vẫn cần thông tin khác
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: parsedData.missingFields || [],
-          followUpQuestion: enrichedQuestion,
-          parsedData
-        };
-      }
-
-      // 4. Map to IDs
-      const mappedData = await this.mapParsedDataToIds(parsedData);
-
-      // 5. Validate required data (double-check theo thứ tự: Ngày → Dịch vụ → Bác sĩ → Giờ)
-      // BƯỚC 1: Validate ngày
-      if (!mappedData.date) {
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: ['date'],
-          followUpQuestion: 'Bạn muốn đặt lịch vào ngày nào ạ? (Ví dụ: ngày mai, hôm nay, thứ 3 tuần sau, 15/11...)',
-          parsedData
-        };
-      }
-
-      // BƯỚC 2: Validate dịch vụ
-      if (!mappedData.serviceId) {
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: ['serviceName'],
-          followUpQuestion: 'Xin lỗi, mình không tìm thấy dịch vụ phù hợp. Bạn muốn đặt lịch dịch vụ nào ạ? (Khám răng, Nhổ răng, Trám răng, Tư vấn...)',
-          parsedData
-        };
-      }
-
-      // BƯỚC 3: Validate bác sĩ
-      if (!mappedData.doctorId) {
-        let doctors = await User.find({ role: 'Doctor', status: 'Active' })
-          .select('fullName specialization')
-          .lean();
-        
-        // ✅ Smart Detection cho input bác sĩ
-        const userInput = userPrompt.toLowerCase().trim();
-        let enrichedQuestion = '';
-        
-        // 1. Check "bất kỳ" / "ai cũng được" → Auto-select first doctor
-        if (this.isAnyOrDoesntMatter(userInput)) {
-          console.log('✅ [AI] User chose "any doctor" → Auto-select first doctor');
-          // Set doctorId thành doctor đầu tiên
-          const firstDoctor = doctors[0];
-          mappedData.doctorId = firstDoctor._id.toString();
-          mappedData.doctorName = firstDoctor.fullName;
-          
-          // Skip doctor selection, move to time
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['time'],
-            followUpQuestion: `Đã chọn bác sĩ ${firstDoctor.fullName}. Bạn muốn đặt lịch vào giờ nào ạ?`,
-            parsedData: { ...parsedData, doctorName: firstDoctor.fullName }
-          };
-        }
-        
-        // 2. Check số thứ tự (1, 2, 3, đầu tiên, thứ hai...)
-        const index = this.extractIndex(userInput);
-        if (index !== null && index >= 0 && index < doctors.length) {
-          console.log(`✅ [AI] User chose doctor by index: ${index + 1}`);
-          const selectedDoctor = doctors[index];
-          mappedData.doctorId = selectedDoctor._id.toString();
-          mappedData.doctorName = selectedDoctor.fullName;
-          
-          // Skip doctor selection, move to time
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['time'],
-            followUpQuestion: `Đã chọn bác sĩ ${selectedDoctor.fullName}. Bạn muốn đặt lịch vào giờ nào ạ?`,
-            parsedData: { ...parsedData, doctorName: selectedDoctor.fullName }
-          };
-        }
-        
-        // 3. Fuzzy matching: Nếu user đã nhập tên (ví dụ: "Huy đê")
-        if (parsedData.doctorName) {
-          const inputKeyword = parsedData.doctorName.toLowerCase().trim();
-          const matchedDoctors = doctors.filter(d => 
-            d.fullName.toLowerCase().includes(inputKeyword)
-          );
-          
-          // Nếu có nhiều bác sĩ match (ví dụ: 4 bác sĩ "Huy")
-          if (matchedDoctors.length > 1) {
-            doctors = matchedDoctors;
-            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ có tên liên quan đến "${parsedData.doctorName}". Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
-            matchedDoctors.forEach((d, idx) => {
-              const spec = d.specialization ? ` (${d.specialization})` : '';
-              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-            });
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['doctorName'],
-              followUpQuestion: enrichedQuestion,
-              parsedData
-            };
-          }
-          // Nếu chỉ có 1 bác sĩ match → Auto-select
-          else if (matchedDoctors.length === 1) {
-            const selectedDoctor = matchedDoctors[0];
-            mappedData.doctorId = selectedDoctor._id.toString();
-            mappedData.doctorName = selectedDoctor.fullName;
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['time'],
-              followUpQuestion: `Đã chọn bác sĩ ${selectedDoctor.fullName}. Bạn muốn đặt lịch vào giờ nào ạ?`,
-              parsedData: { ...parsedData, doctorName: selectedDoctor.fullName }
-            };
-          }
-          // ⚠️ Nếu KHÔNG TÌM THẤY bác sĩ nào (bác sĩ không tồn tại trong hệ thống)
-          else if (matchedDoctors.length === 0) {
-            console.log(`⚠️ [AI] Doctor "${parsedData.doctorName}" NOT FOUND in system → Ask again`);
-            enrichedQuestion = `Xin lỗi, mình không tìm thấy bác sĩ "${parsedData.doctorName}" trong hệ thống. Bạn muốn chọn bác sĩ nào trong danh sách sau ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
-            doctors.forEach((d, idx) => {
-              const spec = d.specialization ? ` (${d.specialization})` : '';
-              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-            });
-            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ.';
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['doctorName'],
-              followUpQuestion: enrichedQuestion,
-              parsedData
-            };
-          }
-        }
-        
-        // 4. Backup fuzzy matching: Nếu AI không parse được doctorName, nhưng userInput có keyword
-        // → Thử fuzzy match với userInput luôn (ví dụ: user chỉ nhập "huy", "hiếu"...)
-        const userKeywords = userInput.split(/\s+/).filter(w => w.length >= 2 && !['bác', 'sĩ', 'doctor', 'dr', 'bs'].includes(w));
-        if (userKeywords.length > 0) {
-          const matchedDoctors = doctors.filter(d => 
-            userKeywords.some(keyword => d.fullName.toLowerCase().includes(keyword))
-          );
-          
-          // Nếu tìm thấy doctors match với keyword từ userInput
-          if (matchedDoctors.length > 1) {
-            console.log(`✅ [AI] Found ${matchedDoctors.length} doctors matching userInput keywords: ${userKeywords.join(', ')}`);
-            enrichedQuestion = `Mình thấy có ${matchedDoctors.length} bác sĩ phù hợp. Bạn muốn chọn bác sĩ nào cụ thể ạ?\n\n📋 Các bác sĩ khả dụng:\n`;
-            matchedDoctors.forEach((d, idx) => {
-              const spec = d.specialization ? ` (${d.specialization})` : '';
-              enrichedQuestion += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-            });
-            enrichedQuestion += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ đầy đủ.';
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['doctorName'],
-              followUpQuestion: enrichedQuestion,
-              parsedData
-            };
-          }
-          // Nếu chỉ có 1 bác sĩ match → Auto-select
-          else if (matchedDoctors.length === 1) {
-            console.log(`✅ [AI] Auto-select doctor from userInput keyword: ${matchedDoctors[0].fullName}`);
-            const selectedDoctor = matchedDoctors[0];
-            mappedData.doctorId = selectedDoctor._id.toString();
-            mappedData.doctorName = selectedDoctor.fullName;
-            
-            return {
-              success: false,
-              needsMoreInfo: true,
-              missingFields: ['time'],
-              followUpQuestion: `Đã chọn bác sĩ ${selectedDoctor.fullName}. Bạn muốn đặt lịch vào giờ nào ạ?`,
-              parsedData: { ...parsedData, doctorName: selectedDoctor.fullName }
-            };
-          }
-        }
-        
-        // Trường hợp chung: Hiển thị tất cả bác sĩ với số thứ tự
-        let doctorsList = '';
-        if (doctors && doctors.length > 0) {
-          doctorsList = '\n\n📋 Các bác sĩ khả dụng:\n';
-          doctors.forEach((d, idx) => {
-            const spec = d.specialization ? ` (${d.specialization})` : '';
-            doctorsList += `  ${idx + 1}. ${d.fullName}${spec}\n`;
-          });
-          doctorsList += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập tên bác sĩ.';
-        }
-        
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: ['doctorName'],
-          followUpQuestion: `Bạn muốn chọn bác sĩ nào ạ?${doctorsList}`,
-          parsedData
-        };
-      }
-
-      // BƯỚC 4: Validate giờ
-      if (!mappedData.time) {
-        // Fetch available slots
-        // ✅ EXCLUDE slots mà bệnh nhân này đã đặt để tránh trùng lịch
-        const slotsResult = await availableSlotService.generateAvailableSlotsByDate({
-          date: mappedData.date,
-          serviceId: mappedData.serviceId,
-          doctorId: mappedData.doctorId,
-          patientUserId: patientUserId  // Exclude slots của chính bệnh nhân này
-        });
-        
-        const userInput = userPrompt.toLowerCase().trim();
-        
-        if (slotsResult.success && slotsResult.data && slotsResult.data.length > 0) {
-          const allSlots = slotsResult.data;
-          const morningSlots = allSlots.filter(s => parseInt(s.startTime.split(':')[0]) < 12);
-          const afternoonSlots = allSlots.filter(s => parseInt(s.startTime.split(':')[0]) >= 12);
-          
-          // ✅ 1. Check "bất kỳ" / "ai cũng được" → Auto-select first slot
-          if (this.isAnyOrDoesntMatter(userInput)) {
-            console.log('✅ [AI] User chose "any time" → Auto-select first slot');
-            const firstSlot = allSlots[0];
-            mappedData.time = firstSlot.startTime;
-            
-            // Continue to create appointment
-            return this.createAppointmentFromAI(
-              `Đặt lịch ${mappedData.date} ${firstSlot.startTime}`,
-              patientUserId,
-              appointmentFor
-            );
-          }
-          
-          // ✅ 2. Check "buổi sáng" → Auto-select first morning slot
-          if (userInput.includes('sáng') || userInput.includes('morning')) {
-            if (morningSlots.length > 0) {
-              console.log('✅ [AI] User chose "morning" → Auto-select first morning slot');
-              mappedData.time = morningSlots[0].startTime;
-              mappedData.timePreference = 'morning';
-              
-              // Continue to create appointment
-              return this.createAppointmentFromAI(
-                `Đặt lịch ${mappedData.date} ${morningSlots[0].startTime}`,
-                patientUserId,
-                appointmentFor
-              );
-            }
-          }
-          
-          // ✅ 3. Check "buổi chiều" → Auto-select first afternoon slot
-          if (userInput.includes('chiều') || userInput.includes('afternoon')) {
-            if (afternoonSlots.length > 0) {
-              console.log('✅ [AI] User chose "afternoon" → Auto-select first afternoon slot');
-              mappedData.time = afternoonSlots[0].startTime;
-              mappedData.timePreference = 'afternoon';
-              
-              // Continue to create appointment
-              return this.createAppointmentFromAI(
-                `Đặt lịch ${mappedData.date} ${afternoonSlots[0].startTime}`,
-                patientUserId,
-                appointmentFor
-              );
-            }
-          }
-          
-          // ✅ 4. Check số thứ tự (1, 2, 3, đầu tiên...)
-          const index = this.extractIndex(userInput);
-          if (index !== null && index >= 0 && index < allSlots.length) {
-            console.log(`✅ [AI] User chose slot by index: ${index + 1}`);
-            const selectedSlot = allSlots[index];
-            mappedData.time = selectedSlot.startTime;
-            
-            // Continue to create appointment
-            return this.createAppointmentFromAI(
-              `Đặt lịch ${mappedData.date} ${selectedSlot.startTime}`,
-              patientUserId,
-              appointmentFor
-            );
-          }
-          
-          // 5. Hiển thị danh sách slots với số thứ tự
-          let slotsList = '\n\n🕐 Các khung giờ khả dụng:\n';
-          
-          if (morningSlots.length > 0) {
-            slotsList += '  🌅 Buổi sáng:\n';
-            morningSlots.forEach((s, idx) => {
-              slotsList += `    ${idx + 1}. ${s.startTime} - ${s.endTime}\n`;
-            });
-          }
-          
-          if (afternoonSlots.length > 0) {
-            const offset = morningSlots.length;
-            slotsList += '  🌆 Buổi chiều:\n';
-            afternoonSlots.forEach((s, idx) => {
-              slotsList += `    ${offset + idx + 1}. ${s.startTime} - ${s.endTime}\n`;
-            });
-          }
-          
-          slotsList += '\nBạn có thể chọn theo số thứ tự (1, 2, 3...) hoặc nhập giờ cụ thể (ví dụ: 9h, 14h).';
-          
-          return {
-            success: false,
-            needsMoreInfo: true,
-            missingFields: ['time'],
-            followUpQuestion: `Bạn muốn đặt lịch vào giờ nào ạ?${slotsList}`,
-            parsedData
-          };
-        }
-        
-        return {
-          success: false,
-          needsMoreInfo: true,
-          missingFields: ['time'],
-          followUpQuestion: 'Xin lỗi, không có khung giờ nào khả dụng. Bạn có muốn chọn bác sĩ khác không?',
-          parsedData
-        };
-      }
-
-      // 6. Find available slots
-      const slotsResult = await this.findAvailableSlots(mappedData);
-
-      if (!slotsResult.success) {
-        throw new Error(slotsResult.message || 'Không tìm thấy slot khả dụng');
-      }
-
-      // 7. Validate và lấy doctorScheduleId nếu chưa có
-      if (!slotsResult.doctorScheduleId) {
-        // Nếu selectedSlot có doctorScheduleId thì dùng nó
-        if (slotsResult.selectedSlot && slotsResult.selectedSlot.doctorScheduleId) {
-          slotsResult.doctorScheduleId = slotsResult.selectedSlot.doctorScheduleId;
-        } else {
-          // Fallback: Lấy từ generateSlotsByDate
-          const generateResult = await availableSlotService.generateAvailableSlotsByDate({
-            serviceId: mappedData.serviceId,
-            date: new Date(mappedData.date),
-            breakAfterMinutes: 10,
-            patientUserId: null
-          });
-
-          if (!generateResult.slots || generateResult.slots.length === 0) {
-            throw new Error('Không tìm thấy slot khả dụng vào ngày này');
-          }
-
-          // Tìm slot phù hợp với doctor và time
-          const targetDoctorId = (slotsResult.doctorUserId || mappedData.doctorUserId)?.toString();
-          let selectedSlot = generateResult.slots.find(slot => 
-            !targetDoctorId || slot.doctor?.doctorUserId?.toString() === targetDoctorId
-          ) || generateResult.slots[0];
-
-          if (selectedSlot && selectedSlot.doctorScheduleId) {
-            slotsResult.doctorScheduleId = selectedSlot.doctorScheduleId;
-            // Cập nhật selectedSlot nếu chưa có
-            if (!slotsResult.selectedSlot) {
-              slotsResult.selectedSlot = selectedSlot;
-            }
-            // Cập nhật doctorUserId nếu chưa có
-            if (!slotsResult.doctorUserId && selectedSlot.doctor?.doctorUserId) {
-              slotsResult.doctorUserId = selectedSlot.doctor.doctorUserId;
-            }
-          }
-        }
-      }
-
-      if (!slotsResult.doctorScheduleId) {
-        throw new Error('Không tìm thấy lịch làm việc của bác sĩ vào ngày này');
-      }
-
-      // 8. Create appointment
-      const appointmentData = {
-        patientUserId,
-        doctorUserId: slotsResult.doctorUserId || mappedData.doctorUserId,
-        serviceId: mappedData.serviceId,
-        doctorScheduleId: slotsResult.doctorScheduleId,
-        selectedSlot: {
-          startTime: slotsResult.selectedSlot.startTime,
-          endTime: slotsResult.selectedSlot.endTime
-        },
-        notes: mappedData.notes,
-        appointmentFor: appointmentFor || 'self'
-      };
-
-      const appointment = await appointmentService.createConsultationAppointment(appointmentData);
-
+      console.log('🚀 [AI Booking] Using new Function Calling approach...');
+      
+      // 🆕 Sử dụng chatWithAI với Function Calling - AI HOÀN TOÀN TỰ DO!
+      const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory);
+      
+      // Trả về kết quả đơn giản
       return {
-        success: true,
-        appointment,
-        parsedData,
-        mappedData,
-        selectedSlot: slotsResult.selectedSlot
+        success: result.success,
+        appointment: result.appointment || null,
+        needsMoreInfo: result.needsMoreInfo || false,
+        followUpQuestion: result.response,
+        parsedData: { conversationHistory: result.conversationHistory }
       };
+      
     } catch (error) {
-      console.error('❌ [AI] Error creating appointment:', error);
+      console.error('❌ [AI Booking] Error:', error);
       throw error;
     }
   }

@@ -1,0 +1,103 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_services",
+        "description": "Lấy danh sách dịch vụ nha khoa. Gọi function này khi cần hiển thị danh sách dịch vụ cho người dùng chọn.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "enum": ["Examination", "Consultation", "Treatment", "Cosmetic", "Surgery", "Orthodontics", "Prevention"],
+              "description": "Loại dịch vụ cần lấy. Ví dụ: 'Examination' cho khám trực tiếp, 'Consultation' cho tư vấn online. Nếu không xác định, để null để lấy tất cả."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_doctors",
+        "description": "Lấy danh sách bác sĩ khả dụng. Gọi function này khi người dùng cần chọn bác sĩ.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "serviceId": {
+              "type": "string",
+              "description": "ID của dịch vụ đã chọn (optional)"
+            },
+            "date": {
+              "type": "string",
+              "description": "Ngày cần khám, format YYYY-MM-DD (optional)"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_available_slots",
+        "description": "Lấy danh sách khung giờ khả dụng cho một bác sĩ vào một ngày cụ thể. Gọi function này khi đã có bác sĩ và ngày, cần người dùng chọn giờ.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "doctorId": {
+              "type": "string",
+              "description": "ID của bác sĩ"
+            },
+            "date": {
+              "type": "string",
+              "description": "Ngày cần khám, format YYYY-MM-DD"
+            },
+            "serviceId": {
+              "type": "string",
+              "description": "ID của dịch vụ"
+            }
+          },
+          "required": ["doctorId", "date", "serviceId"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_appointment",
+        "description": "Tạo lịch hẹn khám. CHỈ gọi function này khi đã có ĐẦY ĐỦ thông tin: dịch vụ, bác sĩ, ngày, giờ. Hỏi người dùng xác nhận trước khi gọi.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "serviceId": {
+              "type": "string",
+              "description": "ID của dịch vụ"
+            },
+            "doctorId": {
+              "type": "string",
+              "description": "ID của bác sĩ"
+            },
+            "date": {
+              "type": "string",
+              "description": "Ngày khám, format YYYY-MM-DD"
+            },
+            "time": {
+              "type": "string",
+              "description": "Giờ khám, format HH:mm"
+            },
+            "notes": {
+              "type": "string",
+              "description": "Ghi chú của người dùng (optional)"
+            }
+          },
+          "required": ["serviceId", "doctorId", "date", "time"]
+        }
+      }
+    }
+  ],
+  "systemPrompt": "Bạn là trợ lý AI đặt lịch nha khoa thông minh và thân thiện. Nhiệm vụ của bạn là giúp người dùng đặt lịch khám một cách tự nhiên và tiện lợi nhất.\n\n**Quy tắc hội thoại:**\n1. Luôn lịch sự, thân thiện, dùng ngôn ngữ tự nhiên\n2. Hỏi từng bước một, không hỏi quá nhiều thông tin cùng lúc\n3. Thứ tự ưu tiên: Ngày → Dịch vụ → Bác sĩ → Giờ\n4. Khi người dùng cung cấp thông tin mơ hồ (ví dụ: 'khám', 'huy'), hãy gọi function để lấy danh sách và hỏi cụ thể\n5. Luôn xác nhận lại với người dùng trước khi tạo lịch\n\n**Cách sử dụng function tools:**\n- get_services(): Lấy danh sách dịch vụ khi người dùng chưa rõ hoặc nói 'khám', 'tư vấn'\n- get_doctors(): Lấy danh sách bác sĩ khi cần người dùng chọn\n- get_available_slots(): Lấy giờ khả dụng khi đã có bác sĩ và ngày\n- create_appointment(): Tạo lịch khi đã có đủ thông tin và người dùng xác nhận\n\n**Xử lý date:**\n- Hôm nay: {TODAY}\n- Ngày mai: {TOMORROW}\n- Parse linh hoạt: 'mai', 'ngày mai', 'sáng mai', 'thứ 3 tuần sau'...\n\n**Lưu ý:**\n- Nếu người dùng từ chối, hỏi có muốn thay đổi gì không\n- Nếu không rõ, hỏi lại thay vì đoán\n- Luôn giữ thái độ tích cực và hỗ trợ tối đa"
+}
+
