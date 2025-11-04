@@ -12,7 +12,7 @@ const createAppointmentByAI = async (req, res) => {
     console.log('📋 User:', JSON.stringify(req.user || null, null, 2));
     console.log('📋 Origin:', req.headers.origin || 'No origin header');
     
-    const { prompt, appointmentFor } = req.body;
+    const { prompt, appointmentFor, conversationHistory } = req.body;
     const patientUserId = req.user?.userId;
 
     if (!patientUserId) {
@@ -35,13 +35,44 @@ const createAppointmentByAI = async (req, res) => {
     console.log('🤖 [AI Booking] User prompt:', prompt);
     console.log('🤖 [AI Booking] Patient ID:', patientUserId);
     console.log('🤖 [AI Booking] Appointment for:', appointmentFor || 'self');
+    console.log('🤖 [AI Booking] Conversation history:', conversationHistory ? `${conversationHistory.length} messages` : 'None');
 
     // Gọi AI service để tạo appointment
     const result = await aiBookingService.createAppointmentFromAI(
       prompt.trim(),
       patientUserId,
-      appointmentFor || 'self'
+      appointmentFor || 'self',
+      conversationHistory || [] // Pass conversation history
     );
+
+    // Check if conversation ended (rejection/goodbye)
+    if (result.isConversationEnd) {
+      console.log('🤖 [AI Booking] Conversation ended:', result.userIntent);
+      return res.status(200).json({
+        success: false,
+        data: {
+          isConversationEnd: true,
+          userIntent: result.userIntent,
+          followUpQuestion: result.followUpQuestion,
+          parsedData: result.parsedData
+        },
+        message: result.followUpQuestion
+      });
+    }
+
+    // Check if input is invalid (not related to dental services)
+    if (result.isInvalidInput) {
+      console.log('🤖 [AI Booking] Invalid input detected');
+      return res.status(200).json({
+        success: false,
+        data: {
+          isInvalidInput: true,
+          rejectionReason: result.rejectionReason,
+          parsedData: result.parsedData
+        },
+        message: result.rejectionReason || 'Input không hợp lệ'
+      });
+    }
 
     // Check if AI needs more information (multi-turn conversation)
     if (result.needsMoreInfo) {
