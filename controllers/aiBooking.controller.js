@@ -45,70 +45,47 @@ const createAppointmentByAI = async (req, res) => {
       conversationHistory || [] // Pass conversation history
     );
 
-    // Check if conversation ended (rejection/goodbye)
-    if (result.isConversationEnd) {
-      console.log('🤖 [AI Booking] Conversation ended:', result.userIntent);
+    // Check if appointment was successfully created
+    if (result.success && result.appointment) {
+      console.log('✅ [AI Booking] Appointment created successfully');
+      const appointmentData = result.appointment;
       return res.status(200).json({
-        success: false,
+        success: true,
+        message: 'Đặt lịch thành công!',
         data: {
-          isConversationEnd: true,
-          userIntent: result.userIntent,
-          followUpQuestion: result.followUpQuestion,
-          parsedData: result.parsedData
-        },
-        message: result.followUpQuestion
-      });
-    }
-
-    // Check if input is invalid (not related to dental services)
-    if (result.isInvalidInput) {
-      console.log('🤖 [AI Booking] Invalid input detected');
-      return res.status(200).json({
-        success: false,
-        data: {
-          isInvalidInput: true,
-          rejectionReason: result.rejectionReason,
-          parsedData: result.parsedData
-        },
-        message: result.rejectionReason || 'Input không hợp lệ'
+          appointmentId: appointmentData.appointmentId || appointmentData._id,
+          appointment: appointmentData,
+          followUpQuestion: result.followUpQuestion || result.response,
+          parsedData: result.parsedData || {}
+        }
       });
     }
 
     // Check if AI needs more information (multi-turn conversation)
     if (result.needsMoreInfo) {
-      console.log('🤖 [AI Booking] Needs more info. Missing fields:', result.missingFields);
+      console.log('🤖 [AI Booking] Needs more info.');
+      const followUpQuestion = result.followUpQuestion || result.response || 'Cần thêm thông tin để đặt lịch';
       return res.status(200).json({
         success: false,
         needsMoreInfo: true,
         data: {
           needsMoreInfo: true,
-          missingFields: result.missingFields,
-          followUpQuestion: result.followUpQuestion,
-          parsedData: result.parsedData
+          followUpQuestion: followUpQuestion,
+          parsedData: result.parsedData || {}
         },
-        message: result.followUpQuestion || 'Cần thêm thông tin để đặt lịch'
+        message: followUpQuestion
       });
     }
 
-    // Success - appointment created
+    // Default response (should not reach here, but just in case)
+    const followUpQuestion = result.followUpQuestion || result.response || 'Đang xử lý yêu cầu của bạn...';
     return res.status(200).json({
-      success: true,
-      message: 'Đặt lịch thành công!',
+      success: false,
       data: {
-        appointmentId: result.appointment._id,
-        appointment: result.appointment,
-        parsedInfo: {
-          serviceName: result.mappedData.serviceId ? 'Đã xác định' : null,
-          doctorName: result.mappedData.doctorUserId ? 'Đã xác định' : null,
-          date: result.mappedData.date,
-          time: result.selectedSlot ? new Date(result.selectedSlot.startTime).toLocaleTimeString('vi-VN', {
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZone: 'Asia/Ho_Chi_Minh'
-          }) : null,
-          confidence: result.parsedData.confidence
-        }
-      }
+        followUpQuestion: followUpQuestion,
+        parsedData: result.parsedData || {}
+      },
+      message: followUpQuestion
     });
   } catch (error) {
     console.error('❌ [AI Booking Controller] Error:', error);

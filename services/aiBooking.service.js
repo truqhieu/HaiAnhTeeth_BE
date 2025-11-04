@@ -447,38 +447,34 @@ class AIBookingService {
             afternoonEnd: '17:00'
           };
           
-          // Lấy tất cả appointments đã book của bác sĩ trong ngày đó
+          // QUAN TRỌNG: Query Timeslots trực tiếp để lấy tất cả slots đã đặt (Reserved/Booked)
+          // Điều này chính xác hơn vì Timeslots là nguồn truth về các slot đã được đặt
           const startOfDay = new Date(searchDate);
           startOfDay.setHours(0, 0, 0, 0);
           const endOfDay = new Date(searchDate);
           endOfDay.setHours(23, 59, 59, 999);
           
-          const appointments = await Appointment.find({
-            doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
-            status: { $in: ['Pending', 'Approved', 'CheckedIn', 'PendingPayment'] },
-            timeslotId: { $exists: true }
+          // Lấy tất cả Timeslots đã đặt của bác sĩ trong ngày đó (Reserved hoặc Booked)
+          const doctorBookedTimeslots = await Timeslot.find({
+            doctorUserId: doctor._id,
+            status: { $in: ['Reserved', 'Booked'] },
+            startTime: { $gte: startOfDay, $lt: endOfDay }
           })
-          .populate({
-            path: 'timeslotId',
-            select: 'startTime endTime',
-            match: {
-              startTime: { $gte: startOfDay, $lt: endOfDay }
-            }
-          })
+          .select('startTime endTime')
           .lean();
           
-          // Lọc appointments có timeslot hợp lệ
-          const bookedAppointments = appointments
-            .filter(apt => apt.timeslotId && apt.timeslotId.startTime)
-            .map(apt => ({
-              start: new Date(apt.timeslotId.startTime),
-              end: new Date(apt.timeslotId.endTime)
+          // Convert sang format để tính free blocks
+          const bookedAppointments = doctorBookedTimeslots
+            .map(ts => ({
+              start: new Date(ts.startTime),
+              end: new Date(ts.endTime)
             }))
             .sort((a, b) => a.start - b.start);
           
-          // Exclude appointments của patient nếu có
+          // Exclude Timeslots của patient nếu có (bất kỳ bác sĩ nào)
           let patientBookedSlots = [];
           if (patientUserId) {
+            // Lấy tất cả appointments của patient trong ngày đó
             const patientAppointments = await Appointment.find({
               patientUserId: patientUserId,
               status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
@@ -498,11 +494,13 @@ class AIBookingService {
               .map(apt => ({
                 start: new Date(apt.timeslotId.startTime),
                 end: new Date(apt.timeslotId.endTime)
-              }));
+              }))
+              .sort((a, b) => a.start - b.start);
           }
           
           // Helper function: Tính continuous free blocks từ start-end và booked appointments
           // CHỈ trả về các blocks có độ dài >= serviceDurationMinutes
+          // QUAN TRỌNG: Nếu là ngày hôm nay, chỉ hiển thị từ thời gian hiện tại trở đi
           const calculateFreeBlocks = (startTimeStr, endTimeStr, bookedAppts, patientBooked, serviceDurationMinutes) => {
             const [startHour, startMin] = startTimeStr.split(':').map(Number);
             const [endHour, endMin] = endTimeStr.split(':').map(Number);
@@ -527,22 +525,65 @@ class AIBookingService {
               0
             ));
             
+            // QUAN TRỌNG: Nếu là ngày hôm nay, chỉ hiển thị từ thời gian hiện tại trở đi
+            const now = new Date();
+            
+            // So sánh ngày: searchDate và today (lấy year, month, date)
+            // searchDate đã được set về 00:00:00 local time, nên lấy local date
+            const searchYear = searchDate.getFullYear();
+            const searchMonth = searchDate.getMonth();
+            const searchDay = searchDate.getDate();
+            
+            const nowYear = now.getFullYear();
+            const nowMonth = now.getMonth();
+            const nowDay = now.getDate();
+            
+            const isToday = 
+              searchYear === nowYear &&
+              searchMonth === nowMonth &&
+              searchDay === nowDay;
+            
+            // Nếu là hôm nay, tính thời gian hiện tại và điều chỉnh shiftStart
+            let actualShiftStart = shiftStart;
+            if (isToday) {
+              // Lấy thời gian hiện tại theo VN timezone (UTC+7)
+              // Convert sang UTC để so sánh với shiftStart/shiftEnd
+              const nowVN = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+              const currentTimeUTC = new Date(Date.UTC(
+                nowVN.getFullYear(),
+                nowVN.getMonth(),
+                nowVN.getDate(),
+                nowVN.getHours() - 7, // Convert VN time (UTC+7) to UTC
+                nowVN.getMinutes(),
+                0
+              ));
+              
+              // Nếu thời gian hiện tại > shiftStart, dùng currentTimeUTC làm điểm bắt đầu
+              // Nhưng phải đảm bảo currentTimeUTC < shiftEnd (chưa qua hết shift)
+              if (currentTimeUTC > shiftStart && currentTimeUTC < shiftEnd) {
+                actualShiftStart = currentTimeUTC;
+              } else if (currentTimeUTC >= shiftEnd) {
+                // Đã qua hết shift này, không hiển thị gì
+                return [];
+              }
+            }
+            
             // Combine booked appointments (doctor + patient) và filter theo shift (overlap với shift)
             const allBooked = [...bookedAppts, ...(patientBooked || [])]
               .filter(apt => {
                 // Chỉ lấy appointments overlap với shift này (appointment end > shift start và appointment start < shift end)
-                return apt.end > shiftStart && apt.start < shiftEnd;
+                return apt.end > actualShiftStart && apt.start < shiftEnd;
               })
               .map(apt => ({
                 // Clamp appointment vào shift boundaries
-                start: apt.start < shiftStart ? shiftStart : apt.start,
+                start: apt.start < actualShiftStart ? actualShiftStart : apt.start,
                 end: apt.end > shiftEnd ? shiftEnd : apt.end
               }))
               .sort((a, b) => a.start - b.start);
             
             // Tính free blocks
             const freeBlocks = [];
-            let currentStart = shiftStart;
+            let currentStart = actualShiftStart;
             
             for (const booked of allBooked) {
               if (currentStart < booked.start) {
@@ -589,11 +630,37 @@ class AIBookingService {
             }));
           };
           
-          // Filter appointments theo morning/afternoon
-          const morningBooked = bookedAppointments.filter(apt => apt.start.getHours() < 12);
-          const afternoonBooked = bookedAppointments.filter(apt => apt.start.getHours() >= 12);
-          const morningPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() < 12);
-          const afternoonPatientBooked = patientBookedSlots.filter(apt => apt.start.getHours() >= 12);
+          // Filter appointments theo morning/afternoon để optimize
+          // Note: calculateFreeBlocks sẽ tự filter chính xác theo shift boundaries,
+          // nên filter này chỉ để optimize performance
+          // Convert VN time sang UTC để so sánh
+          const [morningStartHour, morningStartMin] = workingHours.morningStart.split(':').map(Number);
+          const [morningEndHour, morningEndMin] = workingHours.morningEnd.split(':').map(Number);
+          const [afternoonStartHour, afternoonStartMin] = workingHours.afternoonStart.split(':').map(Number);
+          const [afternoonEndHour, afternoonEndMin] = workingHours.afternoonEnd.split(':').map(Number);
+          
+          // Convert sang UTC hours để so sánh
+          const morningStartUTC = morningStartHour - 7;
+          const morningEndUTC = morningEndHour - 7;
+          const afternoonStartUTC = afternoonStartHour - 7;
+          const afternoonEndUTC = afternoonEndHour - 7;
+          
+          const morningBooked = bookedAppointments.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= morningStartUTC && hour < morningEndUTC;
+          });
+          const afternoonBooked = bookedAppointments.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= afternoonStartUTC && hour < afternoonEndUTC;
+          });
+          const morningPatientBooked = patientBookedSlots.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= morningStartUTC && hour < morningEndUTC;
+          });
+          const afternoonPatientBooked = patientBookedSlots.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= afternoonStartUTC && hour < afternoonEndUTC;
+          });
           
           // Tính free blocks cho buổi sáng (chỉ hiển thị blocks >= serviceDuration)
           const morningBlocks = calculateFreeBlocks(
