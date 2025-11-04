@@ -848,6 +848,7 @@ class AppointmentService {
         .populate('patientUserId', 'fullName email')
         .populate('customerId', 'fullName email')
         .populate('doctorUserId', 'fullName email')
+        .populate('replacedDoctorUserId', 'fullName email')
         .populate('serviceId', 'serviceName price')
         .populate('timeslotId', 'startTime endTime')
         .sort({ createdAt: -1 });
@@ -1334,7 +1335,7 @@ class AppointmentService {
         appointmentDate: appointment.timeslotId.date,
         appointmentStart: appointment.timeslotId.startTime,
         appointmentEnd: appointment.timeslotId.endTime,
-        clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải Anh'
+        clinicName: 'Phòng khám Hải Anh'
       };
 
       try {
@@ -1343,16 +1344,15 @@ class AppointmentService {
         console.warn('⚠️ Lỗi gửi email:', emailError.message);
       }
 
-      const baseUrl = process.env.APP_URL
       // ✅ Gửi notification cho bệnh nhân 
       try {
         await notificationService.createNotification({
-          userId: appointment.patientUserId,
+          userId: appointment.patientUserId._id,
           createdByUserId: userId,
           title: 'Bác sĩ của bạn đã được thay đổi',
           message: `Bác sĩ ${oldDoctorName} đã được thay thế bằng bác sĩ ${newDoctor.fullName}. Vui lòng xác nhận trong vòng 24 giờ.`,
           relatedAppointmentId: appointmentId,
-          link: `${baseUrl}/api/appointments/my-appointments`,
+          link: null,
         });
       } catch (notifError) {
         console.warn('⚠️ Lỗi gửi notification bệnh nhân:', notifError.message);
@@ -1382,7 +1382,6 @@ async confirmChangeDoctor(appointmentId, userId , options = { auto: false }) {
       throw new Error('Không có yêu cầu đổi bác sĩ');
     }
 
-    const baseUrl = process.env.APP_URL
      // ✅ Gửi notification cho bác sĩ mới
       try {
         await notificationService.createNotification({
@@ -1391,7 +1390,7 @@ async confirmChangeDoctor(appointmentId, userId , options = { auto: false }) {
           title: 'Bạn được gán lịch khám mới',
           message: `Bạn được chỉ định thay thế để khám khám bệnh cho bệnh nhân ${appointment.patientUserId.fullName} vào ngày ${new Date(appointment.timeslotId.startTime).toLocaleDateString('vi-VN')}.`,
           relatedAppointmentId: appointmentId,
-          link:  `${baseUrl}/api/appointments/my-appointments`,
+          link:  null,
         });
       } catch (notifError) {
         console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
