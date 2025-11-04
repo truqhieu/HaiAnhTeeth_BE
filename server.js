@@ -5,6 +5,9 @@ const connectMongo = require('./config/connectMongo');
 const corsOptions = require('./config/corsConfig');
 const paymentMonitor = require('./services/paymentMonitor.service');
 const appointmentMonitor = require('./services/appointmentMonitor.service');
+const http = require('http');
+const {Server} = require('socket.io')
+
 require('dotenv').config();
 
 const app = express();
@@ -110,6 +113,55 @@ app.use((err, req, res, next) => {
   });
 });
 
+// ⭐ Tạo HTTP server từ Express app
+const server = http.createServer(app);
+
+// ⭐ Cấu hình Socket.IO với CORS từ .env
+const io = new Server(server, {
+  cors: {
+    origin: function (origin, callback) {
+      const allowedOrigins = [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:5173',
+        'http://localhost:8080',
+        'http://localhost:4200',
+        process.env.FRONTEND_URL,
+        process.env.FRONTEND_PRODUCTION_URL,
+      ].filter(Boolean);
+      
+      if (process.env.NODE_ENV === 'development' || !origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST']
+  }
+});
+
+// ⭐ Inject Socket.IO vào chatMessage controller để gửi notification real-time
+const { setSocketIO } = require('./controllers/chatMessage.controller');
+setSocketIO(io);
+
+// ⭐ Socket.IO connection handler
+io.on('connection', (socket) => {
+  console.log('🔌 [Socket.IO] Client connected:', socket.id);
+
+  // Join room theo userId để nhận messages và notifications
+  socket.on('join-user-room', (userId) => {
+    const roomName = `user_${userId}`;
+    socket.join(roomName);
+    console.log(`📱 [Socket.IO] User ${userId} joined room: ${roomName}`);
+  });
+
+  // Leave room khi disconnect
+  socket.on('disconnect', () => {
+    console.log('🔌 [Socket.IO] Client disconnected:', socket.id);
+  });
+});
+
 // 404 handler - phải đặt cuối cùng
 app.use((req, res) => {
   res.status(404).json({
@@ -123,7 +175,7 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 9999;
 
 // Khởi động server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log('\n' + '='.repeat(70));
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📍 Server URL: ${process.env.NODE_ENV === 'production' 
@@ -142,6 +194,11 @@ app.listen(PORT, () => {
   console.log(`   → All requests will be logged with details`);
   console.log(`   → Webhook calls will have special logging`);
   console.log(`   → Check logs for payment confirmations\n`);
+  
+  console.log('💬 SOCKET.IO STATUS:');
+  console.log(`   ✅ Socket.IO server is ready`);
+  console.log(`   ✅ Chat notifications enabled`);
+  console.log(`   ✅ CORS configured for: ${process.env.FRONTEND_URL || 'localhost ports'}\n`);
   
   console.log('='.repeat(70) + '\n');
 });

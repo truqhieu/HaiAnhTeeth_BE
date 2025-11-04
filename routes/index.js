@@ -21,6 +21,7 @@ const blogRoutes = require('./blog.route');
 const patientRequestRoutes = require('./patientRequest.route');
 const promotionRoutes = require('./promotion.route');
 const notificaionRoutes = require('./notification.route')
+const chatMessageRoutes = require('./chatMessage.route')
 
 
 // --- ROUTES ---
@@ -39,6 +40,7 @@ router.use('/nurse', nurseRoutes);
 
 router.use('/temp-register', tempRegisterRoutes);
 router.use('/appointments', appointmentRoutes);
+router.use('/chat', chatMessageRoutes);
 router.use('/available-slots', availableSlotRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/policies', policyRoutes);
@@ -46,6 +48,7 @@ router.use('/complaints', complaintRoutes)
 router.use('/leave-requests', leaveRequestRoutes)
 router.use('/patient-requests', patientRequestRoutes)
 router.use('/notifications', notificaionRoutes)
+router.use('/chat-messages', chatMessageRoutes)
 
 // --- API INFO ENDPOINT ---
 router.get('/', (req, res) => {
