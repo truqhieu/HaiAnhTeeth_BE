@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Chat Test</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-connect {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .btn-disconnect {
+            background-color: #f44336;
+            color: white;
+        }
+        .btn-join {
+            background-color: #2196F3;
+            color: white;
+        }
+        button:hover {
+            opacity: 0.8;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #notifications {
+            border: 1px solid #ddd;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            background: #fff;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+        .notification {
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 3px;
+            border-left: 4px solid;
+        }
+        .success {
+            color: #2e7d32;
+            background: #e8f5e9;
+            border-color: #4CAF50;
+        }
+        .error {
+            color: #c62828;
+            background: #ffebee;
+            border-color: #f44336;
+        }
+        .info {
+            color: #1565c0;
+            background: #e3f2fd;
+            border-color: #2196F3;
+        }
+        .message {
+            color: #6a1b9a;
+            background: #f3e5f5;
+            border-color: #9c27b0;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-connected {
+            background: #4CAF50;
+            color: white;
+        }
+        .status-disconnected {
+            background: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔔 Socket.IO Chat Test</h1>
+        
+        <div class="section">
+            <label>Server URL:</label>
+            <input type="text" id="serverUrl" value="http://localhost:9999" />
+            <div>
+                <button class="btn-connect" onclick="connect()">Connect</button>
+                <button class="btn-disconnect" onclick="disconnect()">Disconnect</button>
+                <span id="connectionStatus" class="status status-disconnected">Disconnected</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <label>User ID (để join room và nhận notifications):</label>
+            <input type="text" id="userId" placeholder="Nhập userId của Doctor hoặc Patient" />
+            <button class="btn-join" onclick="joinRoom()">Join Room</button>
+        </div>
+        
+        <div class="section">
+            <h3>📬 Notifications:</h3>
+            <div id="notifications"></div>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+
+        function connect() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            
+            if (!serverUrl) {
+                alert('Vui lòng nhập Server URL!');
+                return;
+            }
+
+            if (socket && socket.connected) {
+                addNotification('⚠️ Đã kết nối rồi!', 'info');
+                return;
+            }
+
+            addNotification('🔄 Đang kết nối đến ' + serverUrl + '...', 'info');
+            
+            socket = io(serverUrl, {
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 5
+            });
+
+            socket.on('connect', () => {
+                addNotification('✅ Connected to Socket.IO', 'success');
+                addNotification('   Socket ID: ' + socket.id, 'success');
+                updateConnectionStatus(true);
+            });
+
+            socket.on('new-message', (data) => {
+                addNotification('🔔 NEW MESSAGE NOTIFICATION', 'message');
+                addNotification('   📬 Notification: ' + data.notification, 'message');
+                addNotification('   👤 Sender: ' + data.senderName, 'message');
+                addNotification('   📝 Content: ' + data.message.content, 'message');
+                addNotification('   📅 Time: ' + new Date(data.message.createdAt).toLocaleString('vi-VN'), 'message');
+                console.log('New message:', data);
+            });
+
+            socket.on('disconnect', (reason) => {
+                addNotification('❌ Disconnected: ' + reason, 'error');
+                updateConnectionStatus(false);
+            });
+
+            socket.on('connect_error', (error) => {
+                addNotification('❌ Connection Error: ' + error.message, 'error');
+                addNotification('   💡 Kiểm tra server đã khởi động chưa!', 'error');
+                updateConnectionStatus(false);
+            });
+
+            socket.on('reconnect', (attemptNumber) => {
+                addNotification('✅ Reconnected after ' + attemptNumber + ' attempts', 'success');
+                updateConnectionStatus(true);
+                
+                // Auto join room lại nếu có userId
+                const userId = document.getElementById('userId').value;
+                if (userId) {
+                    socket.emit('join-user-room', userId);
+                    addNotification('📱 Auto joined room: user_' + userId, 'success');
+                }
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                addNotification('👋 Disconnected manually', 'info');
+                updateConnectionStatus(false);
+            }
+        }
+
+        function joinRoom() {
+            if (!socket || !socket.connected) {
+                alert('⚠️ Vui lòng connect trước!');
+                return;
+            }
+            
+            const userId = document.getElementById('userId').value;
+            if (!userId) {
+                alert('⚠️ Vui lòng nhập User ID!');
+                return;
+            }
+
+            socket.emit('join-user-room', userId);
+            addNotification('📱 Joined room: user_' + userId, 'success');
+            addNotification('   💡 Đang chờ nhận notifications...', 'info');
+        }
+
+        function addNotification(message, type = 'info') {
+            const div = document.getElementById('notifications');
+            const time = new Date().toLocaleTimeString('vi-VN');
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = 'notification ' + type;
+            notificationDiv.innerHTML = `[${time}] ${message}`;
+            div.appendChild(notificationDiv);
+            div.scrollTop = div.scrollHeight;
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (connected) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'status status-connected';
+            } else {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status status-disconnected';
+            }
+        }
+
+        // Hướng dẫn ban đầu
+        window.onload = function() {
+            addNotification('📖 Hướng dẫn:', 'info');
+            addNotification('   1. Nhập Server URL (mặc định: http://localhost:9999)', 'info');
+            addNotification('   2. Click "Connect" để kết nối', 'info');
+            addNotification('   3. Nhập User ID (ví dụ: userId của Doctor)', 'info');
+            addNotification('   4. Click "Join Room" để nhận notifications', 'info');
+            addNotification('   5. Gửi message từ Postman để test', 'info');
+        };
+    </script>
+</body>
+</html>
