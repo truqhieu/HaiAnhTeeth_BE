@@ -1334,7 +1334,7 @@ class AppointmentService {
         appointmentDate: appointment.timeslotId.date,
         appointmentStart: appointment.timeslotId.startTime,
         appointmentEnd: appointment.timeslotId.endTime,
-        clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải An'
+        clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải Anh'
       };
 
       try {
