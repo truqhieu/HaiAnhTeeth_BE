@@ -22,7 +22,6 @@ const createAccount = async (req, res) => {
       Doctor: 'Bác sĩ',
       Nurse: 'Y tá',
       Staff: 'Lễ tân',
-      Patient: 'Bệnh nhân',
       Manager: 'Quản lý'
     };
 

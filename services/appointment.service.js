@@ -7,6 +7,7 @@ const DoctorSchedule = require('../models/doctorSchedule.model');
 const EmailService = require('../config/emailConfig')
 const { calculateServicePrice } = require('../utils/promotionHelper');
 const emailService = require('./email.service');
+const notificationService = require('../services/notification.service')
 
 class AppointmentService {
 
@@ -1289,72 +1290,84 @@ class AppointmentService {
 
 
   
-async assignDoctorToAppointment(appointmentId, newDoctorId) {
-  try {
-    // 1. Tìm lịch khám + populate đầy đủ
-    const appointment = await Appointment.findById(appointmentId)
-      .populate('patientUserId', 'fullName email')
-      .populate('doctorUserId', 'fullName')
-      .populate('serviceId', 'serviceName')
-      .populate('timeslotId', 'startTime endTime date');
+  async assignDoctorToAppointment(appointmentId, newDoctorId, userId) {
+    try {
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('patientUserId', 'fullName email')
+        .populate('doctorUserId', 'fullName')
+        .populate('serviceId', 'serviceName')
+        .populate('timeslotId', 'startTime endTime date');
 
-    if (!appointment) {
-      throw new Error('Lịch khám không tồn tại');
-    }
+      if (!appointment) {
+        throw new Error('Lịch khám không tồn tại');
+      }
 
-    if(!(appointment.status === 'Pending' || !appointment.status === 'Approved')){
-      throw new Error('Trạng thái lịch khám không khả dụng')
-    }
+      // ✅ Sửa logic condition
+      if (!(appointment.status === 'Pending' || appointment.status === 'Approved')) {
+        throw new Error('Trạng thái lịch khám không khả dụng');
+      }
 
-    // 2. Lấy bác sĩ mới
-    const newDoctor = await User.findById(newDoctorId).select('fullName');
-    if (!newDoctor) {
-      throw new Error('Bác sĩ không tồn tại');
-    }
+      const newDoctor = await User.findById(newDoctorId).select('fullName');
+      if (!newDoctor) {
+        throw new Error('Bác sĩ không tồn tại');
+      }
 
-    // 3. Xác định bác sĩ cũ
-    const oldDoctorName = appointment.replacedDoctorUserId?.fullName 
-                       || appointment.doctorUserId?.fullName 
-                       || null;
+      const oldDoctorName = appointment.replacedDoctorUserId?.fullName 
+                         || appointment.doctorUserId?.fullName 
+                         || null;
 
-    // 4. Cập nhật bác sĩ mới + set confirmDeadline 24h
-    const updated = await Appointment.findByIdAndUpdate(
-      appointmentId,
-      { 
-        replacedDoctorUserId: newDoctorId,
-        confirmDeadline: new Date(Date.now() + 24*60*60*1000),
-      },
-      { new: true }
+      const updated = await Appointment.findByIdAndUpdate(
+        appointmentId,
+        { 
+          replacedDoctorUserId: newDoctorId,
+          confirmDeadline: new Date(Date.now() + 24*60*60*1000),
+        },
+        { new: true }
       ).populate('replacedDoctorUserId', 'fullName');
 
-    console.log(`✅ Gán bác sĩ thành công: ${newDoctor.fullName}`);
+      // ✅ Gửi email
+      const emailData = {
+        patientName: appointment.patientUserId.fullName,
+        serviceName: appointment.serviceId.serviceName,
+        oldDoctorName: oldDoctorName,
+        newDoctorName: newDoctor.fullName,
+        appointmentDate: appointment.timeslotId.date,
+        appointmentStart: appointment.timeslotId.startTime,
+        appointmentEnd: appointment.timeslotId.endTime,
+        clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải An'
+      };
 
-    // 5. Chuẩn bị dữ liệu gửi email
-    const emailData = {
-      patientName: appointment.patientUserId.fullName,
-      serviceName: appointment.serviceId.serviceName,
-      oldDoctorName: oldDoctorName,
-      newDoctorName: newDoctor.fullName,
-      appointmentDate: appointment.timeslotId.date,
-      appointmentStart: appointment.timeslotId.startTime,
-      appointmentEnd: appointment.timeslotId.endTime,
-      clinicName: process.env.CLINIC_NAME || 'Phòng khám Hải An'
-    };
+      try {
+        await emailService.sendDoctorAssignedEmail(appointment.patientUserId.email, emailData);
+      } catch (emailError) {
+        console.warn('⚠️ Lỗi gửi email:', emailError.message);
+      }
 
-    // 6. Gửi email
-    await emailService.sendDoctorAssignedEmail(appointment.patientUserId.email, emailData);
+      const baseUrl = process.env.APP_URL
+      // ✅ Gửi notification cho bệnh nhân 
+      try {
+        await notificationService.createNotification({
+          userId: appointment.patientUserId,
+          createdByUserId: userId,
+          title: 'Bác sĩ của bạn đã được thay đổi',
+          message: `Bác sĩ ${oldDoctorName} đã được thay thế bằng bác sĩ ${newDoctor.fullName}. Vui lòng xác nhận trong vòng 24 giờ.`,
+          relatedAppointmentId: appointmentId,
+          link: `${baseUrl}/api/appointments/my-appointments`,
+        });
+      } catch (notifError) {
+        console.warn('⚠️ Lỗi gửi notification bệnh nhân:', notifError.message);
+      }
 
-    console.log(`📧 Đã gửi email đến: ${appointment.patientUserId.email}`);
+      return updated;
 
-    return updated;
-
-  } catch (error) {
-    console.error('❌ Lỗi gán bác sĩ:', error.message);
-    throw error;
+    } catch (error) {
+      console.error('❌ Lỗi gán bác sĩ:', error.message);
+      throw error;
+    }
   }
-}
 
-async confirmChangeDoctor(appointmentId, options = { auto: false }) {
+
+async confirmChangeDoctor(appointmentId, userId , options = { auto: false }) {
   try {
     // 1. Tìm appointment
     const appointment = await Appointment.findById(appointmentId)
@@ -1369,26 +1382,47 @@ async confirmChangeDoctor(appointmentId, options = { auto: false }) {
       throw new Error('Không có yêu cầu đổi bác sĩ');
     }
 
+    const baseUrl = process.env.APP_URL
+     // ✅ Gửi notification cho bác sĩ mới
+      try {
+        await notificationService.createNotification({
+          userId: appointment.replacedDoctorUserId,
+          createdByUserId: userId,
+          title: 'Bạn được gán lịch khám mới',
+          message: `Bạn được chỉ định thay thế để khám khám bệnh cho bệnh nhân ${appointment.patientUserId.fullName} vào ngày ${new Date(appointment.timeslotId.startTime).toLocaleDateString('vi-VN')}.`,
+          relatedAppointmentId: appointmentId,
+          link:  `${baseUrl}/api/appointments/my-appointments`,
+        });
+      } catch (notifError) {
+        console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
+      }
+
     // 2. Tìm lịch làm việc bác sĩ mới
     const schedule = await DoctorSchedule.findOne({
       doctorUserId: appointment.replacedDoctorUserId,
-      startTime: { $lte: appointment.timeslotId.startTime },
-      endTime: { $gte: appointment.timeslotId.endTime },
     });
 
-    if (!schedule) throw new Error('Không tìm thấy lịch làm việc của bác sĩ mới');
+    // ✅ THÊM: Kiểm tra schedule có tồn tại không
+    if (!schedule) {
+      throw new Error(
+        `Bác sĩ mới không có lịch làm việc vào thời gian ${appointment.timeslotId.startTime}`
+      );
+    }
 
     // 3. Hủy timeslot cũ
     const oldTimeSlot = await Timeslot.findById(appointment.timeslotId);
+    if (!oldTimeSlot) {
+      throw new Error('Không tìm thấy timeslot cũ');
+    }
     if (oldTimeSlot) {
       await Timeslot.findByIdAndDelete(oldTimeSlot._id);
     }
 
     // 4. Tạo timeslot mới
     const newTimeslot = new Timeslot({
-      doctorScheduleId: schedule._id,
+      doctorScheduleId: schedule._id, // ✅ Lúc này schedule chắc chắn tồn tại
       doctorUserId: appointment.replacedDoctorUserId,
-      serviceId: appointment.serviceId._id,
+      serviceId: appointment.serviceId,
       startTime: oldTimeSlot.startTime,
       endTime: oldTimeSlot.endTime,
       breakAfterMinutes: 10,
@@ -1435,7 +1469,11 @@ async cancelChangeDoctor(appointmentId) {
       const appointment = await Appointment.findById(appointmentId);
       if(!appointment){
         throw new Error('Lịch khám không tồn tại')
-      }      
+      }  
+      
+      if(!appointment.replacedDoctorUserId){
+        throw new Error('Lịch khám đã bị hủy')
+      }
 
       //Cập nhật lịch khám của bệnh nhân
       const update = await Appointment.findByIdAndUpdate(

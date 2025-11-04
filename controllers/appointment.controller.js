@@ -651,20 +651,21 @@ const getRescheduleAvailableSlots = async (req, res) => {
       console.log(`   Booked ${index + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
     });
 
-    // ⭐ SỬA LỖI: Bỏ logic buffer time - slot tiếp theo có thể bắt đầu ngay sau slot đã book
+    // ⭐ SỬA LỖI: Sử dụng logic buffer time giống như availableSlot service
     const appointmentServiceDuration = appointment.serviceId.durationMinutes || 30; // Lấy thời gian dịch vụ
+    const breakAfterMinutes = 10; // 10 phút buffer (giống như availableSlot service)
     
     console.log(`⏱️ Service duration: ${appointmentServiceDuration} minutes`);
-    console.log(`⏱️ Break after minutes: 0 (đã bỏ logic 10 phút)`);
+    console.log(`⏱️ Break after minutes: ${breakAfterMinutes} minutes`);
 
-    // Tạo danh sách booked slots (KHÔNG cộng buffer - slot tiếp theo có thể bắt đầu ngay sau)
-    const bookedSlotsWithoutBuffer = bookedSlots.map(b => ({
+    // Tạo danh sách booked slots đã cộng buffer ở cuối
+    const bookedSlotsWithBuffer = bookedSlots.map(b => ({
       start: new Date(b.start),
-      end: new Date(b.end) // Không cộng break time nữa
+      end: new Date(new Date(b.end).getTime() + breakAfterMinutes * 60000)
     }));
 
     // Hàm kiểm tra xem có thể đặt lịch tại thời điểm startTime không
-    // Bỏ logic buffer time - slot tiếp theo có thể bắt đầu ngay sau slot đã book
+    // Sử dụng logic giống như availableSlot service
     const canBookAtTime = (startTimeStr) => {
       const [startHour, startMinute] = startTimeStr.split(':').map(Number);
       const startDate = new Date(searchDate);
@@ -672,15 +673,17 @@ const getRescheduleAvailableSlots = async (req, res) => {
       
       const endDate = new Date(startDate.getTime() + appointmentServiceDuration * 60000);
       
-      // Kiểm tra xem có conflict với lịch đã có không (KHÔNG cộng buffer time)
-      // Conflict nếu: startDate < bookedEnd && endDate > bookedStart
-      const hasConflict = bookedSlotsWithoutBuffer.some(booked => {
+      // Kiểm tra xem có conflict với lịch đã có không
+      // Sử dụng logic giống như availableSlot service: slotStart < booked.end && slotEndWithBuffer > booked.start
+      const hasConflict = bookedSlotsWithBuffer.some(booked => {
         const bookedStart = new Date(booked.start);
         const bookedEnd = new Date(booked.end);
         
-        // Không cộng buffer time nữa
-        // Conflict nếu: startDate < bookedEnd && endDate > bookedStart
-        return startDate < bookedEnd && endDate > bookedStart;
+        // Tính buffer time cho slot mới (giống như availableSlot service)
+        const slotEndWithBuffer = new Date(endDate.getTime() + breakAfterMinutes * 60000);
+        
+        // Conflict nếu: startDate < bookedEnd && slotEndWithBuffer > bookedStart
+        return startDate < bookedEnd && slotEndWithBuffer > bookedStart;
       });
       
       return !hasConflict;
@@ -1419,11 +1422,13 @@ const assignDoctorToAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
     const { newDoctorId } = req.body;
+    const userId = req.user.userId;
 
 
     const data = await appointmentService.assignDoctorToAppointment(
       appointmentId,
-      newDoctorId
+      newDoctorId,
+      userId
     );
 
     return res.status(200).json({
@@ -1445,9 +1450,10 @@ const assignDoctorToAppointment = async (req, res) => {
 const confirmChangeDoctor = async (req, res) => {
   try {
     const { appointmentId } = req.params;
+    const userId = req.user.userId;
 
     // Patient confirm thủ công → auto = false
-    const data = await appointmentService.confirmChangeDoctor(appointmentId, { auto: false });
+    const data = await appointmentService.confirmChangeDoctor(appointmentId, userId,{ auto: false });
 
     return res.status(200).json({
       success: true,
@@ -1465,7 +1471,6 @@ const confirmChangeDoctor = async (req, res) => {
 };
 
 
-
 // ⭐ Từ chối đổi bác sĩ mới thay thế bác sĩ cũ 
 const cancelChangeDoctor = async(req,res) =>{
   try {
@@ -1474,7 +1479,7 @@ const cancelChangeDoctor = async(req,res) =>{
 
     return res.status(200).json({
       success: true,
-      message: 'Tù chối đổi bác sĩ mới thành công',
+      message: 'Từ chối đổi bác sĩ mới thành công',
       data
     });     
   } catch (error) {

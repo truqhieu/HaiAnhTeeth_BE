@@ -20,6 +20,7 @@ const deviceRoutes = require('./device.route');
 const blogRoutes = require('./blog.route');
 const patientRequestRoutes = require('./patientRequest.route');
 const promotionRoutes = require('./promotion.route');
+const notificaionRoutes = require('./notification.route')
 
 
 // --- ROUTES ---
@@ -44,6 +45,7 @@ router.use('/policies', policyRoutes);
 router.use('/complaints', complaintRoutes)
 router.use('/leave-requests', leaveRequestRoutes)
 router.use('/patient-requests', patientRequestRoutes)
+router.use('/notifications', notificaionRoutes)
 
 // --- API INFO ENDPOINT ---
 router.get('/', (req, res) => {
