@@ -651,21 +651,13 @@ const getRescheduleAvailableSlots = async (req, res) => {
       console.log(`   Booked ${index + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
     });
 
-    // ⭐ SỬA LỖI: Sử dụng logic buffer time giống như availableSlot service
-    const appointmentServiceDuration = appointment.serviceId.durationMinutes || 30; // Lấy thời gian dịch vụ
-    const breakAfterMinutes = 10; // 10 phút buffer (giống như availableSlot service)
+    // Lấy thời gian dịch vụ
+    const appointmentServiceDuration = appointment.serviceId.durationMinutes || 30;
     
     console.log(`⏱️ Service duration: ${appointmentServiceDuration} minutes`);
-    console.log(`⏱️ Break after minutes: ${breakAfterMinutes} minutes`);
-
-    // Tạo danh sách booked slots đã cộng buffer ở cuối
-    const bookedSlotsWithBuffer = bookedSlots.map(b => ({
-      start: new Date(b.start),
-      end: new Date(new Date(b.end).getTime() + breakAfterMinutes * 60000)
-    }));
 
     // Hàm kiểm tra xem có thể đặt lịch tại thời điểm startTime không
-    // Sử dụng logic giống như availableSlot service
+    // KHÔNG cộng buffer time - cho phép đặt liên tiếp
     const canBookAtTime = (startTimeStr) => {
       const [startHour, startMinute] = startTimeStr.split(':').map(Number);
       const startDate = new Date(searchDate);
@@ -673,17 +665,13 @@ const getRescheduleAvailableSlots = async (req, res) => {
       
       const endDate = new Date(startDate.getTime() + appointmentServiceDuration * 60000);
       
-      // Kiểm tra xem có conflict với lịch đã có không
-      // Sử dụng logic giống như availableSlot service: slotStart < booked.end && slotEndWithBuffer > booked.start
-      const hasConflict = bookedSlotsWithBuffer.some(booked => {
+      // Kiểm tra xem có conflict với lịch đã có không (KHÔNG cộng buffer time)
+      const hasConflict = bookedSlots.some(booked => {
         const bookedStart = new Date(booked.start);
         const bookedEnd = new Date(booked.end);
         
-        // Tính buffer time cho slot mới (giống như availableSlot service)
-        const slotEndWithBuffer = new Date(endDate.getTime() + breakAfterMinutes * 60000);
-        
-        // Conflict nếu: startDate < bookedEnd && slotEndWithBuffer > bookedStart
-        return startDate < bookedEnd && slotEndWithBuffer > bookedStart;
+        // Conflict nếu: startDate < bookedEnd && endDate > bookedStart (không cộng buffer time)
+        return startDate < bookedEnd && endDate > bookedStart;
       });
       
       return !hasConflict;
@@ -700,7 +688,7 @@ const getRescheduleAvailableSlots = async (req, res) => {
         };
       }
       
-      // Tính điểm bắt đầu khả dụng sơ bộ = max(range.start, max(endBooked+break) trong range)
+      // Tính điểm bắt đầu khả dụng sơ bộ = max(range.start, max(endBooked) trong range) - KHÔNG cộng buffer
       const [startHour, startMinute] = range.start.split(':').map(Number);
       const [endHour, endMinute] = range.end.split(':').map(Number);
 
@@ -710,10 +698,10 @@ const getRescheduleAvailableSlots = async (req, res) => {
       const rangeStartMins = toMinutes(startHour, startMinute);
       const rangeEndMins = toMinutes(endHour, endMinute);
 
-      // Lấy phút của các booked end + break trong ca này
+      // Lấy phút của các booked end trong ca này (KHÔNG cộng buffer - cho phép đặt liên tiếp)
       let earliestCandidateMins = rangeStartMins;
-      bookedSlotsWithBuffer.forEach(b => {
-        const endDate = new Date(b.end); // b.end đã bao gồm break
+      bookedSlots.forEach(b => {
+        const endDate = new Date(b.end); // b.end không cộng buffer
         // Chuyển sang giờ Việt Nam (UTC+7) để so sánh với workingHours (định nghĩa theo VN time)
         const endVN = new Date(endDate.getTime() + 7 * 60 * 60 * 1000);
         const endH = endVN.getUTCHours();
@@ -956,17 +944,14 @@ const requestReschedule = async (req, res) => {
       });
     }
 
-    // ⭐ THÊM: Tính buffer time (10 phút)
-    const bufferTime = 10; // 10 phút buffer
-    const newEndWithBuffer = new Date(newEnd.getTime() + bufferTime * 60000);
-
+    // Kiểm tra conflict với appointments đã có (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
     const hasConflict = existingAppointments.some(apt => {
       if (!apt.timeslotId) return false;
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
       
-      // Conflict nếu: newStart < aptEnd && newEndWithBuffer > aptStart
-      return (newStart < aptEnd && newEndWithBuffer > aptStart);
+      // Conflict nếu: newStart < aptEnd && newEnd > aptStart (không cộng buffer time)
+      return (newStart < aptEnd && newEnd > aptStart);
     });
 
     if (hasConflict) {
@@ -1128,17 +1113,14 @@ const requestChangeDoctor = async (req, res) => {
       status: { $in: ['Pending', 'Approved', 'CheckedIn'] }
     }).populate('timeslotId');
 
-    // ⭐ THÊM: Tính buffer time (10 phút)
-    const bufferTime = 10; // 10 phút buffer
-    const currentEndTimeWithBuffer = new Date(currentEndTime.getTime() + bufferTime * 60000);
-
+    // Kiểm tra conflict với appointments của bác sĩ mới (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
     const hasConflict = conflictingAppointments.some(apt => {
       if (!apt.timeslotId) return false;
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
       
-      // Conflict nếu: currentStartTime < aptEnd && currentEndTimeWithBuffer > aptStart
-      return (currentStartTime < aptEnd && currentEndTimeWithBuffer > aptStart);
+      // Conflict nếu: currentStartTime < aptEnd && currentEndTime > aptStart (không cộng buffer time)
+      return (currentStartTime < aptEnd && currentEndTime > aptStart);
     });
 
     if (hasConflict) {
@@ -1288,33 +1270,29 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
         continue;
       }
 
-      // ⭐ THÊM: Tính buffer time (10 phút)
-      const bufferTime = 10; // 10 phút buffer
-      const endDateTimeWithBuffer = new Date(endDateTime.getTime() + bufferTime * 60000);
-
-      // Kiểm tra xem bác sĩ có rảnh trong khoảng thời gian này không (bao gồm buffer time)
+      // Kiểm tra xem bác sĩ có rảnh trong khoảng thời gian này không (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
       const conflictingTimeslots = await Timeslot.find({
         doctorUserId: doctor._id,
-        startTime: { $lt: endDateTimeWithBuffer },
+        startTime: { $lt: endDateTime },
         endTime: { $gt: startDateTime },
         status: { $in: ['Reserved', 'Booked'] }
       });
 
       if (conflictingTimeslots.length > 0) {
-        console.log(`   ❌ Doctor ${doctor.fullName} has ${conflictingTimeslots.length} conflicting timeslots (including buffer time)`);
+        console.log(`   ❌ Doctor ${doctor.fullName} has ${conflictingTimeslots.length} conflicting timeslots`);
         continue;
       }
 
-      // Kiểm tra xem bác sĩ có appointments trong khoảng thời gian này không (bao gồm buffer time)
+      // Kiểm tra xem bác sĩ có appointments trong khoảng thời gian này không (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
       const conflictingAppointments = await Appointment.find({
         doctorUserId: doctor._id,
-        'timeslotId.startTime': { $lt: endDateTimeWithBuffer },
+        'timeslotId.startTime': { $lt: endDateTime },
         'timeslotId.endTime': { $gt: startDateTime },
         status: { $in: ['Approved', 'CheckedIn', 'Completed'] }
       }).populate('timeslotId');
 
       if (conflictingAppointments.length > 0) {
-        console.log(`   ❌ Doctor ${doctor.fullName} has ${conflictingAppointments.length} conflicting appointments (including buffer time)`);
+        console.log(`   ❌ Doctor ${doctor.fullName} has ${conflictingAppointments.length} conflicting appointments`);
         continue;
       }
 
