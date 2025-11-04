@@ -1,0 +1,1159 @@
+const OpenAI = require('openai');
+const fs = require('fs');
+const path = require('path');
+const Service = require('../models/service.model');
+const User = require('../models/user.model');
+const DoctorSchedule = require('../models/doctorSchedule.model');
+const Appointment = require('../models/appointment.model');
+const Timeslot = require('../models/timeslot.model');
+const Customer = require('../models/customer.model');
+const availableSlotService = require('./availableSlot.service');
+const appointmentService = require('./appointment.service');
+const { calculateServicePrice } = require('../utils/promotionHelper');
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Load function tools configuration
+const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
+const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
+
+class AIBookingService {
+  /**
+   * Execute function call từ OpenAI
+   */
+  async executeFunction(functionName, functionArgs, patientUserId) {
+    console.log(`🔧 [AI] Executing function: ${functionName}`, functionArgs);
+    
+    try {
+      switch (functionName) {
+        case 'get_services': {
+          const { category } = functionArgs;
+          const query = { status: 'Active' };
+          if (category) {
+            query.category = category;
+          }
+          
+          const services = await Service.find(query)
+            .select('_id serviceName category durationMinutes')
+            .sort({ category: 1, serviceName: 1 })
+        .lean();
+
+          return {
+            services: services.map(s => ({
+        id: s._id.toString(),
+        name: s.serviceName,
+              category: s.category,
+              durationMinutes: s.durationMinutes || 30 // Default 30 phút nếu không có
+            }))
+          };
+        }
+        
+        case 'get_service_info': {
+          const { serviceId } = functionArgs;
+          
+          if (!serviceId) {
+            return { error: 'Missing required parameter: serviceId' };
+          }
+          
+          const service = await Service.findById(serviceId)
+            .select('_id serviceName category durationMinutes description')
+            .lean();
+          
+          if (!service) {
+            return { error: 'Service not found' };
+          }
+          
+          return {
+            id: service._id.toString(),
+            name: service.serviceName,
+            category: service.category,
+            durationMinutes: service.durationMinutes || 30,
+            description: service.description || ''
+          };
+        }
+        
+        case 'find_service_by_name': {
+          const { serviceName, category } = functionArgs;
+          
+          if (!serviceName) {
+            return { error: 'Missing serviceName parameter' };
+          }
+          
+          const query = { status: 'Active' };
+          if (category) {
+            query.category = category;
+          }
+          
+          const services = await Service.find(query)
+            .select('_id serviceName category durationMinutes')
+            .sort({ category: 1, serviceName: 1 })
+            .lean();
+          
+          // Check nếu input là số thứ tự
+          const numberMatch = serviceName.match(/^\d+$/);
+          if (numberMatch) {
+            const index = parseInt(serviceName) - 1; // Convert to 0-based index
+            if (index >= 0 && index < services.length) {
+              const selectedService = services[index];
+              return {
+                found: true,
+                service: {
+                  id: selectedService._id.toString(),
+                  name: selectedService.serviceName,
+                  category: selectedService.category,
+                  durationMinutes: selectedService.durationMinutes || 30
+                }
+              };
+            }
+          }
+          
+          // Fuzzy matching by name
+          const inputLower = serviceName.toLowerCase().trim();
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedServices = services.filter(s => 
+            s.serviceName.toLowerCase() === inputLower
+          );
+          
+          // ✅ PRIORITY 2: Contains match
+          if (matchedServices.length === 0) {
+            matchedServices = services.filter(s => 
+              s.serviceName.toLowerCase().includes(inputLower) ||
+              inputLower.includes(s.serviceName.toLowerCase())
+            );
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching
+          if (matchedServices.length === 0) {
+            const inputWords = inputLower.split(/\s+/).filter(w => w.length > 0);
+            matchedServices = services.filter(s => {
+              const serviceWords = s.serviceName.toLowerCase().split(/\s+/);
+              return inputWords.some(inputWord => 
+                serviceWords.some(serviceWord => serviceWord.includes(inputWord) || inputWord.includes(serviceWord))
+              );
+            });
+          }
+          
+          // ❌ Không tìm thấy
+          if (matchedServices.length === 0) {
+            return { 
+              error: 'Không tìm thấy dịch vụ',
+              suggestions: services.slice(0, 10).map(s => ({
+                id: s._id.toString(),
+                name: s.serviceName,
+                category: s.category,
+                durationMinutes: s.durationMinutes || 30
+              }))
+            };
+          }
+          
+          // ✅ Chỉ có 1 dịch vụ match → Auto-select
+          if (matchedServices.length === 1) {
+            return {
+              found: true,
+              service: {
+                id: matchedServices[0]._id.toString(),
+                name: matchedServices[0].serviceName,
+                category: matchedServices[0].category,
+                durationMinutes: matchedServices[0].durationMinutes || 30
+              }
+            };
+          }
+          
+          // ⚠️ Nhiều dịch vụ match → Trả về danh sách để user chọn
+          return {
+            found: true,
+            multiple: true,
+            services: matchedServices.map(s => ({
+              id: s._id.toString(),
+              name: s.serviceName,
+              category: s.category,
+              durationMinutes: s.durationMinutes || 30
+            }))
+          };
+        }
+        
+        case 'validate_service': {
+          const { serviceId } = functionArgs;
+          
+          if (!serviceId) {
+            return { valid: false, error: 'Missing serviceId' };
+          }
+          
+          const service = await Service.findOne({ 
+            _id: serviceId, 
+            status: 'Active' 
+          }).lean();
+          
+          if (!service) {
+            return { valid: false, error: 'Service not found or inactive' };
+      }
+
+      return {
+            valid: true, 
+            service: {
+              id: service._id.toString(),
+              name: service.serviceName,
+              category: service.category,
+              durationMinutes: service.durationMinutes || 30
+            }
+          };
+        }
+        
+        case 'find_doctor_by_name': {
+          const { doctorName } = functionArgs;
+          
+          if (!doctorName) {
+            return { error: 'Missing doctorName parameter' };
+          }
+          
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('_id fullName specialization')
+            .sort({ fullName: 1 }) // Sort để có thứ tự cố định
+            .lean();
+          
+          // Check nếu input là số thứ tự
+          const numberMatch = doctorName.match(/^\d+$/);
+          if (numberMatch) {
+            const index = parseInt(doctorName) - 1; // Convert to 0-based index
+            if (index >= 0 && index < doctors.length) {
+              const selectedDoctor = doctors[index];
+              return {
+                found: true,
+                doctor: {
+                  id: selectedDoctor._id.toString(),
+                  name: selectedDoctor.fullName,
+                  specialization: selectedDoctor.specialization || ''
+                }
+              };
+            }
+          }
+          
+          const inputLower = doctorName.toLowerCase().trim();
+          const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+          const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+          
+          // Tập hợp tất cả matches (không return ngay, để check xem có nhiều match không)
+          let matchedDoctors = [];
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          const exactMatches = doctors.filter(d => 
+            d.fullName.toLowerCase() === inputLower
+          );
+          if (exactMatches.length > 0) {
+            matchedDoctors = exactMatches;
+          }
+          
+          // ✅ PRIORITY 2: Exact match bỏ "bác sĩ" prefix
+          if (matchedDoctors.length === 0) {
+            const prefixMatches = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              return doctorNameClean === inputClean;
+            });
+            if (prefixMatches.length > 0) {
+              matchedDoctors = prefixMatches;
+            }
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching (match theo TỪ)
+          // Nếu vẫn chưa có match hoặc có nhiều match từ PRIORITY 2, thử word-based
+          if (matchedDoctors.length === 0 || matchedDoctors.length > 1) {
+            if (inputWords.length > 0) {
+              const wordMatches = doctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                const doctorWords = doctorNameClean.split(/\s+/);
+                
+                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+                return inputWords.every(inputWord => 
+                  doctorWords.some(doctorWord => doctorWord === inputWord)
+                );
+              });
+              
+              // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
+              if (wordMatches.length > 0) {
+                matchedDoctors = wordMatches;
+              }
+            }
+          }
+          
+          // ❌ Không tìm thấy
+          if (matchedDoctors.length === 0) {
+            return { 
+              error: 'Không tìm thấy bác sĩ',
+              suggestions: doctors.slice(0, 5).map(d => ({
+                id: d._id.toString(),
+                name: d.fullName
+              }))
+            };
+          }
+          
+          // ✅ Chỉ có 1 bác sĩ match → Auto-select
+          if (matchedDoctors.length === 1) {
+            return {
+              found: true,
+              doctor: {
+                id: matchedDoctors[0]._id.toString(),
+                name: matchedDoctors[0].fullName,
+                specialization: matchedDoctors[0].specialization || ''
+              }
+            };
+          }
+          
+          // ⚠️ Nhiều bác sĩ match → Trả về danh sách để user chọn
+          return {
+            found: true,
+            multiple: true,
+            doctors: matchedDoctors.map(d => ({
+              id: d._id.toString(),
+              name: d.fullName,
+              specialization: d.specialization || ''
+            }))
+          };
+        }
+        
+        case 'validate_doctor': {
+          const { doctorId } = functionArgs;
+          
+          if (!doctorId) {
+            return { valid: false, error: 'Missing doctorId' };
+          }
+          
+          const doctor = await User.findOne({ 
+            _id: doctorId, 
+            role: 'Doctor',
+            status: 'Active' 
+          }).lean();
+          
+          if (!doctor) {
+            return { valid: false, error: 'Doctor not found or inactive' };
+        }
+
+        return {
+            valid: true, 
+            doctor: {
+              id: doctor._id.toString(),
+              name: doctor.fullName,
+              specialization: doctor.specialization || ''
+            }
+          };
+        }
+        
+        case 'get_doctors': {
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('_id fullName specialization')
+            .lean();
+          
+        return {
+            doctors: doctors.map(d => ({
+        id: d._id.toString(),
+              name: d.fullName,
+              specialization: d.specialization || ''
+            }))
+          };
+        }
+        
+        case 'get_available_slots': {
+          const { doctorId, date, serviceId } = functionArgs;
+          
+          if (!doctorId || !date || !serviceId) {
+            return { error: 'Missing required parameters: doctorId, date, serviceId' };
+          }
+          
+          // Xử lý serviceId: có thể là ObjectId hoặc số thứ tự
+          let service = null;
+          const serviceIdStr = serviceId.toString();
+          
+          // Check nếu serviceId là số thứ tự
+          const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+          if (serviceNumberMatch) {
+            // Lấy danh sách dịch vụ và chọn theo index
+            const services = await Service.find({ status: 'Active' })
+              .select('_id serviceName durationMinutes')
+              .sort({ category: 1, serviceName: 1 })
+              .lean();
+            
+            const index = parseInt(serviceIdStr) - 1; // Convert to 0-based index
+            if (index >= 0 && index < services.length) {
+              service = services[index];
+            } else {
+              return { error: `Số thứ tự ${serviceIdStr} không hợp lệ. Vui lòng chọn lại dịch vụ.` };
+            }
+          } else {
+            // Dùng serviceId trực tiếp (ObjectId)
+            service = await Service.findById(serviceId)
+              .select('_id serviceName durationMinutes')
+              .lean();
+          }
+          
+          if (!service) {
+            return { error: 'Dịch vụ không tồn tại. Vui lòng chọn lại dịch vụ.' };
+          }
+          
+          const serviceDuration = service.durationMinutes || 30;
+          
+          // Xử lý doctorId: có thể là ObjectId hoặc số thứ tự
+          let doctor = null;
+          const doctorIdStr = doctorId.toString();
+          
+          // Check nếu doctorId là số thứ tự
+          const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
+          if (doctorNumberMatch) {
+            // Lấy danh sách bác sĩ và chọn theo index
+            const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+              .select('_id fullName specialization')
+              .sort({ fullName: 1 })
+              .lean();
+            
+            const index = parseInt(doctorIdStr) - 1; // Convert to 0-based index
+            if (index >= 0 && index < doctors.length) {
+              doctor = doctors[index];
+            } else {
+              return { error: `Số thứ tự ${doctorIdStr} không hợp lệ. Vui lòng chọn lại bác sĩ.` };
+            }
+          } else {
+            // Dùng doctorId trực tiếp (ObjectId)
+            doctor = await User.findById(doctorId)
+              .select('_id fullName specialization')
+              .lean();
+          }
+          
+          if (!doctor) {
+            return { error: 'Bác sĩ không tồn tại. Vui lòng chọn lại bác sĩ.' };
+          }
+          
+          // Parse date
+          const searchDate = new Date(date);
+          searchDate.setHours(0, 0, 0, 0);
+          
+          // Lấy DoctorSchedule của bác sĩ cho ngày đó (Morning và Afternoon)
+          const schedules = await DoctorSchedule.find({
+            doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+            date: searchDate,
+            status: 'Available'
+          }).lean();
+          
+          if (schedules.length === 0) {
+            return { error: `Bác sĩ này không có lịch làm việc vào ngày ${date}` };
+          }
+          
+          // Lấy working hours từ schedule (lấy từ schedule đầu tiên, vì tất cả đều có cùng workingHours)
+          const workingHours = schedules[0].workingHours || {
+            morningStart: '08:00',
+            morningEnd: '12:00',
+            afternoonStart: '13:00',
+            afternoonEnd: '17:00'
+          };
+          
+          // QUAN TRỌNG: Query Timeslots trực tiếp để lấy tất cả slots đã đặt (Reserved/Booked)
+          // Điều này chính xác hơn vì Timeslots là nguồn truth về các slot đã được đặt
+          const startOfDay = new Date(searchDate);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(searchDate);
+          endOfDay.setHours(23, 59, 59, 999);
+          
+          // Lấy tất cả Timeslots đã đặt của bác sĩ trong ngày đó (Reserved hoặc Booked)
+          const doctorBookedTimeslots = await Timeslot.find({
+            doctorUserId: doctor._id,
+            status: { $in: ['Reserved', 'Booked'] },
+            startTime: { $gte: startOfDay, $lt: endOfDay }
+          })
+          .select('startTime endTime')
+          .lean();
+          
+          // Convert sang format để tính free blocks
+          const bookedAppointments = doctorBookedTimeslots
+            .map(ts => ({
+              start: new Date(ts.startTime),
+              end: new Date(ts.endTime)
+            }))
+            .sort((a, b) => a.start - b.start);
+          
+          // Exclude Timeslots của patient nếu có (bất kỳ bác sĩ nào)
+          let patientBookedSlots = [];
+          if (patientUserId) {
+            // Lấy tất cả appointments của patient trong ngày đó
+            const patientAppointments = await Appointment.find({
+              patientUserId: patientUserId,
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            })
+            .populate({
+              path: 'timeslotId',
+              select: 'startTime endTime',
+              match: {
+                startTime: { $gte: startOfDay, $lt: endOfDay }
+              }
+            })
+            .lean();
+            
+            patientBookedSlots = patientAppointments
+              .filter(apt => apt.timeslotId && apt.timeslotId.startTime)
+              .map(apt => ({
+                start: new Date(apt.timeslotId.startTime),
+                end: new Date(apt.timeslotId.endTime)
+              }))
+              .sort((a, b) => a.start - b.start);
+          }
+          
+          // Helper function: Tính continuous free blocks từ start-end và booked appointments
+          // CHỈ trả về các blocks có độ dài >= serviceDurationMinutes
+          // QUAN TRỌNG: Nếu là ngày hôm nay, chỉ hiển thị từ thời gian hiện tại trở đi
+          const calculateFreeBlocks = (startTimeStr, endTimeStr, bookedAppts, patientBooked, serviceDurationMinutes) => {
+            const [startHour, startMin] = startTimeStr.split(':').map(Number);
+            const [endHour, endMin] = endTimeStr.split(':').map(Number);
+            
+            // Tạo Date object với giờ VN (workingHours là giờ VN trong DB)
+            // Sử dụng UTC để tránh timezone conversion
+            const shiftStart = new Date(Date.UTC(
+              searchDate.getFullYear(),
+              searchDate.getMonth(),
+              searchDate.getDate(),
+              startHour - 7, // Convert VN time (UTC+7) to UTC
+              startMin,
+              0
+            ));
+            
+            const shiftEnd = new Date(Date.UTC(
+              searchDate.getFullYear(),
+              searchDate.getMonth(),
+              searchDate.getDate(),
+              endHour - 7, // Convert VN time (UTC+7) to UTC
+              endMin,
+              0
+            ));
+            
+            // QUAN TRỌNG: Nếu là ngày hôm nay, chỉ hiển thị từ thời gian hiện tại trở đi
+            const now = new Date();
+            
+            // So sánh ngày: searchDate và today (lấy year, month, date)
+            // searchDate đã được set về 00:00:00 local time, nên lấy local date
+            const searchYear = searchDate.getFullYear();
+            const searchMonth = searchDate.getMonth();
+            const searchDay = searchDate.getDate();
+            
+            const nowYear = now.getFullYear();
+            const nowMonth = now.getMonth();
+            const nowDay = now.getDate();
+            
+            const isToday = 
+              searchYear === nowYear &&
+              searchMonth === nowMonth &&
+              searchDay === nowDay;
+            
+            // Nếu là hôm nay, tính thời gian hiện tại và điều chỉnh shiftStart
+            let actualShiftStart = shiftStart;
+            if (isToday) {
+              // Lấy thời gian hiện tại theo VN timezone (UTC+7)
+              // Convert sang UTC để so sánh với shiftStart/shiftEnd
+              const nowVN = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+              const currentTimeUTC = new Date(Date.UTC(
+                nowVN.getFullYear(),
+                nowVN.getMonth(),
+                nowVN.getDate(),
+                nowVN.getHours() - 7, // Convert VN time (UTC+7) to UTC
+                nowVN.getMinutes(),
+                0
+              ));
+              
+              // Nếu thời gian hiện tại > shiftStart, dùng currentTimeUTC làm điểm bắt đầu
+              // Nhưng phải đảm bảo currentTimeUTC < shiftEnd (chưa qua hết shift)
+              if (currentTimeUTC > shiftStart && currentTimeUTC < shiftEnd) {
+                actualShiftStart = currentTimeUTC;
+              } else if (currentTimeUTC >= shiftEnd) {
+                // Đã qua hết shift này, không hiển thị gì
+                return [];
+              }
+            }
+            
+            // Combine booked appointments (doctor + patient) và filter theo shift (overlap với shift)
+            const allBooked = [...bookedAppts, ...(patientBooked || [])]
+              .filter(apt => {
+                // Chỉ lấy appointments overlap với shift này (appointment end > shift start và appointment start < shift end)
+                return apt.end > actualShiftStart && apt.start < shiftEnd;
+              })
+              .map(apt => ({
+                // Clamp appointment vào shift boundaries
+                start: apt.start < actualShiftStart ? actualShiftStart : apt.start,
+                end: apt.end > shiftEnd ? shiftEnd : apt.end
+              }))
+              .sort((a, b) => a.start - b.start);
+            
+            // Tính free blocks
+            const freeBlocks = [];
+            let currentStart = actualShiftStart;
+            
+            for (const booked of allBooked) {
+              if (currentStart < booked.start) {
+                // Có khoảng trống trước appointment
+                freeBlocks.push({
+                  start: currentStart,
+                  end: booked.start
+                });
+              }
+              // Cập nhật currentStart = end của appointment
+              currentStart = booked.end > currentStart ? booked.end : currentStart;
+            }
+            
+            // Khoảng trống cuối cùng (nếu còn)
+            if (currentStart < shiftEnd) {
+              freeBlocks.push({
+                start: currentStart,
+                end: shiftEnd
+              });
+            }
+            
+            // QUAN TRỌNG: Filter các free blocks - CHỈ giữ lại những blocks có độ dài >= serviceDurationMinutes
+            const minDurationMs = serviceDurationMinutes * 60 * 1000; // Convert phút sang milliseconds
+            const validFreeBlocks = freeBlocks.filter(block => {
+              const blockDurationMs = block.end.getTime() - block.start.getTime();
+              return blockDurationMs >= minDurationMs;
+            });
+            
+            // Format time cho display (HH:mm) - Format từ hour/minute của Date, convert về VN time (UTC+7)
+            const formatTime = (date) => {
+              // Lấy UTC hour và minute, rồi cộng 7 để convert về VN time
+              const hour = date.getUTCHours() + 7;
+              const minute = date.getUTCMinutes();
+              // Nếu hour >= 24, trừ 24 (vì đã qua ngày hôm sau)
+              const vnHour = hour >= 24 ? hour - 24 : hour;
+              // Format thành HH:mm
+              return `${String(vnHour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+            };
+            
+            return validFreeBlocks.map(block => ({
+              startTime: formatTime(block.start),
+              endTime: formatTime(block.end),
+              displayTime: `${formatTime(block.start)}-${formatTime(block.end)}`
+            }));
+          };
+          
+          // Filter appointments theo morning/afternoon để optimize
+          // Note: calculateFreeBlocks sẽ tự filter chính xác theo shift boundaries,
+          // nên filter này chỉ để optimize performance
+          // Convert VN time sang UTC để so sánh
+          const [morningStartHour, morningStartMin] = workingHours.morningStart.split(':').map(Number);
+          const [morningEndHour, morningEndMin] = workingHours.morningEnd.split(':').map(Number);
+          const [afternoonStartHour, afternoonStartMin] = workingHours.afternoonStart.split(':').map(Number);
+          const [afternoonEndHour, afternoonEndMin] = workingHours.afternoonEnd.split(':').map(Number);
+          
+          // Convert sang UTC hours để so sánh
+          const morningStartUTC = morningStartHour - 7;
+          const morningEndUTC = morningEndHour - 7;
+          const afternoonStartUTC = afternoonStartHour - 7;
+          const afternoonEndUTC = afternoonEndHour - 7;
+          
+          const morningBooked = bookedAppointments.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= morningStartUTC && hour < morningEndUTC;
+          });
+          const afternoonBooked = bookedAppointments.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= afternoonStartUTC && hour < afternoonEndUTC;
+          });
+          const morningPatientBooked = patientBookedSlots.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= morningStartUTC && hour < morningEndUTC;
+          });
+          const afternoonPatientBooked = patientBookedSlots.filter(apt => {
+            const hour = apt.start.getUTCHours();
+            return hour >= afternoonStartUTC && hour < afternoonEndUTC;
+          });
+          
+          // Tính free blocks cho buổi sáng (chỉ hiển thị blocks >= serviceDuration)
+          const morningBlocks = calculateFreeBlocks(
+            workingHours.morningStart,
+            workingHours.morningEnd,
+            morningBooked,
+            morningPatientBooked,
+            serviceDuration // Truyền serviceDuration để filter
+          );
+          
+          // Tính free blocks cho buổi chiều (chỉ hiển thị blocks >= serviceDuration)
+          const afternoonBlocks = calculateFreeBlocks(
+            workingHours.afternoonStart,
+            workingHours.afternoonEnd,
+            afternoonBooked,
+            afternoonPatientBooked,
+            serviceDuration // Truyền serviceDuration để filter
+          );
+          
+          return {
+            success: true,
+            serviceName: service.serviceName,
+            durationMinutes: serviceDuration,
+            date: date,
+            doctorId: doctor._id.toString(), // Dùng doctor._id thay vì doctorId
+            morning: morningBlocks,
+            afternoon: afternoonBlocks,
+            totalFreeBlocks: morningBlocks.length + afternoonBlocks.length
+          };
+        }
+        
+        case 'create_appointment': {
+          const { serviceId, doctorId, date, time, notes } = functionArgs;
+          
+          if (!serviceId || !doctorId || !date || !time) {
+            return { error: 'Vui lòng nhập đầy đủ thông tin để đặt lịch.' };
+          }
+          
+          try {
+            // 1. Validate patient
+            const patient = await User.findById(patientUserId);
+            if (!patient) {
+              return { error: 'Tài khoản của bạn không hợp lệ. Vui lòng đăng nhập lại.' };
+            }
+            
+            // 2. Validate service (có thể là ObjectId hoặc số thứ tự)
+            let service = null;
+            const serviceIdStr = serviceId.toString();
+            const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+            
+            if (serviceNumberMatch) {
+              const services = await Service.find({ status: 'Active' })
+                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .sort({ category: 1, serviceName: 1 })
+                .lean();
+              
+              const index = parseInt(serviceIdStr) - 1;
+              if (index >= 0 && index < services.length) {
+                service = services[index];
+              }
+            } else {
+              service = await Service.findById(serviceId)
+                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .lean();
+            }
+            
+            if (!service) {
+              return { error: 'Dịch vụ bạn chọn không tồn tại. Vui lòng chọn dịch vụ khác.' };
+            }
+            if (service.status !== 'Active') {
+              return { error: 'Dịch vụ này hiện không khả dụng' };
+            }
+            
+            // 3. Validate doctor (có thể là ObjectId hoặc số thứ tự)
+            let doctor = null;
+            const doctorIdStr = doctorId.toString();
+            const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
+            
+            if (doctorNumberMatch) {
+              const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+                .select('_id fullName specialization role status')
+                .sort({ fullName: 1 })
+                .lean();
+              
+              const index = parseInt(doctorIdStr) - 1;
+              if (index >= 0 && index < doctors.length) {
+                doctor = doctors[index];
+              }
+            } else {
+              doctor = await User.findById(doctorId)
+                .select('_id fullName specialization role status')
+                .lean();
+            }
+            
+            if (!doctor) {
+              return { error: 'Bác sĩ bạn chọn không tồn tại. Vui lòng chọn bác sĩ khác.' };
+            }
+            if (doctor.role !== 'Doctor') {
+              return { error: 'Bác sĩ bạn chọn không hợp lệ. Vui lòng chọn bác sĩ khác.' };
+            }
+            if (doctor.status !== 'Active') {
+              return { error: 'Bác sĩ bạn chọn hiện không khả dụng. Vui lòng chọn bác sĩ khác.' };
+            }
+            
+            // 4. Parse date and time
+            const appointmentDate = new Date(date);
+            appointmentDate.setHours(0, 0, 0, 0);
+            
+            // Parse time (format: HH:mm)
+            const [hours, minutes] = time.split(':').map(Number);
+            if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+              return { error: 'Thời gian không hợp lệ. Vui lòng nhập theo format HH:mm (ví dụ: 09:00)' };
+            }
+            
+            // Create startTime and endTime (VN timezone)
+            const slotStartTime = new Date(Date.UTC(
+              appointmentDate.getFullYear(),
+              appointmentDate.getMonth(),
+              appointmentDate.getDate(),
+              hours - 7, // Convert VN time (UTC+7) to UTC
+              minutes,
+              0
+            ));
+            
+            const slotEndTime = new Date(slotStartTime);
+            slotEndTime.setMinutes(slotEndTime.getMinutes() + service.durationMinutes);
+            
+            // 5. Validate time không ở quá khứ
+            const nowUtc = new Date();
+            if (slotStartTime.getTime() < nowUtc.getTime()) {
+              return { error: 'Không thể đặt thời gian ở quá khứ' };
+            }
+            
+            // 6. Validate slot duration phải khớp với service duration
+            const slotDurationMinutes = (slotEndTime - slotStartTime) / 60000;
+            if (slotDurationMinutes !== service.durationMinutes) {
+              return { 
+                error: `Khung giờ không hợp lệ. Dịch vụ "${service.serviceName}" cần ${service.durationMinutes} phút, nhưng thời gian bạn chọn là ${slotDurationMinutes} phút. Vui lòng chọn lại.` 
+              };
+            }
+            
+            // 7. Find doctor schedule
+            const schedules = await DoctorSchedule.find({
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              date: appointmentDate,
+              status: 'Available'
+            }).lean();
+            
+            if (schedules.length === 0) {
+              return { error: 'Bác sĩ này không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.' };
+            }
+            
+            // Find schedule that matches the time slot (morning or afternoon)
+            // hours và minutes đã được parse từ input (VN time)
+            const schedule = schedules.find(s => {
+              const workingHours = s.workingHours || {
+                morningStart: '08:00',
+                morningEnd: '12:00',
+                afternoonStart: '13:00',
+                afternoonEnd: '17:00'
+              };
+              
+              if (s.shift === 'Morning') {
+                const [startHour, startMin] = workingHours.morningStart.split(':').map(Number);
+                const [endHour, endMin] = workingHours.morningEnd.split(':').map(Number);
+                const slotTimeMinutes = hours * 60 + minutes;
+                const startTimeMinutes = startHour * 60 + startMin;
+                const endTimeMinutes = endHour * 60 + endMin;
+                return slotTimeMinutes >= startTimeMinutes && slotTimeMinutes < endTimeMinutes;
+              } else if (s.shift === 'Afternoon') {
+                const [startHour, startMin] = workingHours.afternoonStart.split(':').map(Number);
+                const [endHour, endMin] = workingHours.afternoonEnd.split(':').map(Number);
+                const slotTimeMinutes = hours * 60 + minutes;
+                const startTimeMinutes = startHour * 60 + startMin;
+                const endTimeMinutes = endHour * 60 + endMin;
+                return slotTimeMinutes >= startTimeMinutes && slotTimeMinutes < endTimeMinutes;
+              }
+              return false;
+            });
+            
+            if (!schedule) {
+              return { error: 'Khung giờ này không nằm trong lịch làm việc của bác sĩ. Vui lòng chọn thời gian khác.' };
+            }
+            
+            // 8. Check conflict với timeslots đã có
+            const conflictingTimeslots = await Timeslot.find({
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              startTime: { $lt: slotEndTime },
+              endTime: { $gt: slotStartTime },
+              status: { $in: ['Reserved', 'Booked'] }
+            });
+            
+            if (conflictingTimeslots.length > 0) {
+              return { error: 'Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.' };
+            }
+            
+            // 9. Check conflict với appointments của patient (BẤT KỲ bác sĩ nào) - không được đặt 2 bác sĩ khác nhau cùng giờ
+            const patientConflictAppointments = await Appointment.find({
+              patientUserId: patientUserId,
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            }).populate({
+              path: 'timeslotId',
+              select: 'startTime endTime doctorUserId'
+            });
+            
+            const hasConflict = patientConflictAppointments.some(apt => {
+              if (!apt.timeslotId) return false;
+              
+              const aptStartTime = new Date(apt.timeslotId.startTime);
+              const aptEndTime = new Date(apt.timeslotId.endTime);
+              
+              // Conflict nếu: slotStartTime < aptEndTime && slotEndTime > aptStartTime
+              return slotStartTime < aptEndTime && slotEndTime > aptStartTime;
+            });
+            
+            if (hasConflict) {
+              return { error: 'Bạn đã có lịch khám vào khung giờ này với bác sĩ khác. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!' };
+            }
+            
+            // 10. Check conflict với appointments của patient với cùng bác sĩ này
+            const sameDayAppointments = await Appointment.find({
+              patientUserId,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              timeslotId: { $exists: true }
+            }).populate({
+              path: 'timeslotId',
+              select: 'startTime endTime'
+            });
+            
+            for (const apt of sameDayAppointments) {
+              if (!apt.timeslotId) continue;
+              
+              const aptStart = new Date(apt.timeslotId.startTime);
+              const aptEnd = new Date(apt.timeslotId.endTime);
+              
+              // Check overlap: (start1 < end2) AND (end1 > start2)
+              if (slotStartTime < aptEnd && slotEndTime > aptStart) {
+                const aptDateVN = aptStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+                const aptStartVN = aptStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                const aptEndVN = aptEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                
+                return {
+                  error: `Bạn đã có lịch hẹn với bác sĩ này vào ${aptDateVN} từ ${aptStartVN} - ${aptEndVN}. Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
+                };
+              }
+            }
+            
+            // 11. Calculate price với promotion
+            const promotionData = await calculateServicePrice(service._id.toString(), service.price);
+            const finalPrice = promotionData.finalPrice;
+            const originalPrice = promotionData.originalPrice;
+            
+            // 12. Xác định appointment mode và type
+            let appointmentMode = 'Online';
+            let appointmentType = 'Consultation';
+            if (service.category === 'Consultation') {
+              appointmentMode = 'Online';
+              appointmentType = 'Consultation';
+            } else if (service.category === 'Examination') {
+              appointmentMode = 'Offline';
+              appointmentType = 'Examination';
+            }
+            
+            // 13. Xác định status dựa vào isPrepaid
+            let appointmentStatus = 'Pending';
+            let paymentHoldExpiresAt = null;
+            if (service.isPrepaid) {
+              appointmentStatus = 'PendingPayment';
+              paymentHoldExpiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 phút
+            }
+            
+            // 14. Tạo Timeslot
+            const newTimeslot = await Timeslot.create({
+              doctorScheduleId: schedule._id,
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              serviceId: service._id, // Dùng service._id thay vì serviceId
+              startTime: slotStartTime,
+              endTime: slotEndTime,
+              breakAfterMinutes: 0,
+              status: service.isPrepaid ? 'Reserved' : 'Booked',
+              appointmentId: null // Sẽ update sau
+            });
+            
+            // 15. Tạo Appointment
+            const newAppointment = await Appointment.create({
+              patientUserId,
+              customerId: null, // Đặt cho bản thân
+              doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
+              serviceId: service._id, // Dùng service._id thay vì serviceId
+              timeslotId: newTimeslot._id,
+              status: appointmentStatus,
+              type: appointmentType,
+              mode: appointmentMode,
+              notes: notes || null,
+              bookedByUserId: patientUserId,
+              paymentHoldExpiresAt: paymentHoldExpiresAt,
+              appointmentFor: 'self',
+              promotionId: promotionData.promotionInfo?.promotionId || null,
+              originalPrice: originalPrice,
+              finalPrice: finalPrice,
+              discountAmount: promotionData.discountAmount
+            });
+            
+            // 16. Update timeslot với appointmentId
+            await Timeslot.findByIdAndUpdate(newTimeslot._id, {
+              appointmentId: newAppointment._id,
+              status: service.isPrepaid ? 'Reserved' : 'Booked'
+            });
+            
+            // 17. Nếu cần thanh toán trước, tạo payment record (tạm thời skip, vì AI booking không có payment flow)
+            
+            return {
+              success: true,
+              appointmentId: newAppointment._id.toString(),
+              service: service.serviceName,
+              doctor: doctor.fullName,
+              date: date,
+              time: time,
+              status: appointmentStatus,
+              finalPrice: finalPrice,
+              originalPrice: originalPrice,
+              needsPayment: service.isPrepaid
+            };
+          } catch (error) {
+            console.error('❌ [AI create_appointment] Error:', error);
+            return { error: error.message || 'Đã xảy ra lỗi khi tạo lịch hẹn. Vui lòng thử lại.' };
+          }
+        }
+        
+        default:
+          return { error: `Unknown function: ${functionName}` };
+      }
+    } catch (error) {
+      console.error(`❌ [AI] Error executing function ${functionName}:`, error);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * 🆕 Chat với AI sử dụng Function Calling (linh hoạt như ChatGPT)
+   */
+  async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
+    try {
+      console.log('🤖 [AI Function Calling] Starting chat...');
+      
+      // Prepare date context
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+      
+      // Build system prompt với date context
+      const systemPrompt = toolsConfig.systemPrompt
+        .replace('{TODAY}', todayStr)
+        .replace('{TOMORROW}', tomorrowStr);
+      
+      // Build messages array
+      const messages = [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory,
+        { role: "user", content: userPrompt }
+      ];
+      
+      console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI with ${toolsConfig.tools.length} tools`);
+      
+      // Call OpenAI with function calling
+      let response = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: messages,
+        tools: toolsConfig.tools,
+        tool_choice: "auto", // AI tự quyết định có gọi function hay không
+        temperature: 0.7 // Tăng để AI linh hoạt hơn
+      });
+      
+      let assistantMessage = response.choices[0].message;
+      let functionResults = [];
+      
+      // Loop để handle multiple function calls (AI có thể gọi nhiều function liên tiếp)
+      let maxIterations = 5; // Giới hạn để tránh infinite loop
+      let iteration = 0;
+      
+      while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
+        iteration++;
+        console.log(`🔄 [AI] Iteration ${iteration}: AI wants to call ${assistantMessage.tool_calls.length} function(s)`);
+        
+        // Execute all function calls
+        for (const toolCall of assistantMessage.tool_calls) {
+          const functionName = toolCall.function.name;
+          const functionArgs = JSON.parse(toolCall.function.arguments);
+          
+          // Execute function
+          const functionResult = await this.executeFunction(functionName, functionArgs, patientUserId);
+          
+          // Add function result to messages
+          messages.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [toolCall]
+          });
+          
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(functionResult)
+          });
+          
+          functionResults.push({
+            functionName,
+            functionArgs,
+            result: functionResult
+          });
+        }
+        
+        // Call OpenAI again với function results
+        response = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: messages,
+          tools: toolsConfig.tools,
+          tool_choice: "auto",
+          temperature: 0.7
+        });
+        
+        assistantMessage = response.choices[0].message;
+      }
+      
+      // Get final response from AI
+      const finalResponse = assistantMessage.content || "Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.";
+      
+      console.log('✅ [AI] Final response:', finalResponse.substring(0, 100) + '...');
+      
+      // Check if appointment was created
+      const appointmentCreated = functionResults.some(fr => 
+        fr.functionName === 'create_appointment' && fr.result.success
+      );
+      
+      if (appointmentCreated) {
+        const appointmentResult = functionResults.find(fr => fr.functionName === 'create_appointment').result;
+        return {
+          success: true,
+          appointment: appointmentResult,
+          response: finalResponse,
+          conversationHistory: [...conversationHistory, 
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: finalResponse }
+          ]
+        };
+      }
+      
+      // Continuing conversation
+        return {
+          success: false,
+        needsMoreInfo: true,
+        response: finalResponse,
+        conversationHistory: [...conversationHistory,
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: finalResponse }
+        ]
+      };
+      
+    } catch (error) {
+      console.error('❌ [AI Function Calling] Error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Tạo appointment từ AI với Function Calling (mới)
+   */
+  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
+    try {
+      console.log('🚀 [AI Booking] Using new Function Calling approach...');
+      
+      // 🆕 Sử dụng chatWithAI với Function Calling - AI HOÀN TOÀN TỰ DO!
+      const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory);
+      
+      // Trả về kết quả đơn giản
+      return {
+        success: result.success,
+        appointment: result.appointment || null,
+        needsMoreInfo: result.needsMoreInfo || false,
+        followUpQuestion: result.response,
+        parsedData: { conversationHistory: result.conversationHistory }
+      };
+      
+    } catch (error) {
+      console.error('❌ [AI Booking] Error:', error);
+      throw error;
+    }
+  }
+}
+
+module.exports = new AIBookingService();
+

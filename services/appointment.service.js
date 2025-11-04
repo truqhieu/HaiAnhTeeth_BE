@@ -145,13 +145,10 @@ class AppointmentService {
             const slotStartTime = new Date(selectedSlot.startTime);
             const slotEndTime = new Date(selectedSlot.endTime);
             
-            // ⭐ THÊM: Tính buffer time (10 phút)
-            const bufferTime = 10; // 10 phút buffer
-            const slotEndTimeWithBuffer = new Date(slotEndTime.getTime() + bufferTime * 60000);
-            
-            // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTimeWithBuffer > appointmentStartTime
-            if (slotStartTime < appointmentEndTime && slotEndTimeWithBuffer > appointmentStartTime) {
-              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này (bao gồm buffer time)`);
+            // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
+            // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime
+            if (slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime) {
+              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này`);
               throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
             }
           }
@@ -166,10 +163,51 @@ class AppointmentService {
     // Để tránh race condition: 2 request cùng lúc
     const slotStartTime = new Date(selectedSlot.startTime);
     const slotEndTime = new Date(selectedSlot.endTime);
+
+    // ⭐ THÊM: Check conflict khi đặt cho bản thân - không được đặt 2 bác sĩ khác nhau cùng giờ
+    if (appointmentFor === 'self' || !appointmentFor) {
+      console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId}`);
+      
+      // Lấy tất cả appointments của bệnh nhân này (BẤT KỲ bác sĩ nào) vào cùng thời gian
+      const patientConflictAppointments = await Appointment.find({
+        patientUserId: patientUserId,
+        status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+        timeslotId: { $exists: true }
+      }).populate({
+        path: 'timeslotId',
+        select: 'startTime endTime doctorUserId'
+      });
+
+      // Kiểm tra xem có appointment nào của bệnh nhân trùng thời gian không
+      const hasConflict = patientConflictAppointments.some(apt => {
+        if (!apt.timeslotId) return false;
+        
+        const aptStartTime = new Date(apt.timeslotId.startTime);
+        const aptEndTime = new Date(apt.timeslotId.endTime);
+        
+        // Conflict nếu: slotStartTime < aptEndTime && slotEndTime > aptStartTime
+        // (không cộng buffer time - slot tiếp theo có thể bắt đầu ngay sau)
+        const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
+        
+        if (isConflict) {
+          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này:`);
+          console.log(`   - Appointment ID: ${apt._id}`);
+          console.log(`   - Doctor ID: ${apt.doctorUserId} (current: ${doctorUserId})`);
+          console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
+          console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
+        }
+        
+        return isConflict;
+      });
+
+      if (hasConflict) {
+        throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ khác. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!');
+      }
+
+      console.log(`✅ Patient ${patientUserId} không có conflict với appointments của chính họ`);
+    }
     
-    // ⭐ THÊM: Tính buffer time (10 phút)
-    const timeslotBufferTime = 10; // 10 phút buffer
-    const slotEndTimeWithBuffer = new Date(slotEndTime.getTime() + timeslotBufferTime * 60000);
+    // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     
     // ⭐ Không cho đặt thời gian ở quá khứ
     const nowUtc = new Date();
@@ -177,10 +215,10 @@ class AppointmentService {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
     
-    // Kiểm tra conflict với timeslots đã có (bao gồm buffer time)
+    // Kiểm tra conflict với timeslots đã có (KHÔNG cộng buffer time)
     const conflictingTimeslots = await Timeslot.find({
       doctorUserId: doctorUserId,
-      startTime: { $lt: slotEndTimeWithBuffer },
+      startTime: { $lt: slotEndTime },
       endTime: { $gt: slotStartTime },
       status: { $in: ['Reserved', 'Booked'] }
     });
@@ -240,18 +278,16 @@ class AppointmentService {
       select: 'startTime endTime'
     });
 
-    // Filter appointments có overlap thời gian (bao gồm buffer time)
-    const userBufferTime = 10; // 10 phút buffer
-    const slotEndWithBuffer = new Date(slotEnd.getTime() + userBufferTime * 60000);
-    
+    // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
     for (const apt of sameDayAppointments) {
       if (!apt.timeslotId) continue;
 
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
       
-      // Check overlap: (start1 < end2) AND (end1WithBuffer > start2)
-      const hasTimeOverlap = (slotStart < aptEnd && slotEndWithBuffer > aptStart);
+      // Check overlap: (start1 < end2) AND (end1 > start2) - không cộng buffer time
+      // Cho phép đặt liên tiếp: 08:20-08:50 và 08:50-09:20
+      const hasTimeOverlap = (slotStart < aptEnd && slotEnd > aptStart);
       
       if (hasTimeOverlap) {
         const aptDateVN = aptStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
@@ -301,19 +337,16 @@ class AppointmentService {
         select: 'fullName email'
       });
 
-      // Filter appointments có overlap thời gian (bao gồm buffer time)
+      // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
       for (const apt of overlappingAppointments) {
         if (!apt.timeslotId || !apt.customerId) continue;
 
         const aptStart = new Date(apt.timeslotId.startTime);
         const aptEnd = new Date(apt.timeslotId.endTime);
 
-        // ⭐ THÊM: Tính buffer time (10 phút)
-        const customerBufferTime = 10; // 10 phút buffer
-        const slotEndWithBuffer = new Date(slotEnd.getTime() + customerBufferTime * 60000);
-
-        // Check overlap: (start1 < end2) AND (end1WithBuffer > start2)
-        const hasTimeOverlap = (slotStart < aptEnd && slotEndWithBuffer > aptStart);
+        // Check overlap: (start1 < end2) AND (end1 > start2) - không cộng buffer time
+        // Cho phép đặt liên tiếp cho cùng một customer
+        const hasTimeOverlap = (slotStart < aptEnd && slotEnd > aptStart);
 
         if (hasTimeOverlap) {
           // Có trùng thời gian → check xem có trùng customer không
@@ -357,7 +390,7 @@ class AppointmentService {
       serviceId,
       startTime: new Date(selectedSlot.startTime),
       endTime: new Date(selectedSlot.endTime),
-      breakAfterMinutes: 10,
+      breakAfterMinutes: 0, // ⭐ Đặt = 0 vì đã bỏ logic nghỉ 10 phút - cho phép đặt liên tiếp
       // ⭐ FIXED: Nếu dịch vụ cần thanh toán trước, slot là "Reserved" (chưa xác nhận)
       // Khi thanh toán xong mới thành "Booked"
       status: service.isPrepaid ? 'Reserved' : 'Booked',

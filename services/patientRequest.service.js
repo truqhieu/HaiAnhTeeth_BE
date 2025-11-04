@@ -100,6 +100,9 @@ class PatientRequestService {
     // Cập nhật dữ liệu appointment
     let approvedSlot = null; // dùng để gửi email thời gian mới
     if (request.requestType === 'Reschedule') {
+      // ⭐ LƯU TIMESLOT CŨ TRƯỚC KHI UPDATE
+      const oldTimeslotId = appointment.timeslotId;
+      
       // Lấy timeslot đã reserved
       const slot = await Timeslot.findById(request.requestedData.timeslotId);
 
@@ -116,7 +119,21 @@ class PatientRequestService {
       appointment.timeslotId = slot._id;
       appointment.rescheduleCount = (appointment.rescheduleCount || 0) + 1;
       approvedSlot = slot;
+
+      // ⭐ SET TIMESLOT CŨ VỀ 'Available' ĐỂ GIẢI PHÓNG SLOT
+      if (oldTimeslotId) {
+        const oldTimeslot = await Timeslot.findById(oldTimeslotId);
+        if (oldTimeslot) {
+          oldTimeslot.status = 'Available';
+          oldTimeslot.appointmentId = null;
+          await oldTimeslot.save();
+          console.log(`✅ [Reschedule] Đã giải phóng timeslot cũ: ${oldTimeslotId}`);
+        }
+      }
     } else if (request.requestType === 'ChangeDoctor') {
+      // ⭐ LƯU TIMESLOT CŨ TRƯỚC KHI UPDATE
+      const oldTimeslotId = appointment.timeslotId;
+      
       // Lấy timeslot đã reserved cho bác sĩ mới
       const slot = await Timeslot.findById(request.requestedData.timeslotId);
 
@@ -133,6 +150,17 @@ class PatientRequestService {
       appointment.doctorUserId = request.requestedData.doctorUserId;
       appointment.timeslotId = slot._id;
       approvedSlot = slot;
+
+      // ⭐ SET TIMESLOT CŨ VỀ 'Available' ĐỂ GIẢI PHÓNG SLOT
+      if (oldTimeslotId) {
+        const oldTimeslot = await Timeslot.findById(oldTimeslotId);
+        if (oldTimeslot) {
+          oldTimeslot.status = 'Available';
+          oldTimeslot.appointmentId = null;
+          await oldTimeslot.save();
+          console.log(`✅ [ChangeDoctor] Đã giải phóng timeslot cũ: ${oldTimeslotId}`);
+        }
+      }
     }
 
     await appointment.save();
