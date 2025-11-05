@@ -731,24 +731,37 @@ class AIBookingService {
             }
           }
           
-          // ✅ PRIORITY 3: Word-based matching (match theo TỪ)
-          // Nếu vẫn chưa có match hoặc có nhiều match từ PRIORITY 2, thử word-based
-          if (matchedDoctors.length === 0 || matchedDoctors.length > 1) {
-            if (inputWords.length > 0) {
-              const wordMatches = availableDoctors.filter(d => {
-                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-                const doctorWords = doctorNameClean.split(/\s+/);
-                
-                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
-                return inputWords.every(inputWord => 
-                  doctorWords.some(doctorWord => doctorWord === inputWord)
-                );
-              });
+          // ✅ PRIORITY 3: Substring matching (chặt chẽ) - chỉ khi input ngắn và không có khoảng trắng
+          // Nếu input là một chuỗi ngắn (không có khoảng trắng), match substring trong tên bác sĩ
+          if (matchedDoctors.length === 0 && inputClean.length >= 2 && !inputClean.includes(' ')) {
+            const substringMatches = availableDoctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              // CHỈ match khi tên bác sĩ CHỨA input như một substring liên tục
+              // Ví dụ: "aaa" chỉ match với "Aaaaa", không match với "Thu" hay "Nguyễn Huy"
+              return doctorNameClean.includes(inputClean);
+            });
+            
+            if (substringMatches.length > 0) {
+              matchedDoctors = substringMatches;
+            }
+          }
+          
+          // ✅ PRIORITY 4: Word-based matching (match theo TỪ) - chỉ khi input có nhiều từ
+          // Nếu vẫn chưa có match và input có nhiều từ, thử word-based
+          if (matchedDoctors.length === 0 && inputWords.length > 1) {
+            const wordMatches = availableDoctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              const doctorWords = doctorNameClean.split(/\s+/);
               
-              // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
-              if (wordMatches.length > 0) {
-                matchedDoctors = wordMatches;
-              }
+              // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+              return inputWords.every(inputWord => 
+                doctorWords.some(doctorWord => doctorWord === inputWord)
+              );
+            });
+            
+            // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
+            if (wordMatches.length > 0) {
+              matchedDoctors = wordMatches;
             }
           }
           
