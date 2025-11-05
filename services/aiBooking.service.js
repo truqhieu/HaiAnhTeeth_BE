@@ -1111,7 +1111,47 @@ class AIBookingService {
             }
             
             // 4. Parse date and time
-            const appointmentDate = new Date(date);
+            // ⭐ Normalize date từ các format khác nhau (5-11-2025, 5/11/2025) thành YYYY-MM-DD
+            let normalizedDate = date;
+            
+            // Kiểm tra nếu là format YYYY-MM-DD (đã đúng)
+            const yyyyMMddRegex = /^\d{4}-\d{2}-\d{2}$/;
+            if (!yyyyMMddRegex.test(date)) {
+              // Thử parse các format khác: DD-MM-YYYY hoặc DD/MM/YYYY
+              const ddmmyyyyRegex = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/;
+              const match = date.match(ddmmyyyyRegex);
+              
+              if (match) {
+                const day = parseInt(match[1], 10);
+                const month = parseInt(match[2], 10);
+                const year = parseInt(match[3], 10);
+                
+                // Validate date
+                if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2020 || year > 2100) {
+                  return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+                }
+                
+                // Chuyển đổi thành YYYY-MM-DD
+                normalizedDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              } else {
+                // Format không hợp lệ
+                return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05). Nếu bạn nhập "5-11-2025" hoặc "5/11/2025", hệ thống sẽ tự động chuyển đổi.` };
+              }
+            }
+            
+            // Validate date sau khi normalize
+            const appointmentDate = new Date(normalizedDate);
+            if (isNaN(appointmentDate.getTime())) {
+              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+            }
+            
+            // Kiểm tra date có hợp lệ không (ví dụ: 31/02/2025 không hợp lệ)
+            const checkDate = new Date(normalizedDate);
+            const [year, month, day] = normalizedDate.split('-').map(Number);
+            if (checkDate.getFullYear() !== year || checkDate.getMonth() + 1 !== month || checkDate.getDate() !== day) {
+              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+            }
+            
             appointmentDate.setHours(0, 0, 0, 0);
             
             // Parse time (format: HH:mm)
@@ -1133,10 +1173,47 @@ class AIBookingService {
             const slotEndTime = new Date(slotStartTime);
             slotEndTime.setMinutes(slotEndTime.getMinutes() + service.durationMinutes);
             
-            // 5. Validate time không ở quá khứ
-            const nowUtc = new Date();
-            if (slotStartTime.getTime() < nowUtc.getTime()) {
-              return { error: 'Không thể đặt thời gian ở quá khứ' };
+            // 5. Validate time không ở quá khứ (so với thời gian hiện tại VN timezone)
+            // Lấy thời gian hiện tại theo VN timezone (UTC+7)
+            const now = new Date();
+            const nowVN = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+            const nowVNUtc = new Date(Date.UTC(
+              nowVN.getFullYear(),
+              nowVN.getMonth(),
+              nowVN.getDate(),
+              nowVN.getHours() - 7, // Convert VN time (UTC+7) to UTC
+              nowVN.getMinutes(),
+              0
+            ));
+            
+            // So sánh date và time
+            const appointmentDateOnly = new Date(Date.UTC(
+              appointmentDate.getFullYear(),
+              appointmentDate.getMonth(),
+              appointmentDate.getDate(),
+              0, 0, 0
+            ));
+            const todayDateOnly = new Date(Date.UTC(
+              nowVN.getFullYear(),
+              nowVN.getMonth(),
+              nowVN.getDate(),
+              0, 0, 0
+            ));
+            
+            // Check nếu date là quá khứ
+            if (appointmentDateOnly.getTime() < todayDateOnly.getTime()) {
+              const dateVN = appointmentDate.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+              const todayVN = nowVN.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+              return { error: `Không thể đặt lịch trong quá khứ. Ngày bạn chọn là ${dateVN}, nhưng hôm nay là ${todayVN}. Vui lòng chọn ngày trong tương lai.` };
+            }
+            
+            // Nếu date là hôm nay, check time không được trong quá khứ
+            if (appointmentDateOnly.getTime() === todayDateOnly.getTime()) {
+              if (slotStartTime.getTime() < nowVNUtc.getTime()) {
+                const timeVN = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+                const nowTimeVN = nowVN.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                return { error: `Không thể đặt lịch trong quá khứ. Thời gian bạn chọn là ${timeVN}, nhưng hiện tại là ${nowTimeVN}. Vui lòng chọn thời gian trong tương lai.` };
+              }
             }
             
             // 6. Validate slot duration phải khớp với service duration
@@ -1415,11 +1492,15 @@ class AIBookingService {
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowStr = tomorrow.toISOString().split('T')[0];
+      const dayAfterTomorrow = new Date(today);
+      dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+      const dayAfterTomorrowStr = dayAfterTomorrow.toISOString().split('T')[0];
       
       // Build system prompt với date context
       const systemPrompt = toolsConfig.systemPrompt
         .replace('{TODAY}', todayStr)
-        .replace('{TOMORROW}', tomorrowStr);
+        .replace('{TOMORROW}', tomorrowStr)
+        .replace('{DAY_AFTER_TOMORROW}', dayAfterTomorrowStr);
       
       // Build messages array
       const messages = [
