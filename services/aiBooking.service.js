@@ -37,17 +37,28 @@ class AIBookingService {
           }
           
           const services = await Service.find(query)
-            .select('_id serviceName category durationMinutes')
+            .select('_id serviceName category durationMinutes price isPrepaid description')
             .sort({ category: 1, serviceName: 1 })
         .lean();
 
-          return {
-            services: services.map(s => ({
-        id: s._id.toString(),
-        name: s.serviceName,
+          // ⭐ Tính giá sau khuyến mãi cho mỗi service
+          const servicesWithPrice = await Promise.all(services.map(async (s) => {
+            const promotionData = await calculateServicePrice(s._id.toString(), s.price);
+            return {
+              id: s._id.toString(),
+              name: s.serviceName,
               category: s.category,
-              durationMinutes: s.durationMinutes || 30 // Default 30 phút nếu không có
-            }))
+              durationMinutes: s.durationMinutes || 30, // Default 30 phút nếu không có
+              price: s.price || 0,
+              originalPrice: promotionData.originalPrice,
+              finalPrice: promotionData.finalPrice,
+              isPrepaid: s.isPrepaid || false,
+              description: s.description || ''
+            };
+          }));
+
+          return {
+            services: servicesWithPrice
           };
         }
         
@@ -59,19 +70,27 @@ class AIBookingService {
           }
           
           const service = await Service.findById(serviceId)
-            .select('_id serviceName category durationMinutes description')
+            .select('_id serviceName category durationMinutes description price isPrepaid status')
             .lean();
           
           if (!service) {
             return { error: 'Service not found' };
           }
           
+          // ⭐ Tính giá sau khuyến mãi
+          const promotionData = await calculateServicePrice(service._id.toString(), service.price);
+          
           return {
             id: service._id.toString(),
             name: service.serviceName,
             category: service.category,
             durationMinutes: service.durationMinutes || 30,
-            description: service.description || ''
+            description: service.description || '',
+            price: service.price || 0,
+            originalPrice: promotionData.originalPrice,
+            finalPrice: promotionData.finalPrice,
+            isPrepaid: service.isPrepaid || false,
+            status: service.status
           };
         }
         
@@ -88,23 +107,38 @@ class AIBookingService {
           }
           
           const services = await Service.find(query)
-            .select('_id serviceName category durationMinutes')
+            .select('_id serviceName category durationMinutes price isPrepaid description')
             .sort({ category: 1, serviceName: 1 })
             .lean();
+          
+          // ⭐ Tính giá sau khuyến mãi cho tất cả services
+          const servicesWithPrice = await Promise.all(services.map(async (s) => {
+            const promotionData = await calculateServicePrice(s._id.toString(), s.price);
+            return {
+              ...s,
+              originalPrice: promotionData.originalPrice,
+              finalPrice: promotionData.finalPrice
+            };
+          }));
           
           // Check nếu input là số thứ tự
           const numberMatch = serviceName.match(/^\d+$/);
           if (numberMatch) {
             const index = parseInt(serviceName) - 1; // Convert to 0-based index
-            if (index >= 0 && index < services.length) {
-              const selectedService = services[index];
+            if (index >= 0 && index < servicesWithPrice.length) {
+              const selectedService = servicesWithPrice[index];
               return {
                 found: true,
                 service: {
                   id: selectedService._id.toString(),
                   name: selectedService.serviceName,
                   category: selectedService.category,
-                  durationMinutes: selectedService.durationMinutes || 30
+                  durationMinutes: selectedService.durationMinutes || 30,
+                  price: selectedService.price || 0,
+                  originalPrice: selectedService.originalPrice,
+                  finalPrice: selectedService.finalPrice,
+                  isPrepaid: selectedService.isPrepaid || false,
+                  description: selectedService.description || ''
                 }
               };
             }
@@ -114,13 +148,13 @@ class AIBookingService {
           const inputLower = serviceName.toLowerCase().trim();
           
           // ✅ PRIORITY 1: Exact match (case-insensitive)
-          let matchedServices = services.filter(s => 
+          let matchedServices = servicesWithPrice.filter(s => 
             s.serviceName.toLowerCase() === inputLower
           );
           
           // ✅ PRIORITY 2: Contains match
           if (matchedServices.length === 0) {
-            matchedServices = services.filter(s => 
+            matchedServices = servicesWithPrice.filter(s => 
               s.serviceName.toLowerCase().includes(inputLower) ||
               inputLower.includes(s.serviceName.toLowerCase())
             );
@@ -129,7 +163,7 @@ class AIBookingService {
           // ✅ PRIORITY 3: Word-based matching
           if (matchedServices.length === 0) {
             const inputWords = inputLower.split(/\s+/).filter(w => w.length > 0);
-            matchedServices = services.filter(s => {
+            matchedServices = servicesWithPrice.filter(s => {
               const serviceWords = s.serviceName.toLowerCase().split(/\s+/);
               return inputWords.some(inputWord => 
                 serviceWords.some(serviceWord => serviceWord.includes(inputWord) || inputWord.includes(serviceWord))
@@ -141,11 +175,16 @@ class AIBookingService {
           if (matchedServices.length === 0) {
             return { 
               error: 'Không tìm thấy dịch vụ',
-              suggestions: services.slice(0, 10).map(s => ({
+              suggestions: servicesWithPrice.slice(0, 10).map(s => ({
                 id: s._id.toString(),
                 name: s.serviceName,
                 category: s.category,
-                durationMinutes: s.durationMinutes || 30
+                durationMinutes: s.durationMinutes || 30,
+                price: s.price || 0,
+                originalPrice: s.originalPrice,
+                finalPrice: s.finalPrice,
+                isPrepaid: s.isPrepaid || false,
+                description: s.description || ''
               }))
             };
           }
@@ -158,7 +197,12 @@ class AIBookingService {
                 id: matchedServices[0]._id.toString(),
                 name: matchedServices[0].serviceName,
                 category: matchedServices[0].category,
-                durationMinutes: matchedServices[0].durationMinutes || 30
+                durationMinutes: matchedServices[0].durationMinutes || 30,
+                price: matchedServices[0].price || 0,
+                originalPrice: matchedServices[0].originalPrice,
+                finalPrice: matchedServices[0].finalPrice,
+                isPrepaid: matchedServices[0].isPrepaid || false,
+                description: matchedServices[0].description || ''
               }
             };
           }
@@ -171,7 +215,12 @@ class AIBookingService {
               id: s._id.toString(),
               name: s.serviceName,
               category: s.category,
-              durationMinutes: s.durationMinutes || 30
+              durationMinutes: s.durationMinutes || 30,
+              price: s.price || 0,
+              originalPrice: s.originalPrice,
+              finalPrice: s.finalPrice,
+              isPrepaid: s.isPrepaid || false,
+              description: s.description || ''
             }))
           };
         }
@@ -186,11 +235,16 @@ class AIBookingService {
           const service = await Service.findOne({ 
             _id: serviceId, 
             status: 'Active' 
-          }).lean();
+          })
+          .select('_id serviceName category durationMinutes price isPrepaid description status')
+          .lean();
           
           if (!service) {
             return { valid: false, error: 'Service not found or inactive' };
       }
+
+          // ⭐ Tính giá sau khuyến mãi
+          const promotionData = await calculateServicePrice(service._id.toString(), service.price);
 
       return {
             valid: true, 
@@ -198,7 +252,13 @@ class AIBookingService {
               id: service._id.toString(),
               name: service.serviceName,
               category: service.category,
-              durationMinutes: service.durationMinutes || 30
+              durationMinutes: service.durationMinutes || 30,
+              price: service.price || 0,
+              originalPrice: promotionData.originalPrice,
+              finalPrice: promotionData.finalPrice,
+              isPrepaid: service.isPrepaid || false,
+              description: service.description || '',
+              status: service.status
             }
           };
         }
@@ -211,7 +271,7 @@ class AIBookingService {
           }
           
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-            .select('_id fullName specialization')
+            .select('_id fullName specialization email phoneNumber status role')
             .sort({ fullName: 1 }) // Sort để có thứ tự cố định
             .lean();
           
@@ -226,7 +286,10 @@ class AIBookingService {
                 doctor: {
                   id: selectedDoctor._id.toString(),
                   name: selectedDoctor.fullName,
-                  specialization: selectedDoctor.specialization || ''
+                  specialization: selectedDoctor.specialization || '',
+                  email: selectedDoctor.email || '',
+                  phoneNumber: selectedDoctor.phoneNumber || '',
+                  status: selectedDoctor.status || 'Active'
                 }
               };
             }
@@ -285,7 +348,10 @@ class AIBookingService {
               error: 'Không tìm thấy bác sĩ',
               suggestions: doctors.slice(0, 5).map(d => ({
                 id: d._id.toString(),
-                name: d.fullName
+                name: d.fullName,
+                specialization: d.specialization || '',
+                email: d.email || '',
+                phoneNumber: d.phoneNumber || ''
               }))
             };
           }
@@ -297,7 +363,10 @@ class AIBookingService {
               doctor: {
                 id: matchedDoctors[0]._id.toString(),
                 name: matchedDoctors[0].fullName,
-                specialization: matchedDoctors[0].specialization || ''
+                specialization: matchedDoctors[0].specialization || '',
+                email: matchedDoctors[0].email || '',
+                phoneNumber: matchedDoctors[0].phoneNumber || '',
+                status: matchedDoctors[0].status || 'Active'
               }
             };
           }
@@ -309,7 +378,10 @@ class AIBookingService {
             doctors: matchedDoctors.map(d => ({
               id: d._id.toString(),
               name: d.fullName,
-              specialization: d.specialization || ''
+              specialization: d.specialization || '',
+              email: d.email || '',
+              phoneNumber: d.phoneNumber || '',
+              status: d.status || 'Active'
             }))
           };
         }
@@ -325,7 +397,9 @@ class AIBookingService {
             _id: doctorId, 
             role: 'Doctor',
             status: 'Active' 
-          }).lean();
+          })
+          .select('_id fullName specialization email phoneNumber status role')
+          .lean();
           
           if (!doctor) {
             return { valid: false, error: 'Doctor not found or inactive' };
@@ -336,21 +410,27 @@ class AIBookingService {
             doctor: {
               id: doctor._id.toString(),
               name: doctor.fullName,
-              specialization: doctor.specialization || ''
+              specialization: doctor.specialization || '',
+              email: doctor.email || '',
+              phoneNumber: doctor.phoneNumber || '',
+              status: doctor.status || 'Active'
             }
           };
         }
         
         case 'get_doctors': {
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-            .select('_id fullName specialization')
+            .select('_id fullName specialization email phoneNumber status role')
             .lean();
           
         return {
             doctors: doctors.map(d => ({
         id: d._id.toString(),
               name: d.fullName,
-              specialization: d.specialization || ''
+              specialization: d.specialization || '',
+              email: d.email || '',
+              phoneNumber: d.phoneNumber || '',
+              status: d.status || 'Active'
             }))
           };
         }
@@ -371,7 +451,7 @@ class AIBookingService {
           if (serviceNumberMatch) {
             // Lấy danh sách dịch vụ và chọn theo index
             const services = await Service.find({ status: 'Active' })
-              .select('_id serviceName durationMinutes')
+              .select('_id serviceName durationMinutes price isPrepaid category description')
               .sort({ category: 1, serviceName: 1 })
               .lean();
             
@@ -384,13 +464,16 @@ class AIBookingService {
           } else {
             // Dùng serviceId trực tiếp (ObjectId)
             service = await Service.findById(serviceId)
-              .select('_id serviceName durationMinutes')
+              .select('_id serviceName durationMinutes price isPrepaid category description')
               .lean();
           }
           
           if (!service) {
             return { error: 'Dịch vụ không tồn tại. Vui lòng chọn lại dịch vụ.' };
           }
+          
+          // ⭐ Tính giá sau khuyến mãi
+          const promotionData = await calculateServicePrice(service._id.toString(), service.price);
           
           const serviceDuration = service.durationMinutes || 30;
           
@@ -403,7 +486,7 @@ class AIBookingService {
           if (doctorNumberMatch) {
             // Lấy danh sách bác sĩ và chọn theo index
             const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-              .select('_id fullName specialization')
+              .select('_id fullName specialization email phoneNumber status role')
               .sort({ fullName: 1 })
               .lean();
             
@@ -416,7 +499,7 @@ class AIBookingService {
           } else {
             // Dùng doctorId trực tiếp (ObjectId)
             doctor = await User.findById(doctorId)
-              .select('_id fullName specialization')
+              .select('_id fullName specialization email phoneNumber status role')
               .lean();
           }
           
@@ -684,8 +767,19 @@ class AIBookingService {
             success: true,
             serviceName: service.serviceName,
             durationMinutes: serviceDuration,
+            servicePrice: service.price || 0,
+            serviceOriginalPrice: promotionData.originalPrice,
+            serviceFinalPrice: promotionData.finalPrice,
+            serviceIsPrepaid: service.isPrepaid || false,
+            serviceCategory: service.category,
+            serviceDescription: service.description || '',
             date: date,
             doctorId: doctor._id.toString(), // Dùng doctor._id thay vì doctorId
+            doctorName: doctor.fullName || '',
+            doctorSpecialization: doctor.specialization || '',
+            doctorEmail: doctor.email || '',
+            doctorPhoneNumber: doctor.phoneNumber || '',
+            workingHours: workingHours, // ⭐ Thêm working hours để AI biết giờ làm việc
             morning: morningBlocks,
             afternoon: afternoonBlocks,
             totalFreeBlocks: morningBlocks.length + afternoonBlocks.length
@@ -713,7 +807,7 @@ class AIBookingService {
             
             if (serviceNumberMatch) {
               const services = await Service.find({ status: 'Active' })
-                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .select('_id serviceName durationMinutes category price isPrepaid status description')
                 .sort({ category: 1, serviceName: 1 })
                 .lean();
               
@@ -723,7 +817,7 @@ class AIBookingService {
               }
             } else {
               service = await Service.findById(serviceId)
-                .select('_id serviceName durationMinutes category price isPrepaid status')
+                .select('_id serviceName durationMinutes category price isPrepaid status description')
                 .lean();
             }
             
@@ -741,7 +835,7 @@ class AIBookingService {
             
             if (doctorNumberMatch) {
               const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-                .select('_id fullName specialization role status')
+                .select('_id fullName specialization role status email phoneNumber')
                 .sort({ fullName: 1 })
                 .lean();
               
@@ -751,7 +845,7 @@ class AIBookingService {
               }
             } else {
               doctor = await User.findById(doctorId)
-                .select('_id fullName specialization role status')
+                .select('_id fullName specialization role status email phoneNumber')
                 .lean();
             }
             
@@ -978,13 +1072,25 @@ class AIBookingService {
               success: true,
               appointmentId: newAppointment._id.toString(),
               service: service.serviceName,
+              serviceId: service._id.toString(),
+              serviceDescription: service.description || '',
+              serviceCategory: service.category || '',
+              serviceDuration: service.durationMinutes || 30,
               doctor: doctor.fullName,
+              doctorId: doctor._id.toString(),
+              doctorSpecialization: doctor.specialization || '',
+              doctorEmail: doctor.email || '',
+              doctorPhoneNumber: doctor.phoneNumber || '',
               date: date,
               time: time,
               status: appointmentStatus,
+              appointmentType: appointmentType,
+              appointmentMode: appointmentMode,
               finalPrice: finalPrice,
               originalPrice: originalPrice,
-              needsPayment: service.isPrepaid
+              discountAmount: promotionData.discountAmount || 0,
+              needsPayment: service.isPrepaid,
+              notes: notes || null
             };
           } catch (error) {
             console.error('❌ [AI create_appointment] Error:', error);
