@@ -1,6 +1,7 @@
 const LeaveRequest = require('../models/leaveRequest.model');
 const Appointment = require('../models/appointment.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
+const Doctor = require('../models/doctor.model');
 const User = require('../models/user.model');
 const notificationService = require('./notification.service');
 
@@ -364,6 +365,31 @@ class LeaveRequestService {
       throw new Error('Không tìm thấy yêu cầu nghỉ phép');
     }
 
+    // Xử lý khi reject - restore status nếu không còn leave active
+    if (status === 'Rejected' && handleRequest.userId) {
+      try {
+        const doctorUserId = handleRequest.userId._id || handleRequest.userId;
+        
+        // Check xem có còn leave active nào không
+        const activeLeaves = await LeaveRequest.countDocuments({
+          userId: doctorUserId,
+          status: 'Approved',
+          endDate: { $gte: new Date() } // Chỉ count leaves chưa hết hạn
+        });
+
+        if (activeLeaves === 0) {
+          // Không còn leave active, restore về Available
+          await Doctor.updateOne(
+            { doctorUserId: doctorUserId },
+            { $set: { status: 'Available' } }
+          );
+          console.log(`✅ Đã restore status của bác sĩ về 'Available' sau khi reject leave request`);
+        }
+      } catch (error) {
+        console.error('❌ Lỗi xử lý khi reject leave request:', error);
+      }
+    }
+
     // Xử lý khi approve
     if (status === 'Approved' && handleRequest.userId) {
       try {
@@ -401,6 +427,13 @@ class LeaveRequestService {
         // 3. Đánh dấu DoctorSchedule thành Unavailable
         await this._updateDoctorSchedule(doctorUserId, startDate, endDate);
 
+        // 4. Update Doctor status thành 'On Leave'
+        await Doctor.updateOne(
+          { doctorUserId: doctorUserId },
+          { $set: { status: 'On Leave' } }
+        );
+        console.log(`✅ Đã cập nhật status của bác sĩ ${doctorName} thành 'On Leave'`);
+
       } catch (error) {
         console.error('❌ Lỗi xử lý khi approve leave request:', error);
         // Không throw error để không làm gián đoạn việc approve
@@ -434,6 +467,9 @@ class LeaveRequestService {
 
       console.log(`🔄 [restoreExpiredLeaveSchedules] Found ${expiredLeaves.length} expired leave requests`);
 
+      // Track doctors để check xem có còn leave active không
+      const doctorIds = new Set();
+
       for (const leave of expiredLeaves) {
         if (!leave.userId || !leave.userId._id) continue;
 
@@ -443,6 +479,25 @@ class LeaveRequestService {
         
         // Restore schedules cho doctor này trong khoảng thời gian leave
         await this._restoreDoctorSchedule(doctorUserId, leaveStart, leaveEnd);
+        doctorIds.add(doctorUserId.toString());
+      }
+
+      // Check và restore Doctor status về 'Available' nếu không còn leave active
+      for (const doctorId of doctorIds) {
+        const activeLeaves = await LeaveRequest.countDocuments({
+          userId: doctorId,
+          status: 'Approved',
+          endDate: { $gte: today } // Chỉ count leaves chưa hết hạn
+        });
+
+        if (activeLeaves === 0) {
+          // Không còn leave active, restore về Available
+          await Doctor.updateOne(
+            { doctorUserId: doctorId },
+            { $set: { status: 'Available' } }
+          );
+          console.log(`✅ Đã restore status của bác sĩ ${doctorId} về 'Available'`);
+        }
       }
 
       console.log(`✅ [restoreExpiredLeaveSchedules] Completed restoring schedules for ${expiredLeaves.length} expired leaves`);

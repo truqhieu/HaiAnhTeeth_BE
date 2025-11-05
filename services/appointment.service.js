@@ -865,7 +865,38 @@ class AppointmentService {
         .populate('replacedDoctorUserId', '_id fullName email') // ⭐ Thêm _id để frontend có thể extract
         .populate('serviceId', 'serviceName price')
         .populate('timeslotId', 'startTime endTime')
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+      const Doctor = require('../models/doctor.model');
+      
+      // Lấy tất cả doctorUserIds từ appointments
+      const doctorUserIds = updatedAppointments
+        .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
+        .map(apt => apt.doctorUserId._id);
+      
+      // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
+      const doctors = await Doctor.find({
+        doctorUserId: { $in: doctorUserIds }
+      }).select('doctorUserId status').lean();
+      
+      // Tạo map để lookup nhanh
+      const doctorStatusMap = new Map();
+      doctors.forEach(doctor => {
+        doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
+      });
+      
+      // Thêm doctorStatus vào mỗi appointment
+      const appointmentsWithDoctorStatus = updatedAppointments.map((apt) => {
+        if (apt.doctorUserId && apt.doctorUserId._id) {
+          const doctorStatus = doctorStatusMap.get(apt.doctorUserId._id.toString());
+          if (doctorStatus) {
+            apt.doctorStatus = doctorStatus;
+          }
+        }
+        return apt;
+      });
 
       // ⭐ KHÔNG filter appointments ở đây - để staff view vẫn thấy tất cả
       // Frontend sẽ check và hiển thị "Not Available" ở cột bác sĩ khi có leave
@@ -873,8 +904,8 @@ class AppointmentService {
 
       return {
         success: true,
-        data: updatedAppointments,
-        count: updatedAppointments.length
+        data: appointmentsWithDoctorStatus,
+        count: appointmentsWithDoctorStatus.length
       };
     } catch (error) {
       console.error('❌ Lỗi lấy danh sách lịch hẹn:', error);
