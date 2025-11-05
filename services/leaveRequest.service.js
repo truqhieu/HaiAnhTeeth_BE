@@ -209,6 +209,59 @@ class LeaveRequestService {
   }
 
   /**
+   * Helper: Restore DoctorSchedule về Available sau khi hết thời gian nghỉ
+   * @param {string} doctorUserId - ID của bác sĩ
+   * @param {Date} startDate - Ngày bắt đầu nghỉ
+   * @param {Date} endDate - Ngày kết thúc nghỉ
+   */
+  async _restoreDoctorSchedule(doctorUserId, startDate, endDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const leaveStart = new Date(startDate);
+    leaveStart.setHours(0, 0, 0, 0);
+    const leaveEnd = new Date(endDate);
+    leaveEnd.setHours(0, 0, 0, 0);
+
+    // Chỉ restore nếu đã quá ngày kết thúc nghỉ
+    if (today <= leaveEnd) {
+      return; // Chưa đến ngày restore
+    }
+
+    console.log(`🔄 [_restoreDoctorSchedule] Restoring schedules for doctor ${doctorUserId.toString()} after leave ended (${leaveStart.toLocaleDateString('vi-VN')} - ${leaveEnd.toLocaleDateString('vi-VN')})`);
+
+    // Restore schedules trong khoảng thời gian leave đã hết hạn
+    const updatePromises = [];
+    for (const shift of ['Morning', 'Afternoon']) {
+      const updatePromise = DoctorSchedule.updateMany(
+        {
+          doctorUserId: doctorUserId,
+          date: {
+            $gte: leaveStart,
+            $lte: leaveEnd
+          },
+          shift: shift,
+          status: 'Unavailable'
+        },
+        { $set: { status: 'Available' } }
+      )
+        .then(result => {
+          if (result.modifiedCount > 0) {
+            console.log(`✅ [_restoreDoctorSchedule] Restored ${result.modifiedCount} schedules for ${shift} shift (${leaveStart.toLocaleDateString('vi-VN')} - ${leaveEnd.toLocaleDateString('vi-VN')})`);
+          }
+          return result;
+        })
+        .catch(err => {
+          console.error(`❌ Lỗi restore schedule ca ${shift}:`, err.message);
+          return null;
+        });
+
+      updatePromises.push(updatePromise);
+    }
+
+    await Promise.all(updatePromises);
+  }
+
+  /**
    * Helper: Đánh dấu DoctorSchedule thành Unavailable
    */
   async _updateDoctorSchedule(doctorUserId, startDate, endDate) {
@@ -360,6 +413,42 @@ class LeaveRequestService {
     };
 
     return { request: handleRequest, message: `Đã ${map[status]} đơn nghỉ phép` };
+  }
+
+  /**
+   * Tự động restore schedules về Available sau khi hết thời gian nghỉ
+   * Nên được gọi định kỳ (cron job) hoặc khi có request
+   */
+  async restoreExpiredLeaveSchedules() {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Tìm tất cả leave requests đã hết hạn (endDate < today) và đã được approve
+      const expiredLeaves = await LeaveRequest.find({
+        status: 'Approved',
+        endDate: { $lt: today }
+      })
+        .populate('userId', '_id')
+        .lean();
+
+      console.log(`🔄 [restoreExpiredLeaveSchedules] Found ${expiredLeaves.length} expired leave requests`);
+
+      for (const leave of expiredLeaves) {
+        if (!leave.userId || !leave.userId._id) continue;
+
+        const doctorUserId = leave.userId._id;
+        const leaveStart = new Date(leave.startDate);
+        const leaveEnd = new Date(leave.endDate);
+        
+        // Restore schedules cho doctor này trong khoảng thời gian leave
+        await this._restoreDoctorSchedule(doctorUserId, leaveStart, leaveEnd);
+      }
+
+      console.log(`✅ [restoreExpiredLeaveSchedules] Completed restoring schedules for ${expiredLeaves.length} expired leaves`);
+    } catch (error) {
+      console.error('❌ [restoreExpiredLeaveSchedules] Error:', error);
+    }
   }
 
   /**

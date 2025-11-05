@@ -3,6 +3,7 @@ const cron = require('node-cron');
 const Promotion = require('../models/promotion.model');
 const Appointment = require('../models/appointment.model');
 const appointmentService = require('../services/appointment.service');
+const leaveRequestService = require('../services/leaveRequest.service');
 
 // ===== 1️⃣ Cron auto expire promotion =====
 cron.schedule('*/1 * * * *', async () => {  // test mỗi phút
@@ -42,6 +43,19 @@ cron.schedule('0 * * * *', async () => {  // chạy mỗi giờ
         }
     } catch (err) {
         console.error('❌ Lỗi cron appointment:', err.message);
+    }
+}, {
+    timezone: "Asia/Ho_Chi_Minh"
+});
+
+// ===== 3️⃣ Cron auto restore doctor schedules sau khi hết thời gian nghỉ =====
+cron.schedule('0 0 * * *', async () => {  // chạy mỗi ngày lúc 00:00
+    try {
+        console.log('🔄 [Cron] Bắt đầu restore schedules cho các leave requests đã hết hạn...');
+        await leaveRequestService.restoreExpiredLeaveSchedules();
+        console.log('✅ [Cron] Hoàn thành restore schedules');
+    } catch (err) {
+        console.error('❌ [Cron] Lỗi restore schedules:', err.message);
     }
 }, {
     timezone: "Asia/Ho_Chi_Minh"
