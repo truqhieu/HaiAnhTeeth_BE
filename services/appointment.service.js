@@ -663,6 +663,28 @@ class AppointmentService {
           }
         })();
 
+        // ⭐ GỬI NOTIFICATION CHO BỆNH NHÂN
+        try {
+          const patientUserId = updatedAppointment.patientUserId?._id || updatedAppointment.patientUserId;
+          if (patientUserId) {
+            const appointmentDate = new Date(updatedAppointment.timeslotId.startTime);
+            const dateStr = appointmentDate.toLocaleDateString('vi-VN');
+            const timeStr = appointmentDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+            
+            await notificationService.createNotification({
+              userId: patientUserId,
+              createdByUserId: staffUserId,
+              title: 'Lịch khám của bạn đã được duyệt',
+              message: `Lịch khám ${updatedAppointment.serviceId?.serviceName || ''} với bác sĩ ${updatedAppointment.doctorUserId?.fullName || ''} vào ${dateStr} lúc ${timeStr} đã được duyệt.${updatedAppointment.linkMeetUrl ? ' Kiểm tra link Google Meet trong chi tiết lịch hẹn.' : ''}`,
+              relatedAppointmentId: appointmentId,
+              link: `/patient/appointments`,
+            });
+            console.log('✅ Đã tạo notification cho bệnh nhân về việc duyệt lịch');
+          }
+        } catch (notifError) {
+          console.warn('⚠️ Lỗi gửi notification bệnh nhân:', notifError.message);
+        }
+
         // ⭐ TRẢ RESPONSE NGAY (response không chờ email)
         return {
           success: true,
@@ -727,6 +749,24 @@ class AppointmentService {
             console.error('📧 Error details:', emailError);
           }
         })();
+
+        // ⭐ GỬI NOTIFICATION CHO BỆNH NHÂN
+        try {
+          const patientUserId = updatedAppointment.patientUserId?._id || updatedAppointment.patientUserId;
+          if (patientUserId) {
+            await notificationService.createNotification({
+              userId: patientUserId,
+              createdByUserId: staffUserId,
+              title: 'Lịch khám của bạn đã bị hủy',
+              message: `Lịch khám ${updatedAppointment.serviceId?.serviceName || 'của bạn'} với bác sĩ ${updatedAppointment.doctorUserId?.fullName || ''} đã bị hủy. ${cancelReason ? `Lý do: ${cancelReason}` : ''}`,
+              relatedAppointmentId: appointmentId,
+              link: `/patient/appointments`,
+            });
+            console.log('✅ Đã tạo notification cho bệnh nhân về việc hủy lịch');
+          }
+        } catch (notifError) {
+          console.warn('⚠️ Lỗi gửi notification bệnh nhân:', notifError.message);
+        }
 
         // ⭐ TRẢ RESPONSE NGAY (response không chờ email)
         return {
@@ -948,10 +988,42 @@ class AppointmentService {
         .populate('timeslotId', 'startTime endTime')
         .populate('customerId', 'fullName email phoneNumber')
         .populate('paymentId') // ⭐ Populate tất cả fields của paymentId để có _id
-        .sort({ createdAt: -1 }); // Sắp xếp theo thời gian tạo mới nhất
+        .populate('replacedDoctorUserId', 'fullName email') // ⭐ Populate replaced doctor
+        .sort({ createdAt: -1 })
+        .lean(); // Sắp xếp theo thời gian tạo mới nhất
 
-      console.log('✅ [getUserAppointments] Tìm thấy:', appointments.length, 'appointments');
-      console.log('📋 [getUserAppointments] Appointments:', appointments.map(apt => ({
+      // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+      const Doctor = require('../models/doctor.model');
+      
+      // Lấy tất cả doctorUserIds từ appointments
+      const doctorUserIds = appointments
+        .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
+        .map(apt => apt.doctorUserId._id);
+      
+      // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
+      const doctors = await Doctor.find({
+        doctorUserId: { $in: doctorUserIds }
+      }).select('doctorUserId status').lean();
+      
+      // Tạo map để lookup nhanh
+      const doctorStatusMap = new Map();
+      doctors.forEach(doctor => {
+        doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
+      });
+      
+      // Thêm doctorStatus vào mỗi appointment
+      const appointmentsWithDoctorStatus = appointments.map((apt) => {
+        if (apt.doctorUserId && apt.doctorUserId._id) {
+          const doctorStatus = doctorStatusMap.get(apt.doctorUserId._id.toString());
+          if (doctorStatus) {
+            apt.doctorStatus = doctorStatus;
+          }
+        }
+        return apt;
+      });
+
+      console.log('✅ [getUserAppointments] Tìm thấy:', appointmentsWithDoctorStatus.length, 'appointments');
+      console.log('📋 [getUserAppointments] Appointments:', appointmentsWithDoctorStatus.map(apt => ({
         id: apt._id,
         status: apt.status,
         appointmentFor: apt.appointmentFor,
@@ -962,7 +1034,7 @@ class AppointmentService {
       })));
 
       // Trả về đúng format mà frontend expect
-      return appointments.map(apt => ({
+      return appointmentsWithDoctorStatus.map(apt => ({
         _id: apt._id.toString(),
         status: apt.status,
         type: apt.type,
@@ -1003,7 +1075,13 @@ class AppointmentService {
         linkMeetUrl: apt.linkMeetUrl || null,
         checkedInAt: apt.checkedInAt || null,
         createdAt: apt.createdAt,
-        updatedAt: apt.updatedAt
+        updatedAt: apt.updatedAt,
+        replacedDoctorUserId: apt.replacedDoctorUserId ? {
+          fullName: apt.replacedDoctorUserId.fullName,
+          email: apt.replacedDoctorUserId.email
+        } : null,
+        confirmDeadline: apt.confirmDeadline || null,
+        doctorStatus: apt.doctorStatus || null // ⭐ Thêm doctorStatus
       }));
     } catch (error) {
       console.error('❌ Lỗi lấy ca khám của user:', error);
