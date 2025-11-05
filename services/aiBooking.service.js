@@ -171,7 +171,7 @@ class AIBookingService {
           // ✅ PRIORITY 3: Word-based matching - CHỈ match các từ có ý nghĩa (ít nhất 3 ký tự, không phải từ chung chung)
           if (matchedServices.length === 0) {
             const inputWords = normalizedInput.split(/\s+/)
-              .filter(w => w.length >= 3) // Chỉ lấy từ có ít nhất 3 ký tự
+              .filter(w => w.length >= 2) // ⭐ Giảm xuống 2 ký tự để match "răng" (4 ký tự)
               .filter(w => !commonWords.includes(w)); // Loại bỏ từ chung chung
             
             // Phải có ít nhất 1 từ có ý nghĩa mới match
@@ -188,10 +188,11 @@ class AIBookingService {
                   // Check 1: Match với từng từ trong service name
                   const wordMatch = serviceWords.some(serviceWord => {
                     const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
-                    // Chỉ match nếu cả 2 đều có ít nhất 3 ký tự
-                    if (inputWordClean.length < 3 || serviceWordClean.length < 3) {
+                    // ⭐ Match nếu cả 2 đều có ít nhất 2 ký tự (thay vì 3)
+                    if (inputWordClean.length < 2 || serviceWordClean.length < 2) {
                       return false;
                     }
+                    // Match khi service word chứa input word HOẶC input word chứa service word
                     return serviceWordClean.includes(inputWordClean) || 
                            inputWordClean.includes(serviceWordClean);
                   });
@@ -204,7 +205,7 @@ class AIBookingService {
                 
                 // ⭐ QUAN TRỌNG: 
                 // - Nếu có 1 từ → match nếu có ít nhất 1 từ khớp
-                // - Nếu có 2+ từ → match nếu có ít nhất 2 từ khớp (hoặc 1 từ nhưng là từ quan trọng như "khám", "răng")
+                // - Nếu có 2+ từ → match nếu có ít nhất 1 từ khớp (giảm từ 2 xuống 1 để match "khám răng" với "Bọc răng")
                 // - Loại bỏ các từ chung chung
                 const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
                 
@@ -212,11 +213,10 @@ class AIBookingService {
                   // Chỉ có 1 từ → match nếu có ít nhất 1 từ có ý nghĩa khớp
                   return meaningfulMatches.length > 0;
                 } else {
-                  // Có 2+ từ → match nếu có ít nhất 2 từ khớp HOẶC 1 từ quan trọng khớp
-                  const importantWords = ['khám', 'răng', 'tổng', 'quát', 'định', 'kỳ', 'tim', 'mạch'];
-                  const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
-                  
-                  return meaningfulMatches.length >= 2 || (meaningfulMatches.length >= 1 && hasImportantMatch);
+                  // ⭐ Có 2+ từ → match nếu có ít nhất 1 từ khớp (giảm từ 2 xuống 1)
+                  // Điều này cho phép "khám răng" match với "Bọc răng" (chỉ có "răng" khớp)
+                  // Nhưng vẫn không match "khám tổng quát" với "Trồng răng hàm" (không có từ nào khớp)
+                  return meaningfulMatches.length >= 1;
                 }
               });
             }
