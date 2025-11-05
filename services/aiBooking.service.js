@@ -242,11 +242,13 @@ class AIBookingService {
           
           // ⭐ CỰC KỲ QUAN TRỌNG - VALIDATE WORKING HOURS TRƯỚC
           // Lấy working hours từ database nếu có doctorId, nếu không thì dùng mặc định
+          // ⚠️ LƯU Ý: Giá trị mặc định này chỉ dùng khi KHÔNG có doctorId hoặc KHÔNG query được database
+          // Trong thực tế, AI nên luôn query database để lấy workingHours chính xác
           let workingHours = {
-            morningStart: '07:00',
-            morningEnd: '12:00',
-            afternoonStart: '14:00',
-            afternoonEnd: '18:00'
+            morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
+            morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
+            afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
+            afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
           };
           
           // Nếu có doctorId, query DoctorSchedule để lấy workingHours từ database
@@ -300,7 +302,8 @@ class AIBookingService {
               conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi sáng. Vui lòng chọn thời gian trước ${time} hoặc chọn ca buổi chiều (từ ${workingHours.afternoonStart}).`,
               isEndTime: true,
               remainingMinutes: 0, // Hết ca
-              shift: 'Morning'
+              shift: 'Morning',
+              workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
           
@@ -310,7 +313,8 @@ class AIBookingService {
               conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi chiều. Vui lòng chọn thời gian trước ${time}.`,
               isEndTime: true,
               remainingMinutes: 0, // Hết ca
-              shift: 'Afternoon'
+              shift: 'Afternoon',
+              workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
           
@@ -321,7 +325,8 @@ class AIBookingService {
           if (!isInMorning && !isInAfternoon) {
             return {
               hasConflict: true,
-              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Vui lòng chọn thời gian trong khung giờ làm việc.`
+              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Vui lòng chọn thời gian trong khung giờ làm việc.`,
+              workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng trong error message
             };
           }
           
@@ -344,7 +349,8 @@ class AIBookingService {
             return { 
               hasConflict: false,
               remainingMinutes: remainingMinutes, // Thời gian còn lại trong ca
-              shift: currentShift // Ca hiện tại
+              shift: currentShift, // Ca hiện tại
+              workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
           
@@ -422,18 +428,21 @@ class AIBookingService {
               
               return {
                 hasConflict: true,
-                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`
+                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`,
+                workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
               };
             }
             
             return {
               hasConflict: true,
-              conflictMessage: 'Bạn đã có lịch khám vào khung giờ này. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!'
+              conflictMessage: 'Bạn đã có lịch khám vào khung giờ này. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!',
+              workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
           
           return { 
             hasConflict: false,
+            workingHours: workingHours, // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             remainingMinutes: remainingMinutes, // Thời gian còn lại trong ca
             shift: currentShift // Ca hiện tại (Morning hoặc Afternoon)
           };
@@ -450,7 +459,7 @@ class AIBookingService {
             .select('_id serviceName category durationMinutes price isPrepaid description')
             .sort({ category: 1, serviceName: 1 })
         .lean();
-          
+
           // ⭐ FILTER DỊCH VỤ THEO THỜI GIAN CÒN LẠI (nếu có maxDurationMinutes)
           let filteredServices = services;
           if (maxDurationMinutes && maxDurationMinutes > 0) {
@@ -750,7 +759,7 @@ class AIBookingService {
           if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
             service = await Service.findOne({ 
               _id: serviceIdStr, 
-              status: 'Active' 
+            status: 'Active' 
             })
             .select('_id serviceName category durationMinutes price isPrepaid description status')
             .lean();
@@ -882,19 +891,19 @@ class AIBookingService {
           // ✅ PRIORITY 4: Word-based matching (match theo TỪ) - chỉ khi input có nhiều từ
           // Nếu vẫn chưa có match và input có nhiều từ, thử word-based
           if (matchedDoctors.length === 0 && inputWords.length > 1) {
-            const wordMatches = doctors.filter(d => {
-              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-              const doctorWords = doctorNameClean.split(/\s+/);
+              const wordMatches = doctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                const doctorWords = doctorNameClean.split(/\s+/);
+                
+                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+                return inputWords.every(inputWord => 
+                  doctorWords.some(doctorWord => doctorWord === inputWord)
+                );
+              });
               
-              // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
-              return inputWords.every(inputWord => 
-                doctorWords.some(doctorWord => doctorWord === inputWord)
-              );
-            });
-            
-            // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
-            if (wordMatches.length > 0) {
-              matchedDoctors = wordMatches;
+              // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
+              if (wordMatches.length > 0) {
+                matchedDoctors = wordMatches;
             }
           }
           
@@ -963,12 +972,12 @@ class AIBookingService {
           
           // Nếu có nhiều bác sĩ available match → Trả về danh sách để user chọn
           if (availableMatchedDoctors.length > 1) {
-            return {
-              found: true,
-              multiple: true,
+          return {
+            found: true,
+            multiple: true,
               doctors: availableMatchedDoctors.map(d => ({
-                id: d._id.toString(),
-                name: d.fullName,
+              id: d._id.toString(),
+              name: d.fullName,
                 specialization: d.specialization || '',
                 email: d.email || '',
                 phoneNumber: d.phoneNumber || ''
@@ -1004,8 +1013,8 @@ class AIBookingService {
           if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
             doctor = await User.findOne({ 
               _id: doctorIdStr, 
-              role: 'Doctor',
-              status: 'Active' 
+            role: 'Doctor',
+            status: 'Active' 
             })
             .select('_id fullName specialization email phoneNumber status role')
             .lean();
@@ -1019,13 +1028,13 @@ class AIBookingService {
           
           if (!doctor) {
             return { valid: false, error: 'Doctor not found or inactive' };
-          }
+        }
           
           // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
           const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
           if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
             return { valid: false, error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
-          }
+        }
 
         return {
             valid: true, 
@@ -1107,10 +1116,10 @@ class AIBookingService {
           } else {
             // Check nếu serviceId là ObjectId hợp lệ
             if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
-              // Dùng serviceId trực tiếp (ObjectId)
+            // Dùng serviceId trực tiếp (ObjectId)
               service = await Service.findById(serviceIdStr)
                 .select('_id serviceName durationMinutes price isPrepaid category description')
-                .lean();
+              .lean();
             } else {
               // Nếu không phải ObjectId và không phải số → có thể là tên dịch vụ (sai)
               // Tìm dịch vụ theo tên
@@ -1182,10 +1191,10 @@ class AIBookingService {
           } else {
             // Check nếu doctorId là ObjectId hợp lệ
             if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
-              // Dùng doctorId trực tiếp (ObjectId)
+            // Dùng doctorId trực tiếp (ObjectId)
               doctor = await User.findById(doctorIdStr)
                 .select('_id fullName specialization email phoneNumber status role')
-                .lean();
+              .lean();
             } else {
               // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
               // Tìm bác sĩ theo tên
@@ -1234,10 +1243,10 @@ class AIBookingService {
           
           // Lấy working hours từ schedule (lấy từ schedule đầu tiên, vì tất cả đều có cùng workingHours)
           const workingHours = schedules[0].workingHours || {
-            morningStart: '07:00',
-            morningEnd: '12:00',
-            afternoonStart: '14:00',
-            afternoonEnd: '18:00'
+            morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
+            morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
+            afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
+            afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
           };
           
           // QUAN TRỌNG: Query Timeslots trực tiếp để lấy tất cả slots đã đặt (Reserved/Booked)
@@ -1530,7 +1539,7 @@ class AIBookingService {
               if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
                 service = await Service.findById(serviceIdStr)
                   .select('_id serviceName durationMinutes category price isPrepaid status description')
-                  .lean();
+                .lean();
               } else {
                 // Nếu không phải ObjectId và không phải số → có thể là tên dịch vụ (sai)
                 // Tìm dịch vụ theo tên
@@ -1578,7 +1587,7 @@ class AIBookingService {
               if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
                 doctor = await User.findById(doctorIdStr)
                   .select('_id fullName specialization role status email phoneNumber')
-                  .lean();
+                .lean();
               } else {
                 // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
                 // Tìm bác sĩ theo tên
@@ -1739,10 +1748,10 @@ class AIBookingService {
             // hours và minutes đã được parse từ input (VN time)
             // Lấy working hours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
             const workingHours = schedules[0]?.workingHours || {
-              morningStart: '07:00',
-              morningEnd: '12:00',
-              afternoonStart: '14:00',
-              afternoonEnd: '18:00'
+              morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
+              morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
+              afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
+              afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
             };
             
             const schedule = schedules.find(s => {
@@ -1768,7 +1777,7 @@ class AIBookingService {
             if (!schedule) {
               // Lấy working hours từ schedule đầu tiên để hiển thị trong error message
               const workingHours = schedules[0]?.workingHours || {
-                morningStart: '07:00',
+                morningStart: '08:00',
                 morningEnd: '12:00',
                 afternoonStart: '14:00',
                 afternoonEnd: '18:00'
@@ -2084,9 +2093,9 @@ class AIBookingService {
         response = await this.retryWithBackoff(async () => {
           return await openai.chat.completions.create({
             model: AI_MODEL, // ⭐ Dùng model từ config (gpt-4o-mini)
-            messages: messages,
-            tools: toolsConfig.tools,
-            tool_choice: "auto", // AI tự quyết định có gọi function hay không
+        messages: messages,
+        tools: toolsConfig.tools,
+        tool_choice: "auto", // AI tự quyết định có gọi function hay không
             max_tokens: 1000, // ⭐ Tối ưu cho tốc độ: giảm xuống 1000 tokens
             temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
             top_p: 0.9,
@@ -2182,9 +2191,9 @@ class AIBookingService {
           response = await this.retryWithBackoff(async () => {
             return await openai.chat.completions.create({
               model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-4o-mini) cho consistency
-              messages: messages,
-              tools: toolsConfig.tools,
-              tool_choice: "auto",
+          messages: messages,
+          tools: toolsConfig.tools,
+          tool_choice: "auto",
               max_tokens: 1000, // ⭐ Tối ưu cho tốc độ
               temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
               top_p: 0.9,
@@ -2198,8 +2207,8 @@ class AIBookingService {
           if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
             throw new Error('Invalid response from OpenAI API in iteration');
           }
-          
-          assistantMessage = response.choices[0].message;
+        
+        assistantMessage = response.choices[0].message;
         } catch (iterationError) {
           console.error('❌ [AI Booking] Error in iteration:', iterationError);
           // Nếu có lỗi trong iteration, break loop và trả về error message từ function results
