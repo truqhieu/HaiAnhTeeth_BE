@@ -1244,11 +1244,32 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       status: 'Active'
     }).select('_id fullName email');
 
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+    const doctorStatuses = await Doctor.find({
+      doctorUserId: { $in: doctors.map(d => d._id) }
+    }).select('doctorUserId status');
+
+    // Tạo Map để lookup nhanh
+    const doctorStatusMap = new Map();
+    doctorStatuses.forEach(doc => {
+      doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+    });
+
+    // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+    const availableDoctorsUser = doctors.filter(doctor => {
+      const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+      // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
+      if (!doctorStatus) return true;
+      // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+      return doctorStatus === 'Available' || doctorStatus === 'Busy';
+    });
+
     console.log(`🔍 Found ${doctors.length} active doctors`);
+    console.log(`🔍 After filtering (removing On Leave/Inactive): ${availableDoctorsUser.length} doctors`);
 
     const availableDoctors = [];
 
-    for (const doctor of doctors) {
+    for (const doctor of availableDoctorsUser) {
       // Bỏ qua bác sĩ hiện tại
       if (doctor._id.toString() === appointment.doctorUserId._id.toString()) {
         continue;
