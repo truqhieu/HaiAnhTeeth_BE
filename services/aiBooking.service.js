@@ -147,26 +147,69 @@ class AIBookingService {
           // Fuzzy matching by name
           const inputLower = serviceName.toLowerCase().trim();
           
-          // ✅ PRIORITY 1: Exact match (case-insensitive)
-          let matchedServices = servicesWithPrice.filter(s => 
-            s.serviceName.toLowerCase() === inputLower
-          );
+          // ⭐ Mapping từ đồng nghĩa cho "khám tổng quát"
+          const synonymMapping = {
+            'khám tổng quát': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám', 'khám sức khỏe', 'kiểm tra sức khỏe'],
+            'khám sức khỏe': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám tổng quát'],
+            'kiểm tra sức khỏe': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám tổng quát'],
+            'tư vấn': ['tu van', 'thay đầu cho người mới', 'khám tổng quát'],
+            'tu van': ['tư vấn', 'thay đầu cho người mới', 'khám tổng quát']
+          };
           
-          // ✅ PRIORITY 2: Contains match
-          if (matchedServices.length === 0) {
-            matchedServices = servicesWithPrice.filter(s => 
-              s.serviceName.toLowerCase().includes(inputLower) ||
-              inputLower.includes(s.serviceName.toLowerCase())
-            );
+          // Normalize input để check mapping
+          const normalizedInput = inputLower.replace(/[^\w\s]/g, '').trim();
+          let searchTerms = [normalizedInput];
+          
+          // Thêm các từ đồng nghĩa vào search terms
+          if (synonymMapping[normalizedInput]) {
+            searchTerms = searchTerms.concat(synonymMapping[normalizedInput]);
           }
           
-          // ✅ PRIORITY 3: Word-based matching
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedServices = servicesWithPrice.filter(s => {
+            const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
+            return searchTerms.some(term => serviceNameNormalized === term);
+          });
+          
+          // ✅ PRIORITY 2: Contains match với các từ đồng nghĩa
           if (matchedServices.length === 0) {
-            const inputWords = inputLower.split(/\s+/).filter(w => w.length > 0);
+            matchedServices = servicesWithPrice.filter(s => {
+              const serviceNameLower = s.serviceName.toLowerCase();
+              const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
+              
+              return searchTerms.some(term => {
+                // Check contains (2 chiều)
+                return serviceNameNormalized.includes(term) || 
+                       term.includes(serviceNameNormalized) ||
+                       serviceNameLower.includes(term) ||
+                       term.includes(serviceNameLower);
+              });
+            });
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching với các từ đồng nghĩa
+          if (matchedServices.length === 0) {
+            const allInputWords = new Set();
+            searchTerms.forEach(term => {
+              term.split(/\s+/).forEach(word => {
+                if (word.length > 0) {
+                  allInputWords.add(word);
+                }
+              });
+            });
+            
             matchedServices = servicesWithPrice.filter(s => {
               const serviceWords = s.serviceName.toLowerCase().split(/\s+/);
-              return inputWords.some(inputWord => 
-                serviceWords.some(serviceWord => serviceWord.includes(inputWord) || inputWord.includes(serviceWord))
+              return Array.from(allInputWords).some(inputWord => 
+                serviceWords.some(serviceWord => {
+                  // Remove diacritics và special chars để so sánh
+                  const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
+                  const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                  return serviceWordClean.includes(inputWordClean) || 
+                         inputWordClean.includes(serviceWordClean) ||
+                         serviceWord.includes(inputWord) || 
+                         inputWord.includes(serviceWord);
+                })
               );
             });
           }
