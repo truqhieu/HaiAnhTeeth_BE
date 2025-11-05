@@ -29,6 +29,51 @@ const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
 class AIBookingService {
   /**
+   * Helper function để lấy workingHours từ database cho một bác sĩ và ngày cụ thể
+   * @param {string|ObjectId} doctorUserId - ID của bác sĩ
+   * @param {Date|string} date - Ngày cần lấy workingHours (Date object hoặc string YYYY-MM-DD)
+   * @returns {Promise<Object|null>} { morningStart, morningEnd, afternoonStart, afternoonEnd } hoặc null nếu không tìm thấy
+   */
+  async getWorkingHoursFromDatabase(doctorUserId, date) {
+    if (!doctorUserId || !mongoose.Types.ObjectId.isValid(doctorUserId)) {
+      return null;
+    }
+
+    try {
+      const searchDate = date instanceof Date ? date : new Date(date);
+      searchDate.setHours(0, 0, 0, 0);
+
+      const schedules = await DoctorSchedule.find({
+        doctorUserId: doctorUserId,
+        date: searchDate,
+        status: 'Available'
+      })
+      .select('workingHours')
+      .lean();
+
+      if (schedules.length === 0) {
+        console.log(`⚠️ [getWorkingHoursFromDatabase] No schedules found for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}`);
+        return null;
+      }
+
+      // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
+      const workingHours = schedules[0]?.workingHours;
+      
+      if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || 
+          !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+        console.log(`⚠️ [getWorkingHoursFromDatabase] No workingHours in schedule for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}`);
+        return null;
+      }
+
+      console.log(`✅ [getWorkingHoursFromDatabase] Found workingHours from database for doctorId ${doctorUserId}:`, workingHours);
+      return workingHours;
+    } catch (error) {
+      console.error(`❌ [getWorkingHoursFromDatabase] Error querying DoctorSchedule:`, error.message);
+      return null;
+    }
+  }
+
+  /**
    * Helper function để resolve serviceId từ nhiều định dạng:
    * - ObjectId: Trả về ObjectId trực tiếp
    * - Số thứ tự: Tìm theo index trong danh sách dịch vụ
@@ -385,44 +430,23 @@ class AIBookingService {
         case 'check_appointment_conflict': {
           const { date, time, doctorId } = validatedArgs;
           
-          // ⭐ CỰC KỲ QUAN TRỌNG - VALIDATE WORKING HOURS TRƯỚC
-          // Lấy working hours từ database nếu có doctorId, nếu không thì dùng mặc định
-          // ⚠️ LƯU Ý: Giá trị mặc định này chỉ dùng khi KHÔNG có doctorId hoặc KHÔNG query được database
-          // Trong thực tế, AI nên luôn query database để lấy workingHours chính xác
-          let workingHours = {
-            morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
-            morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
-            afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
-            afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
-          };
+          // ⭐ CỰC KỲ QUAN TRỌNG - LUÔN LẤY WORKING HOURS TỪ DATABASE
+          // Nếu không có doctorId hoặc không query được, trả về error thay vì dùng mặc định
+          let workingHours = null;
           
-          // Nếu có doctorId, query DoctorSchedule để lấy workingHours từ database
           if (doctorId && mongoose.Types.ObjectId.isValid(doctorId)) {
-            try {
-              const searchDate = new Date(date);
-              searchDate.setHours(0, 0, 0, 0);
-              
-              const schedules = await DoctorSchedule.find({
-                doctorUserId: doctorId,
-                date: searchDate,
-                status: 'Available'
-              })
-              .select('workingHours')
-              .lean();
-              
-              console.log(`[check_appointment_conflict] Query DoctorSchedule for doctorId ${doctorId}, date ${date}:`, schedules.length, 'schedules found');
-              
-              // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
-              if (schedules.length > 0 && schedules[0].workingHours) {
-                workingHours = schedules[0].workingHours;
-                console.log(`[check_appointment_conflict] ✅ Using workingHours from database:`, workingHours);
-              } else {
-                console.log(`[check_appointment_conflict] ⚠️ No schedules found or no workingHours, using default:`, workingHours);
-              }
-            } catch (error) {
-              // Nếu lỗi khi query, dùng working hours mặc định
-              console.log(`[check_appointment_conflict] Error querying DoctorSchedule for doctorId ${doctorId}:`, error.message);
-            }
+            workingHours = await this.getWorkingHoursFromDatabase(doctorId, date);
+          }
+          
+          // Nếu không có workingHours từ database, trả về error
+          if (!workingHours) {
+            return {
+              hasConflict: true,
+              conflictMessage: doctorId 
+                ? `Không tìm thấy lịch làm việc của bác sĩ vào ngày ${date}. Vui lòng chọn ngày khác hoặc bác sĩ khác.`
+                : `Vui lòng chọn bác sĩ trước khi kiểm tra thời gian.`,
+              workingHours: null
+            };
           }
           
           // Parse time và working hours
@@ -1341,13 +1365,13 @@ class AIBookingService {
             return { error: `Bác sĩ này không có lịch làm việc vào ngày ${date}` };
           }
           
-          // Lấy working hours từ schedule (lấy từ schedule đầu tiên, vì tất cả đều có cùng workingHours)
-          const workingHours = schedules[0].workingHours || {
-            morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
-            morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
-            afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
-            afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
-          };
+          // ⭐ LUÔN LẤY WORKING HOURS TỪ DATABASE - KHÔNG DÙNG MẶC ĐỊNH
+          const workingHours = schedules[0]?.workingHours;
+          
+          if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || 
+              !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+            return { error: `Không tìm thấy thông tin khung giờ làm việc của bác sĩ vào ngày ${date}. Vui lòng kiểm tra lại.` };
+          }
           
           // QUAN TRỌNG: Query Timeslots trực tiếp để lấy tất cả slots đã đặt (Reserved/Booked)
           // Điều này chính xác hơn vì Timeslots là nguồn truth về các slot đã được đặt
@@ -1809,13 +1833,13 @@ class AIBookingService {
             
             // Find schedule that matches the time slot (morning or afternoon)
             // hours và minutes đã được parse từ input (VN time)
-            // Lấy working hours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
-            const workingHours = schedules[0]?.workingHours || {
-              morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
-              morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
-              afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
-              afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
-            };
+            // ⭐ LUÔN LẤY WORKING HOURS TỪ DATABASE - KHÔNG DÙNG MẶC ĐỊNH
+            const workingHours = schedules[0]?.workingHours;
+            
+            if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || 
+                !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+              return { error: `Không tìm thấy thông tin khung giờ làm việc của bác sĩ vào ngày này. Vui lòng kiểm tra lại.` };
+            }
             
             const schedule = schedules.find(s => {
               
@@ -1838,13 +1862,15 @@ class AIBookingService {
             });
             
             if (!schedule) {
-              // Lấy working hours từ schedule đầu tiên để hiển thị trong error message
-              const workingHours = schedules[0]?.workingHours || {
-                morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
-                morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
-                afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
-                afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
-              };
+              // ⭐ LUÔN LẤY WORKING HOURS TỪ DATABASE - KHÔNG DÙNG MẶC ĐỊNH
+              const workingHours = schedules[0]?.workingHours;
+              
+              if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || 
+                  !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+                return { 
+                  error: `Không tìm thấy thông tin khung giờ làm việc của bác sĩ vào ngày này. Vui lòng kiểm tra lại.` 
+                };
+              }
               
               return { 
                 error: `Khung giờ ${time} không nằm trong lịch làm việc của bác sĩ. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn thời gian trong khung giờ làm việc của bác sĩ.` 
