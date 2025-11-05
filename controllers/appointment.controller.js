@@ -1277,17 +1277,41 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
 
       // Kiểm tra xem bác sĩ có lịch làm việc trong thời gian này không
       const DoctorSchedule = require('../models/doctorSchedule.model');
-      const doctorSchedule = await DoctorSchedule.findOne({
+      const ScheduleHelper = require('../utils/scheduleHelper');
+      
+      // Chuẩn bị ngày tìm kiếm (normalize về 00:00:00)
+      const searchDate = new Date(startDateTime);
+      searchDate.setHours(0, 0, 0, 0);
+      
+      // ⭐ Đảm bảo bác sĩ có schedule cho ngày này (tạo nếu chưa có)
+      let doctorSchedule = await DoctorSchedule.findOne({
         doctorUserId: doctor._id,
-        date: {
-          $gte: new Date(startDateTime.getFullYear(), startDateTime.getMonth(), startDateTime.getDate()),
-          $lt: new Date(startDateTime.getFullYear(), startDateTime.getMonth(), startDateTime.getDate() + 1)
-        },
+        date: searchDate,
         status: 'Available'
       });
 
+      // Nếu không có schedule Available → kiểm tra xem có schedule nào không
       if (!doctorSchedule) {
-        console.log(`   ❌ Doctor ${doctor.fullName} has no schedule for this date`);
+        const anySchedule = await DoctorSchedule.findOne({
+          doctorUserId: doctor._id,
+          date: searchDate
+        });
+
+        // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
+        if (!anySchedule) {
+          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có schedule, tự động tạo...`);
+          await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+          // Tìm lại schedule sau khi tạo
+          doctorSchedule = await DoctorSchedule.findOne({
+            doctorUserId: doctor._id,
+            date: searchDate,
+            status: 'Available'
+          });
+        }
+      }
+
+      if (!doctorSchedule) {
+        console.log(`   ❌ Doctor ${doctor.fullName} has no Available schedule for this date`);
         continue;
       }
 
