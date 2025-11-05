@@ -146,71 +146,52 @@ class AIBookingService {
           
           // Fuzzy matching by name
           const inputLower = serviceName.toLowerCase().trim();
-          
-          // ⭐ Mapping từ đồng nghĩa cho "khám tổng quát"
-          const synonymMapping = {
-            'khám tổng quát': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám', 'khám sức khỏe', 'kiểm tra sức khỏe'],
-            'khám sức khỏe': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám tổng quát'],
-            'kiểm tra sức khỏe': ['thay đầu cho người mới', 'tu van', 'tư vấn', 'khám tổng quát'],
-            'tư vấn': ['tu van', 'thay đầu cho người mới', 'khám tổng quát'],
-            'tu van': ['tư vấn', 'thay đầu cho người mới', 'khám tổng quát']
-          };
-          
-          // Normalize input để check mapping
           const normalizedInput = inputLower.replace(/[^\w\s]/g, '').trim();
-          let searchTerms = [normalizedInput];
           
-          // Thêm các từ đồng nghĩa vào search terms
-          if (synonymMapping[normalizedInput]) {
-            searchTerms = searchTerms.concat(synonymMapping[normalizedInput]);
-          }
-          
-          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          // ✅ PRIORITY 1: Exact match (case-insensitive) - CHỈ match chính xác tên dịch vụ
           let matchedServices = servicesWithPrice.filter(s => {
             const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
-            return searchTerms.some(term => serviceNameNormalized === term);
+            return serviceNameNormalized === normalizedInput;
           });
           
-          // ✅ PRIORITY 2: Contains match với các từ đồng nghĩa
+          // ✅ PRIORITY 2: Contains match - chỉ khi không có exact match
           if (matchedServices.length === 0) {
             matchedServices = servicesWithPrice.filter(s => {
               const serviceNameLower = s.serviceName.toLowerCase();
               const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
               
-              return searchTerms.some(term => {
-                // Check contains (2 chiều)
-                return serviceNameNormalized.includes(term) || 
-                       term.includes(serviceNameNormalized) ||
-                       serviceNameLower.includes(term) ||
-                       term.includes(serviceNameLower);
-              });
+              // Chỉ match nếu input chứa trong service name HOẶC service name chứa trong input
+              // Và input phải có ít nhất 3 ký tự để tránh match quá rộng
+              if (normalizedInput.length < 3) return false;
+              
+              return serviceNameNormalized.includes(normalizedInput) || 
+                     normalizedInput.includes(serviceNameNormalized);
             });
           }
           
-          // ✅ PRIORITY 3: Word-based matching với các từ đồng nghĩa
+          // ✅ PRIORITY 3: Word-based matching - chỉ khi không có exact/contains match
           if (matchedServices.length === 0) {
-            const allInputWords = new Set();
-            searchTerms.forEach(term => {
-              term.split(/\s+/).forEach(word => {
-                if (word.length > 0) {
-                  allInputWords.add(word);
-                }
-              });
-            });
+            const inputWords = normalizedInput.split(/\s+/).filter(w => w.length > 2); // Loại bỏ từ 1-2 ký tự
             
             matchedServices = servicesWithPrice.filter(s => {
               const serviceWords = s.serviceName.toLowerCase().split(/\s+/);
-              return Array.from(allInputWords).some(inputWord => 
-                serviceWords.some(serviceWord => {
-                  // Remove diacritics và special chars để so sánh
+              
+              // Match các từ có ý nghĩa (ít nhất 3 ký tự)
+              const matchedWords = inputWords.filter(inputWord => {
+                const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                return serviceWords.some(serviceWord => {
                   const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
-                  const inputWordClean = inputWord.replace(/[^\w]/g, '');
                   return serviceWordClean.includes(inputWordClean) || 
-                         inputWordClean.includes(serviceWordClean) ||
-                         serviceWord.includes(inputWord) || 
-                         inputWord.includes(serviceWord);
-                })
-              );
+                         inputWordClean.includes(serviceWordClean);
+                });
+              });
+              
+              // Loại bỏ các từ chung chung
+              const commonWords = ['cho', 'và', 'của', 'có', 'là', 'để', 'với', 'từ', 'trong', 'theo', 'người', 'mới'];
+              const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
+              
+              // Chỉ match nếu có ít nhất 1 từ có ý nghĩa khớp
+              return meaningfulMatches.length > 0;
             });
           }
           
