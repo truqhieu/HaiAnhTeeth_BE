@@ -16,21 +16,185 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// ⭐ AI Model Configuration - TẤT CẢ API calls đều dùng model này
+const AI_MODEL = 'gpt-5-mini'; 
+
 // Load function tools configuration
 const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
 const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
 class AIBookingService {
   /**
-   * Execute function call từ OpenAI
+   * Retry helper với exponential backoff
+   * @param {Function} fn - Function cần retry
+   * @param {number} maxRetries - Số lần retry tối đa
+   * @param {number} baseDelay - Base delay (ms)
+   * @returns {Promise} Result của function
+   */
+  async retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        
+        // Không retry nếu là lỗi validation hoặc user error
+        if (error.status === 400 || error.status === 422) {
+          throw error;
+        }
+        
+        // Nếu đã hết retry, throw error
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Exponential backoff: delay = baseDelay * 2^attempt
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`⚠️ [Retry] Attempt ${attempt + 1}/${maxRetries} failed, retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Validate function arguments trước khi execute
+   * @param {string} functionName - Tên function
+   * @param {Object} functionArgs - Arguments
+   * @returns {Object} Validated arguments
+   */
+  validateFunctionArgs(functionName, functionArgs) {
+    const validationRules = {
+      find_service_by_name: {
+        serviceName: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('serviceName phải là chuỗi không rỗng');
+          }
+          return val.trim();
+        }
+      },
+      find_doctor_by_name: {
+        doctorName: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('doctorName phải là chuỗi không rỗng');
+          }
+          return val.trim();
+        }
+      },
+      validate_service: {
+        serviceId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('serviceId không hợp lệ');
+          }
+          return val.trim();
+        }
+      },
+      validate_doctor: {
+        doctorId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('doctorId không hợp lệ');
+          }
+          return val.trim();
+        }
+      },
+      get_available_slots: {
+        doctorId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('doctorId không hợp lệ');
+          }
+          return val.trim();
+        },
+        date: (val) => {
+          if (!val || typeof val !== 'string') {
+            throw new Error('date phải là chuỗi format YYYY-MM-DD');
+          }
+          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+          if (!dateRegex.test(val)) {
+            throw new Error('date phải có format YYYY-MM-DD');
+          }
+          return val.trim();
+        },
+        serviceId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('serviceId không hợp lệ');
+          }
+          return val.trim();
+        }
+      },
+      create_appointment: {
+        serviceId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('serviceId không hợp lệ');
+          }
+          return val.trim();
+        },
+        doctorId: (val) => {
+          if (!val || typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('doctorId không hợp lệ');
+          }
+          return val.trim();
+        },
+        date: (val) => {
+          if (!val || typeof val !== 'string') {
+            throw new Error('date phải là chuỗi format YYYY-MM-DD');
+          }
+          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+          if (!dateRegex.test(val)) {
+            throw new Error('date phải có format YYYY-MM-DD');
+          }
+          return val.trim();
+        },
+        time: (val) => {
+          if (!val || typeof val !== 'string') {
+            throw new Error('time phải là chuỗi format HH:mm');
+          }
+          const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeRegex.test(val)) {
+            throw new Error('time phải có format HH:mm');
+          }
+          return val.trim();
+        }
+      }
+    };
+
+    const rules = validationRules[functionName];
+    if (!rules) {
+      return functionArgs; // Không có validation rules, return as is
+    }
+
+    const validated = {};
+    for (const [key, validator] of Object.entries(rules)) {
+      if (functionArgs.hasOwnProperty(key)) {
+        validated[key] = validator(functionArgs[key]);
+      } else if (validationRules[functionName][key]) {
+        // Required field missing
+        throw new Error(`Thiếu tham số bắt buộc: ${key}`);
+      }
+    }
+
+    // Copy các fields không cần validate
+    Object.keys(functionArgs).forEach(key => {
+      if (!validated.hasOwnProperty(key)) {
+        validated[key] = functionArgs[key];
+      }
+    });
+
+    return validated;
+  }
+
+  /**
+   * Execute function call từ OpenAI với validation và retry
    */
   async executeFunction(functionName, functionArgs, patientUserId) {
     console.log(`🔧 [AI] Executing function: ${functionName}`, functionArgs);
     
     try {
+      // Validate arguments trước
+      const validatedArgs = this.validateFunctionArgs(functionName, functionArgs);
       switch (functionName) {
         case 'get_services': {
-          const { category } = functionArgs;
+          const { category } = validatedArgs;
           const query = { status: 'Active' };
           if (category) {
             query.category = category;
@@ -63,7 +227,7 @@ class AIBookingService {
         }
         
         case 'get_service_info': {
-          const { serviceId } = functionArgs;
+          const { serviceId } = validatedArgs;
           
           if (!serviceId) {
             return { error: 'Missing required parameter: serviceId' };
@@ -95,7 +259,7 @@ class AIBookingService {
         }
         
         case 'find_service_by_name': {
-          const { serviceName, category } = functionArgs;
+          const { serviceName, category } = validatedArgs;
           
           if (!serviceName) {
             return { error: 'Missing serviceName parameter' };
@@ -157,21 +321,29 @@ class AIBookingService {
             return serviceNameNormalized === normalizedInput;
           });
           
-          // ✅ PRIORITY 2: Contains match - CHỈ khi input có ít nhất 3 ký tự và là từ có ý nghĩa
+          // ✅ PRIORITY 2: Contains match - CHỈ khi input có ít nhất 3 ký tự và service name chứa input
+          // ⭐ CHẶT CHẼ: Chỉ match khi service name chứa toàn bộ input (hoặc input là một phần của service name)
+          // Ví dụ: "khám tổng quát" chỉ match với "Khám tổng quát định kỳ", không match với "Trồng răng hàm"
           if (matchedServices.length === 0 && normalizedInput.length >= 3) {
             matchedServices = servicesWithPrice.filter(s => {
               const serviceNameLower = s.serviceName.toLowerCase();
               const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
               
-              // Chỉ match nếu service name chứa input (không match ngược lại để tránh quá rộng)
+              // ⭐ Chỉ match nếu service name chứa input (không match ngược lại)
+              // Và input phải có ít nhất 2 từ để tránh match quá rộng
+              const inputWordCount = normalizedInput.split(/\s+/).filter(w => w.length >= 2).length;
+              if (inputWordCount < 2) {
+                return false; // Nếu input chỉ có 1 từ, bỏ qua contains match, dùng word-based matching
+              }
+              
               return serviceNameNormalized.includes(normalizedInput);
             });
           }
           
-          // ✅ PRIORITY 3: Word-based matching - CHỈ match các từ có ý nghĩa (ít nhất 3 ký tự, không phải từ chung chung)
+          // ✅ PRIORITY 3: Word-based matching - CHỈ match các từ có ý nghĩa (ít nhất 2 ký tự, không phải từ chung chung)
           if (matchedServices.length === 0) {
             const inputWords = normalizedInput.split(/\s+/)
-              .filter(w => w.length >= 2) // ⭐ Giảm xuống 2 ký tự để match "răng" (4 ký tự)
+              .filter(w => w.length >= 2) // Lấy từ có ít nhất 2 ký tự
               .filter(w => !commonWords.includes(w)); // Loại bỏ từ chung chung
             
             // Phải có ít nhất 1 từ có ý nghĩa mới match
@@ -185,16 +357,18 @@ class AIBookingService {
                 const matchedWords = inputWords.filter(inputWord => {
                   const inputWordClean = inputWord.replace(/[^\w]/g, '');
                   
-                  // Check 1: Match với từng từ trong service name
+                  // Check 1: Match với từng từ trong service name (EXACT match hoặc contains)
                   const wordMatch = serviceWords.some(serviceWord => {
                     const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
-                    // ⭐ Match nếu cả 2 đều có ít nhất 2 ký tự (thay vì 3)
+                    // Chỉ match nếu cả 2 đều có ít nhất 2 ký tự
                     if (inputWordClean.length < 2 || serviceWordClean.length < 2) {
                       return false;
                     }
-                    // Match khi service word chứa input word HOẶC input word chứa service word
-                    return serviceWordClean.includes(inputWordClean) || 
-                           inputWordClean.includes(serviceWordClean);
+                    // ⭐ EXACT match hoặc contains (không match ngược lại để tránh quá rộng)
+                    // Ví dụ: "răng" match với "răng" hoặc "răng" match với "răng hàm" (service chứa input)
+                    // Nhưng KHÔNG match "tổng" với "trồng" (vì "trồng" không chứa "tổng")
+                    return serviceWordClean === inputWordClean || 
+                           serviceWordClean.includes(inputWordClean);
                   });
                   
                   // Check 2: Match với toàn bộ service name (để match "khám tổng quát" với "Khám tổng quát định kỳ")
@@ -204,19 +378,23 @@ class AIBookingService {
                 });
                 
                 // ⭐ QUAN TRỌNG: 
-                // - Nếu có 1 từ → match nếu có ít nhất 1 từ khớp
-                // - Nếu có 2+ từ → match nếu có ít nhất 1 từ khớp (giảm từ 2 xuống 1 để match "khám răng" với "Bọc răng")
                 // - Loại bỏ các từ chung chung
                 const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
                 
                 if (inputWords.length === 1) {
                   // Chỉ có 1 từ → match nếu có ít nhất 1 từ có ý nghĩa khớp
                   return meaningfulMatches.length > 0;
+                } else if (inputWords.length === 2) {
+                  // ⭐ Có 2 từ → match nếu có ít nhất 1 từ khớp (để "khám răng" match với "Bọc răng")
+                  // Nhưng chỉ match nếu từ đó là từ quan trọng (như "răng", "khám")
+                  const importantWords = ['khám', 'răng', 'tim', 'mạch', 'tổng', 'quát', 'định', 'kỳ'];
+                  const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
+                  return meaningfulMatches.length >= 1 && hasImportantMatch;
                 } else {
-                  // ⭐ Có 2+ từ → match nếu có ít nhất 1 từ khớp (giảm từ 2 xuống 1)
-                  // Điều này cho phép "khám răng" match với "Bọc răng" (chỉ có "răng" khớp)
-                  // Nhưng vẫn không match "khám tổng quát" với "Trồng răng hàm" (không có từ nào khớp)
-                  return meaningfulMatches.length >= 1;
+                  // ⭐ Có 3+ từ → match nếu có ít nhất 2 từ khớp (để tránh match sai)
+                  // Ví dụ: "khám tổng quát" → cần ít nhất 2 trong 3 từ khớp
+                  // Điều này đảm bảo "khám tổng quát" KHÔNG match với "Trồng răng hàm" (không có từ nào khớp)
+                  return meaningfulMatches.length >= 2;
                 }
               });
             }
@@ -277,7 +455,7 @@ class AIBookingService {
         }
         
         case 'validate_service': {
-          const { serviceId } = functionArgs;
+          const { serviceId } = validatedArgs;
           
           if (!serviceId) {
             return { valid: false, error: 'Missing serviceId' };
@@ -315,7 +493,7 @@ class AIBookingService {
         }
         
         case 'find_doctor_by_name': {
-          const { doctorName } = functionArgs;
+          const { doctorName } = validatedArgs;
           
           if (!doctorName) {
             return { error: 'Missing doctorName parameter' };
@@ -438,7 +616,7 @@ class AIBookingService {
         }
         
         case 'validate_doctor': {
-          const { doctorId } = functionArgs;
+          const { doctorId } = validatedArgs;
           
           if (!doctorId) {
             return { valid: false, error: 'Missing doctorId' };
@@ -487,7 +665,7 @@ class AIBookingService {
         }
         
         case 'get_available_slots': {
-          const { doctorId, date, serviceId } = functionArgs;
+          const { doctorId, date, serviceId } = validatedArgs;
           
           if (!doctorId || !date || !serviceId) {
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
@@ -838,7 +1016,7 @@ class AIBookingService {
         }
         
         case 'create_appointment': {
-          const { serviceId, doctorId, date, time, notes } = functionArgs;
+          const { serviceId, doctorId, date, time, notes } = validatedArgs;
           
           if (!serviceId || !doctorId || !date || !time) {
             return { error: 'Vui lòng nhập đầy đủ thông tin để đặt lịch.' };
@@ -1159,11 +1337,56 @@ class AIBookingService {
   }
 
   /**
+   * ⭐ Preprocess user input để tăng độ chính xác
+   * - Normalize text
+   * - Extract intent
+   * - Fix common typos
+   */
+  preprocessUserInput(userPrompt) {
+    if (!userPrompt || typeof userPrompt !== 'string') {
+      return userPrompt;
+    }
+    
+    let processed = userPrompt.trim();
+    
+    // Normalize common variations
+    const normalizations = {
+      // Ngày tháng
+      'ngày mai': 'mai',
+      'sáng mai': 'mai buổi sáng',
+      'chiều mai': 'mai buổi chiều',
+      // Dịch vụ
+      'khám răng': 'khám răng',
+      'đặt lịch': 'đặt lịch',
+      // Bác sĩ
+      'bs ': 'bác sĩ ',
+      'bac si ': 'bác sĩ ',
+      // Số thứ tự
+      'số ': '',
+      'số': '',
+    };
+    
+    // Apply normalizations
+    Object.entries(normalizations).forEach(([old, replacement]) => {
+      processed = processed.replace(new RegExp(old, 'gi'), replacement);
+    });
+    
+    // Remove extra spaces
+    processed = processed.replace(/\s+/g, ' ').trim();
+    
+    return processed;
+  }
+
+  /**
    * 🆕 Chat với AI sử dụng Function Calling (linh hoạt như ChatGPT)
    */
   async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
     try {
       console.log('🤖 [AI Function Calling] Starting chat...');
+      
+      // ⭐ Preprocess user input để tăng độ chính xác
+      const processedPrompt = this.preprocessUserInput(userPrompt);
+      console.log(`📝 [Preprocessing] Original: "${userPrompt}" → Processed: "${processedPrompt}"`);
       
       // Prepare date context
       const today = new Date();
@@ -1181,19 +1404,27 @@ class AIBookingService {
       const messages = [
         { role: "system", content: systemPrompt },
         ...conversationHistory,
-        { role: "user", content: userPrompt }
+        { role: "user", content: processedPrompt } // ⭐ Dùng processed prompt
       ];
       
       console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI with ${toolsConfig.tools.length} tools`);
       
-      // Call OpenAI with function calling
-      let response = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: messages,
-        tools: toolsConfig.tools,
-        tool_choice: "auto", // AI tự quyết định có gọi function hay không
-        temperature: 0.7 // Tăng để AI linh hoạt hơn
-      });
+      // Call OpenAI with function calling (với retry logic)
+      // ⭐ Tối ưu parameters cho độ chính xác cao
+      let response = await this.retryWithBackoff(async () => {
+        return await openai.chat.completions.create({
+          model: AI_MODEL, // ⭐ Dùng model từ config (gpt-5-mini)
+          messages: messages,
+          tools: toolsConfig.tools,
+          tool_choice: "auto", // AI tự quyết định có gọi function hay không
+          temperature: 0.2, // ⭐ Giảm xuống 0.2 để tăng độ chính xác (deterministic hơn)
+          top_p: 0.9, // ⭐ Nucleus sampling - chỉ xem xét 90% tokens có xác suất cao nhất
+          frequency_penalty: 0.3, // ⭐ Giảm lặp lại từ/cụm từ (tăng tính đa dạng)
+          presence_penalty: 0.2, // ⭐ Khuyến khích đề cập đến các chủ đề mới
+          max_tokens: 2500, // ⭐ Tăng lên để đảm bảo đủ tokens cho response chi tiết
+          timeout: 30000 // 30 seconds timeout
+        });
+      }, 3, 1000);
       
       let assistantMessage = response.choices[0].message;
       let functionResults = [];
@@ -1209,10 +1440,38 @@ class AIBookingService {
         // Execute all function calls
         for (const toolCall of assistantMessage.tool_calls) {
           const functionName = toolCall.function.name;
-          const functionArgs = JSON.parse(toolCall.function.arguments);
+          let functionArgs;
           
-          // Execute function
-          const functionResult = await this.executeFunction(functionName, functionArgs, patientUserId);
+          // Parse và validate JSON arguments
+          try {
+            functionArgs = JSON.parse(toolCall.function.arguments);
+          } catch (parseError) {
+            console.error(`❌ [AI] Error parsing function arguments for ${functionName}:`, parseError);
+            messages.push({
+              role: "assistant",
+              content: null,
+              tool_calls: [toolCall]
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({ 
+                error: `Lỗi parse arguments: ${parseError.message}. Vui lòng thử lại với arguments hợp lệ.` 
+              })
+            });
+            continue;
+          }
+          
+          // Execute function với error handling tốt hơn
+          let functionResult;
+          try {
+            functionResult = await this.executeFunction(functionName, functionArgs, patientUserId);
+          } catch (execError) {
+            console.error(`❌ [AI] Error executing function ${functionName}:`, execError);
+            functionResult = { 
+              error: `Lỗi khi thực thi function: ${execError.message || 'Unknown error'}` 
+            };
+          }
           
           // Add function result to messages
           messages.push({
@@ -1234,14 +1493,22 @@ class AIBookingService {
           });
         }
         
-        // Call OpenAI again với function results
-        response = await openai.chat.completions.create({
-          model: "gpt-4.1-mini",
-          messages: messages,
-          tools: toolsConfig.tools,
-          tool_choice: "auto",
-          temperature: 0.7
-        });
+        // Call OpenAI again với function results (với retry logic)
+        // ⭐ Tối ưu parameters cho độ chính xác cao
+        response = await this.retryWithBackoff(async () => {
+          return await openai.chat.completions.create({
+            model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-5-mini) cho consistency
+            messages: messages,
+            tools: toolsConfig.tools,
+            tool_choice: "auto",
+            temperature: 0.2, // ⭐ Giảm xuống 0.2 để tăng độ chính xác
+            top_p: 0.9,
+            frequency_penalty: 0.3,
+            presence_penalty: 0.2,
+            max_tokens: 2500,
+            timeout: 30000
+          });
+        }, 3, 1000);
         
         assistantMessage = response.choices[0].message;
       }
@@ -1263,7 +1530,7 @@ class AIBookingService {
           appointment: appointmentResult,
           response: finalResponse,
           conversationHistory: [...conversationHistory, 
-            { role: "user", content: userPrompt },
+            { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
             { role: "assistant", content: finalResponse }
           ]
         };
@@ -1275,7 +1542,7 @@ class AIBookingService {
         needsMoreInfo: true,
         response: finalResponse,
         conversationHistory: [...conversationHistory,
-          { role: "user", content: userPrompt },
+          { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
           { role: "assistant", content: finalResponse }
         ]
       };
