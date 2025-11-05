@@ -1,6 +1,7 @@
 const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const Service = require('../models/service.model');
 const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
@@ -621,7 +622,6 @@ class AIBookingService {
             return { valid: false, error: 'Missing serviceId' };
           }
           
-          const mongoose = require('mongoose');
           const serviceIdStr = serviceId.toString();
           
           // Check nếu serviceId là ObjectId hợp lệ
@@ -829,7 +829,6 @@ class AIBookingService {
             return { valid: false, error: 'Missing doctorId' };
           }
           
-          const mongoose = require('mongoose');
           const doctorIdStr = doctorId.toString();
           
           // Check nếu doctorId là ObjectId hợp lệ
@@ -921,7 +920,6 @@ class AIBookingService {
           // Xử lý serviceId: có thể là ObjectId, số thứ tự, hoặc tên dịch vụ (sai)
           let service = null;
           const serviceIdStr = serviceId.toString();
-          const mongoose = require('mongoose');
           
           // Check nếu serviceId là số thứ tự
           const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
@@ -977,7 +975,6 @@ class AIBookingService {
           // Xử lý doctorId: có thể là ObjectId, số thứ tự, hoặc tên bác sĩ (sai)
           let doctor = null;
           const doctorIdStr = doctorId.toString();
-          const mongoose = require('mongoose');
           
           // Check nếu doctorId là số thứ tự
           const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
@@ -1348,7 +1345,6 @@ class AIBookingService {
             // 2. Validate service (có thể là ObjectId, số thứ tự, hoặc tên dịch vụ - sai)
             let service = null;
             const serviceIdStr = serviceId.toString();
-            const mongoose = require('mongoose');
             const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
             
             if (serviceNumberMatch) {
@@ -1397,7 +1393,6 @@ class AIBookingService {
             // 3. Validate doctor (có thể là ObjectId, số thứ tự, hoặc tên bác sĩ - sai)
             let doctor = null;
             const doctorIdStr = doctorId.toString();
-            const mongoose = require('mongoose');
             const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
             
             if (doctorNumberMatch) {
