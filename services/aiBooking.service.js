@@ -29,6 +29,131 @@ const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
 class AIBookingService {
   /**
+   * Helper function để resolve serviceId từ nhiều định dạng:
+   * - ObjectId: Trả về ObjectId trực tiếp
+   * - Số thứ tự: Tìm theo index trong danh sách dịch vụ
+   * - Tên dịch vụ: Tìm theo tên (exact, contains, slug)
+   * @param {string} serviceIdInput - Input có thể là ObjectId, số thứ tự, hoặc tên dịch vụ
+   * @returns {Promise<Object>} { service: Object, serviceId: string } hoặc null nếu không tìm thấy
+   */
+  async resolveServiceId(serviceIdInput) {
+    if (!serviceIdInput || typeof serviceIdInput !== 'string') {
+      return null;
+    }
+
+    const serviceIdStr = serviceIdInput.toString().trim();
+    
+    // 1. Kiểm tra nếu là số thứ tự
+    const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+    if (serviceNumberMatch) {
+      const services = await Service.find({ status: 'Active' })
+        .select('_id serviceName durationMinutes price isPrepaid category description')
+        .sort({ category: 1, serviceName: 1 })
+        .lean();
+      
+      const index = parseInt(serviceIdStr) - 1; // Convert to 0-based index
+      if (index >= 0 && index < services.length) {
+        return {
+          service: services[index],
+          serviceId: services[index]._id.toString()
+        };
+      }
+      return null;
+    }
+
+    // 2. Kiểm tra nếu là ObjectId hợp lệ
+    if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
+      const service = await Service.findOne({ 
+        _id: serviceIdStr,
+        status: 'Active' 
+      })
+        .select('_id serviceName durationMinutes price isPrepaid category description status')
+        .lean();
+      
+      if (service) {
+        return {
+          service: service,
+          serviceId: service._id.toString()
+        };
+      }
+      // Nếu không tìm thấy với ObjectId, tiếp tục tìm theo tên
+    }
+
+    // 3. Tìm theo tên dịch vụ (exact match, contains, slug)
+    // Normalize input: loại bỏ dấu, chuyển thành lowercase, thay thế dấu gạch ngang
+    const normalizeString = (str) => {
+      return str
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // Loại bỏ dấu
+        .replace(/[^\w\s-]/g, '') // Loại bỏ ký tự đặc biệt (trừ gạch ngang)
+        .replace(/\s+/g, '-') // Thay thế khoảng trắng bằng dấu gạch ngang
+        .replace(/-+/g, '-') // Gộp nhiều dấu gạch ngang thành một
+        .trim();
+    };
+
+    const normalizedInput = normalizeString(serviceIdStr);
+
+    // Lấy tất cả dịch vụ active
+    const allServices = await Service.find({ status: 'Active' })
+      .select('_id serviceName durationMinutes price isPrepaid category description')
+      .lean();
+
+    // Ưu tiên 1: Exact match (normalized)
+    let matchedService = allServices.find(s => {
+      const normalizedServiceName = normalizeString(s.serviceName || '');
+      return normalizedServiceName === normalizedInput;
+    });
+
+    if (matchedService) {
+      return {
+        service: matchedService,
+        serviceId: matchedService._id.toString()
+      };
+    }
+
+    // Ưu tiên 2: Contains match (normalized) - tên dịch vụ chứa input
+    matchedService = allServices.find(s => {
+      const normalizedServiceName = normalizeString(s.serviceName || '');
+      return normalizedServiceName.includes(normalizedInput) || 
+             normalizedInput.includes(normalizedServiceName);
+    });
+
+    if (matchedService) {
+      return {
+        service: matchedService,
+        serviceId: matchedService._id.toString()
+      };
+    }
+
+    // Ưu tiên 3: Word-based matching - tìm các từ có ý nghĩa
+    const inputWords = normalizedInput.split('-').filter(w => w.length >= 2);
+    if (inputWords.length > 0) {
+      matchedService = allServices.find(s => {
+        const normalizedServiceName = normalizeString(s.serviceName || '');
+        const serviceWords = normalizedServiceName.split('-');
+        
+        // Kiểm tra xem có ít nhất một từ trong input khớp với từ trong service name
+        return inputWords.some(inputWord => 
+          serviceWords.some(serviceWord => 
+            serviceWord.includes(inputWord) || inputWord.includes(serviceWord)
+          )
+        );
+      });
+
+      if (matchedService) {
+        return {
+          service: matchedService,
+          serviceId: matchedService._id.toString()
+        };
+      }
+    }
+
+    // Không tìm thấy
+    return null;
+  }
+
+  /**
    * Retry helper với exponential backoff
    * @param {Function} fn - Function cần retry
    * @param {number} maxRetries - Số lần retry tối đa
@@ -265,9 +390,14 @@ class AIBookingService {
               .select('workingHours')
               .lean();
               
+              console.log(`[check_appointment_conflict] Query DoctorSchedule for doctorId ${doctorId}, date ${date}:`, schedules.length, 'schedules found');
+              
               // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
               if (schedules.length > 0 && schedules[0].workingHours) {
                 workingHours = schedules[0].workingHours;
+                console.log(`[check_appointment_conflict] ✅ Using workingHours from database:`, workingHours);
+              } else {
+                console.log(`[check_appointment_conflict] ⚠️ No schedules found or no workingHours, using default:`, workingHours);
               }
             } catch (error) {
               // Nếu lỗi khi query, dùng working hours mặc định
@@ -752,28 +882,17 @@ class AIBookingService {
             return { valid: false, error: 'Missing serviceId' };
           }
           
-          const serviceIdStr = serviceId.toString();
+          // Sử dụng helper function để resolve serviceId
+          const resolved = await this.resolveServiceId(serviceId);
           
-          // Check nếu serviceId là ObjectId hợp lệ
-          let service = null;
-          if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
-            service = await Service.findOne({ 
-              _id: serviceIdStr, 
-            status: 'Active' 
-            })
-            .select('_id serviceName category durationMinutes price isPrepaid description status')
-            .lean();
-          } else {
-            // Nếu không phải ObjectId → có thể là tên dịch vụ (sai)
+          if (!resolved || !resolved.service) {
             return { 
               valid: false, 
-              error: `ServiceId "${serviceIdStr}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId) từ find_service_by_name hoặc validate_service.` 
+              error: `ServiceId "${serviceId}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId), số thứ tự, hoặc tên dịch vụ từ danh sách dịch vụ.` 
             };
           }
           
-          if (!service) {
-            return { valid: false, error: 'Service not found or inactive' };
-      }
+          const service = resolved.service;
 
           // ⭐ Tính giá sau khuyến mãi
           const promotionData = await calculateServicePrice(service._id.toString(), service.price);
@@ -1094,55 +1213,16 @@ class AIBookingService {
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
           }
           
-          // Xử lý serviceId: có thể là ObjectId, số thứ tự, hoặc tên dịch vụ (sai)
-          let service = null;
-          const serviceIdStr = serviceId.toString();
+          // Sử dụng helper function để resolve serviceId
+          const resolved = await this.resolveServiceId(serviceId);
           
-          // Check nếu serviceId là số thứ tự
-          const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
-          if (serviceNumberMatch) {
-            // Lấy danh sách dịch vụ và chọn theo index
-            const services = await Service.find({ status: 'Active' })
-              .select('_id serviceName durationMinutes price isPrepaid category description')
-              .sort({ category: 1, serviceName: 1 })
-              .lean();
-            
-            const index = parseInt(serviceIdStr) - 1; // Convert to 0-based index
-            if (index >= 0 && index < services.length) {
-              service = services[index];
-            } else {
-              return { error: `Số thứ tự ${serviceIdStr} không hợp lệ. Vui lòng chọn lại dịch vụ.` };
-            }
-          } else {
-            // Check nếu serviceId là ObjectId hợp lệ
-            if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
-            // Dùng serviceId trực tiếp (ObjectId)
-              service = await Service.findById(serviceIdStr)
-                .select('_id serviceName durationMinutes price isPrepaid category description')
-              .lean();
-            } else {
-              // Nếu không phải ObjectId và không phải số → có thể là tên dịch vụ (sai)
-              // Tìm dịch vụ theo tên
-              const serviceByName = await Service.findOne({ 
-                serviceName: { $regex: new RegExp(`^${serviceIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-                status: 'Active' 
-              })
-              .select('_id serviceName durationMinutes price isPrepaid category description')
-              .lean();
-              
-              if (serviceByName) {
-                service = serviceByName;
-              } else {
-                return { 
-                  error: `ServiceId "${serviceIdStr}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId) hoặc số thứ tự từ danh sách dịch vụ.` 
-                };
-              }
-            }
+          if (!resolved || !resolved.service) {
+            return { 
+              error: `ServiceId "${serviceId}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId), số thứ tự, hoặc tên dịch vụ từ danh sách dịch vụ.` 
+            };
           }
           
-          if (!service) {
-            return { error: 'Dịch vụ không tồn tại. Vui lòng chọn lại dịch vụ.' };
-          }
+          const service = resolved.service;
           
           // ⭐ Tính giá sau khuyến mãi
           const promotionData = await calculateServicePrice(service._id.toString(), service.price);
@@ -1519,53 +1599,16 @@ class AIBookingService {
               return { error: 'Tài khoản của bạn không hợp lệ. Vui lòng đăng nhập lại.' };
             }
             
-            // 2. Validate service (có thể là ObjectId, số thứ tự, hoặc tên dịch vụ - sai)
-            let service = null;
-            const serviceIdStr = serviceId.toString();
-            const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
+            // 2. Validate service - Sử dụng helper function để resolve serviceId
+            const resolved = await this.resolveServiceId(serviceId);
             
-            if (serviceNumberMatch) {
-              const services = await Service.find({ status: 'Active' })
-                .select('_id serviceName durationMinutes category price isPrepaid status description')
-                .sort({ category: 1, serviceName: 1 })
-                .lean();
-              
-              const index = parseInt(serviceIdStr) - 1;
-              if (index >= 0 && index < services.length) {
-                service = services[index];
-              }
-            } else {
-              // Check nếu serviceId là ObjectId hợp lệ
-              if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
-                service = await Service.findById(serviceIdStr)
-                  .select('_id serviceName durationMinutes category price isPrepaid status description')
-                .lean();
-              } else {
-                // Nếu không phải ObjectId và không phải số → có thể là tên dịch vụ (sai)
-                // Tìm dịch vụ theo tên
-                const serviceByName = await Service.findOne({ 
-                  serviceName: { $regex: new RegExp(`^${serviceIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-                  status: 'Active' 
-                })
-                .select('_id serviceName durationMinutes category price isPrepaid status description')
-                .lean();
-                
-                if (serviceByName) {
-                  service = serviceByName;
-                } else {
-                  return { 
-                    error: `ServiceId "${serviceIdStr}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId) từ find_service_by_name hoặc số thứ tự từ danh sách dịch vụ.` 
-                  };
-                }
-              }
+            if (!resolved || !resolved.service) {
+              return { 
+                error: `ServiceId "${serviceId}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId), số thứ tự, hoặc tên dịch vụ từ danh sách dịch vụ.` 
+              };
             }
             
-            if (!service) {
-              return { error: 'Dịch vụ bạn chọn không tồn tại. Vui lòng chọn dịch vụ khác.' };
-            }
-            if (service.status !== 'Active') {
-              return { error: 'Dịch vụ này hiện không khả dụng' };
-            }
+            const service = resolved.service;
             
             // 3. Validate doctor (có thể là ObjectId, số thứ tự, hoặc tên bác sĩ - sai)
             let doctor = null;
@@ -1777,10 +1820,10 @@ class AIBookingService {
             if (!schedule) {
               // Lấy working hours từ schedule đầu tiên để hiển thị trong error message
               const workingHours = schedules[0]?.workingHours || {
-                morningStart: '08:00',
-                morningEnd: '12:00',
-                afternoonStart: '14:00',
-                afternoonEnd: '18:00'
+                morningStart: '07:00',  // ⚠️ TEST: Giá trị mặc định khác với database (DB: 08:00)
+                morningEnd: '11:00',    // ⚠️ TEST: Giá trị mặc định khác với database (DB: 12:00)
+                afternoonStart: '13:00', // ⚠️ TEST: Giá trị mặc định khác với database (DB: 14:00)
+                afternoonEnd: '17:00'   // ⚠️ TEST: Giá trị mặc định khác với database (DB: 18:00)
               };
               
               return { 
