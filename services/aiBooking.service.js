@@ -19,7 +19,7 @@ const openai = new OpenAI({
 });
 
 // ⭐ AI Model Configuration - TẤT CẢ API calls đều dùng model này
-const AI_MODEL = 'gpt-5-mini'; 
+const AI_MODEL = 'gpt-4o-mini'; 
 
 // Load function tools configuration
 const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
@@ -189,7 +189,7 @@ class AIBookingService {
    * Execute function call từ OpenAI với validation và retry
    */
   async executeFunction(functionName, functionArgs, patientUserId) {
-    console.log(`🔧 [AI] Executing function: ${functionName}`, functionArgs);
+    // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
     
     try {
       // Validate arguments trước
@@ -210,9 +210,9 @@ class AIBookingService {
           // ⭐ Tính giá sau khuyến mãi cho mỗi service
           const servicesWithPrice = await Promise.all(services.map(async (s) => {
             const promotionData = await calculateServicePrice(s._id.toString(), s.price);
-            return {
-              id: s._id.toString(),
-              name: s.serviceName,
+          return {
+        id: s._id.toString(),
+        name: s.serviceName,
               category: s.category,
               durationMinutes: s.durationMinutes || 30, // Default 30 phút nếu không có
               price: s.price || 0,
@@ -348,26 +348,17 @@ class AIBookingService {
               .filter(w => w.length >= 2) // Lấy từ có ít nhất 2 ký tự
               .filter(w => !commonWords.includes(w)); // Loại bỏ từ chung chung
             
-            console.log(`🔍 [find_service_by_name] Input words after filtering:`, inputWords);
-            
             // Phải có ít nhất 1 từ có ý nghĩa mới match
             if (inputWords.length > 0) {
               // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords) - ƯU TIÊN CAO NHẤT
-              // Khi user nhập từ khóa chung (ví dụ: "khám răng"), match với tất cả service có chứa từ khóa đó
               const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt'];
               
               // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
-              // Ví dụ: "khám răng" → "răng" là category keyword
-              const categoryKeywordInInput = inputWords.find(word => {
-                const found = categoryKeywords.some(keyword => {
-                  // Exact match hoặc contains
-                  return word === keyword || word.includes(keyword) || keyword.includes(word);
-                });
-                if (found) {
-                  console.log(`✅ [find_service_by_name] Found category keyword in input: "${word}"`);
-                }
-                return found;
-              });
+              const categoryKeywordInInput = inputWords.find(word => 
+                categoryKeywords.some(keyword => 
+                  word === keyword || word.includes(keyword) || keyword.includes(word)
+                )
+              );
               
               // ⭐ Nếu có category keyword → match với tất cả service có chứa từ khóa đó (ƯU TIÊN)
               if (categoryKeywordInInput) {
@@ -378,23 +369,16 @@ class AIBookingService {
                 );
                 
                 if (matchedCategory) {
-                  console.log(`✅ [find_service_by_name] Matching category: "${matchedCategory}"`);
                   // ✅ Match với tất cả service có chứa category keyword
                   matchedServices = servicesWithPrice.filter(s => {
                     const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
-                    const hasMatch = serviceNameNormalized.includes(matchedCategory);
-                    if (hasMatch) {
-                      console.log(`   → Match: "${s.serviceName}"`);
-                    }
-                    return hasMatch;
+                    return serviceNameNormalized.includes(matchedCategory);
                   });
-                  console.log(`✅ [find_service_by_name] Found ${matchedServices.length} services matching category "${matchedCategory}"`);
                 }
               }
               
               // Nếu chưa match (không có category keyword hoặc không tìm thấy), dùng logic word-based matching
-              if (matchedServices.length === 0) {
-                console.log(`⚠️ [find_service_by_name] No category keyword match, trying word-based matching...`);
+          if (matchedServices.length === 0) {
                 matchedServices = servicesWithPrice.filter(s => {
                   const serviceNameLower = s.serviceName.toLowerCase();
                   const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
@@ -434,7 +418,6 @@ class AIBookingService {
                     return meaningfulMatches.length >= 2;
                   }
                 });
-                console.log(`⚠️ [find_service_by_name] Word-based matching found ${matchedServices.length} services`);
               }
             }
           }
@@ -1421,11 +1404,10 @@ class AIBookingService {
    */
   async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
     try {
-      console.log('🤖 [AI Function Calling] Starting chat...');
+      // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // ⭐ Preprocess user input để tăng độ chính xác
       const processedPrompt = this.preprocessUserInput(userPrompt);
-      console.log(`📝 [Preprocessing] Original: "${userPrompt}" → Processed: "${processedPrompt}"`);
       
       // Prepare date context
       const today = new Date();
@@ -1446,21 +1428,21 @@ class AIBookingService {
         { role: "user", content: processedPrompt } // ⭐ Dùng processed prompt
       ];
       
-      console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI with ${toolsConfig.tools.length} tools`);
-      console.log(`⚡ [AI] Optimized for speed: max_completion_tokens=1500, reasoning_effort=low, verbosity=low`);
+      // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // Call OpenAI with function calling (với retry logic)
       // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
       let response = await this.retryWithBackoff(async () => {
         return await openai.chat.completions.create({
-          model: AI_MODEL, // ⭐ Dùng model từ config (gpt-5-mini)
+          model: AI_MODEL, // ⭐ Dùng model từ config (gpt-4o-mini)
           messages: messages,
           tools: toolsConfig.tools,
           tool_choice: "auto", // AI tự quyết định có gọi function hay không
-          max_completion_tokens: 1500, // ⭐ Giảm từ 2500 xuống 1500 để tăng tốc độ phản hồi
-          reasoning_effort: "low", // ⭐ Giảm từ "medium" xuống "low" để tăng tốc độ (nhanh hơn, đủ chính xác)
-          verbosity: "low" // ⭐ Giảm từ "medium" xuống "low" để response ngắn gọn, nhanh hơn
-          // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
+          max_tokens: 1000, // ⭐ Tối ưu cho tốc độ: giảm xuống 1000 tokens
+          temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
+          top_p: 0.9,
+          frequency_penalty: 0.3,
+          presence_penalty: 0.2
           // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
         });
       }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
@@ -1469,12 +1451,11 @@ class AIBookingService {
       let functionResults = [];
       
       // Loop để handle multiple function calls (AI có thể gọi nhiều function liên tiếp)
-      let maxIterations = 4; // ⭐ Giảm từ 5 xuống 4 để tăng tốc độ (đủ cho hầu hết cases)
+      let maxIterations = 3; // ⭐ Tối ưu tốc độ: giảm xuống 3 iterations
       let iteration = 0;
       
       while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
         iteration++;
-        console.log(`🔄 [AI] Iteration ${iteration}: AI wants to call ${assistantMessage.tool_calls.length} function(s)`);
         
         // Execute all function calls
         for (const toolCall of assistantMessage.tool_calls) {
@@ -1536,17 +1517,18 @@ class AIBookingService {
         // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
         response = await this.retryWithBackoff(async () => {
           return await openai.chat.completions.create({
-            model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-5-mini) cho consistency
+            model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-4o-mini) cho consistency
             messages: messages,
             tools: toolsConfig.tools,
             tool_choice: "auto",
-            max_completion_tokens: 1500, // ⭐ Giảm từ 2500 xuống 1500 để tăng tốc độ phản hồi
-            reasoning_effort: "low", // ⭐ Giảm từ "medium" xuống "low" để tăng tốc độ
-            verbosity: "low" // ⭐ Giảm từ "medium" xuống "low" để response ngắn gọn, nhanh hơn
-            // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
+            max_tokens: 1000, // ⭐ Tối ưu cho tốc độ
+            temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
+            top_p: 0.9,
+            frequency_penalty: 0.3,
+            presence_penalty: 0.2
             // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
           });
-        }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
+        }, 1, 200); // ⭐ Tối ưu tốc độ: chỉ retry 1 lần, baseDelay 200ms
         
         assistantMessage = response.choices[0].message;
       }
@@ -1554,7 +1536,7 @@ class AIBookingService {
       // Get final response from AI
       const finalResponse = assistantMessage.content || "Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.";
       
-      console.log('✅ [AI] Final response:', finalResponse.substring(0, 100) + '...');
+      // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // Check if appointment was created
       const appointmentCreated = functionResults.some(fr => 
@@ -1596,7 +1578,7 @@ class AIBookingService {
    */
   async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
     try {
-      console.log('🚀 [AI Booking] Using new Function Calling approach...');
+      // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // 🆕 Sử dụng chatWithAI với Function Calling - AI HOÀN TOÀN TỰ DO!
       const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory);
