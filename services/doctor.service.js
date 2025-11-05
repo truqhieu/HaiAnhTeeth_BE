@@ -2,6 +2,7 @@ const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
 const Patient = require('../models/patient.model');
 const MedicalRecord = require('../models/medicalRecord.model');
+const leaveRequestService = require('./leaveRequest.service');
 
 class DoctorService {
 
@@ -96,7 +97,7 @@ class DoctorService {
       .lean();
 
     // Filter theo timeslotId.startTime trong date range
-    const appointments = allAppointments.filter(appointment => {
+    let appointments = allAppointments.filter(appointment => {
       if (!appointment.timeslotId || !appointment.timeslotId.startTime) {
         return false;
       }
@@ -104,7 +105,28 @@ class DoctorService {
       return appointmentDate >= dateRangeStart && appointmentDate <= dateRangeEnd;
     });
 
-    console.log(`✅ Lọc được ${appointments.length}/${allAppointments.length} lịch hẹn trong 2 tuần`);
+    console.log(`✅ Lọc được ${appointments.length}/${allAppointments.length} lịch hẹn trong date range`);
+
+    // ⭐ Filter appointments khi doctor có leave trong thời gian appointment
+    const appointmentsWithoutLeave = [];
+    for (const appointment of appointments) {
+      if (appointment.timeslotId?.startTime) {
+        const isOnLeave = await leaveRequestService.isDoctorOnLeave(
+          doctorUserId,
+          appointment.timeslotId.startTime
+        );
+        
+        // Nếu doctor có leave, không thêm vào kết quả
+        if (isOnLeave) {
+          continue;
+        }
+      }
+      
+      appointmentsWithoutLeave.push(appointment);
+    }
+    
+    appointments = appointmentsWithoutLeave;
+    console.log(`✅ Sau khi filter leave: ${appointments.length} lịch hẹn`);
 
     // Sắp xếp theo startTime ascending (ngày cũ nhất lên đầu, ngày mới nhất xuống dưới)
     appointments.sort((a, b) => {

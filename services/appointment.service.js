@@ -7,7 +7,8 @@ const DoctorSchedule = require('../models/doctorSchedule.model');
 const EmailService = require('../config/emailConfig')
 const { calculateServicePrice } = require('../utils/promotionHelper');
 const emailService = require('./email.service');
-const notificationService = require('../services/notification.service')
+const notificationService = require('../services/notification.service');
+const leaveRequestService = require('./leaveRequest.service');
 
 class AppointmentService {
 
@@ -861,9 +862,14 @@ class AppointmentService {
         .populate('patientUserId', 'fullName email')
         .populate('customerId', 'fullName email')
         .populate('doctorUserId', 'fullName email')
+        .populate('replacedDoctorUserId', 'fullName email')
         .populate('serviceId', 'serviceName price')
         .populate('timeslotId', 'startTime endTime')
         .sort({ createdAt: -1 });
+
+      // ⭐ KHÔNG filter appointments ở đây - để staff view vẫn thấy tất cả
+      // Frontend sẽ check và hiển thị "Not Available" ở cột bác sĩ khi có leave
+      // Doctor view sẽ filter riêng trong getDoctorAppointmentsSchedule
 
       return {
         success: true,
