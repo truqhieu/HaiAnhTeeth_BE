@@ -1419,11 +1419,10 @@ class AIBookingService {
           messages: messages,
           tools: toolsConfig.tools,
           tool_choice: "auto", // AI tự quyết định có gọi function hay không
-          temperature: 0.2, // ⭐ Giảm xuống 0.2 để tăng độ chính xác (deterministic hơn)
-          top_p: 0.9, // ⭐ Nucleus sampling - chỉ xem xét 90% tokens có xác suất cao nhất
-          frequency_penalty: 0.3, // ⭐ Giảm lặp lại từ/cụm từ (tăng tính đa dạng)
-          presence_penalty: 0.2, // ⭐ Khuyến khích đề cập đến các chủ đề mới
-          max_tokens: 2500 // ⭐ Tăng lên để đảm bảo đủ tokens cho response chi tiết
+          max_completion_tokens: 2500, // ⭐ GPT-5-mini dùng max_completion_tokens thay vì max_tokens
+          reasoning_effort: "medium", // ⭐ GPT-5-mini: "minimal", "low", "medium", "high"
+          verbosity: "medium" // ⭐ GPT-5-mini: "low", "medium", "high"
+          // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
           // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
         });
       }, 3, 1000);
@@ -1503,11 +1502,10 @@ class AIBookingService {
             messages: messages,
             tools: toolsConfig.tools,
             tool_choice: "auto",
-            temperature: 0.2, // ⭐ Giảm xuống 0.2 để tăng độ chính xác
-            top_p: 0.9,
-            frequency_penalty: 0.3,
-            presence_penalty: 0.2,
-            max_tokens: 2500
+            max_completion_tokens: 2500, // ⭐ GPT-5-mini dùng max_completion_tokens thay vì max_tokens
+            reasoning_effort: "medium", // ⭐ GPT-5-mini: "minimal", "low", "medium", "high"
+            verbosity: "medium" // ⭐ GPT-5-mini: "low", "medium", "high"
+            // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
             // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
           });
         }, 3, 1000);
