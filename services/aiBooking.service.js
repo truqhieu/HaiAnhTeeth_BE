@@ -679,18 +679,29 @@ class AIBookingService {
               // Nếu không có doctorId hoặc doctorId khác với appointment conflict → cho phép tiếp tục
               const allowContinueWithOtherDoctors = !currentDoctorId || (conflictDoctorId && conflictDoctorId !== currentDoctorId);
               
+              // ⭐ KHÔNG HIỂN THỊ MESSAGE CHI TIẾT KHI CHO PHÉP TIẾP TỤC VỚI BÁC SĨ KHÁC
+              // User sẽ chọn bác sĩ trước, sau đó get_available_slots sẽ tự động exclude slot đã bận
+              if (allowContinueWithOtherDoctors) {
+                return {
+                  hasConflict: false, // ⭐ Coi như không có conflict để tiếp tục flow bình thường
+                  allowContinueWithOtherDoctors: true, // ⭐ Flag để log (không hiển thị cho user)
+                  workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
+                };
+              }
+              
+              // Chỉ hiển thị message chi tiết khi conflict với chính xác bác sĩ đã chọn
               return {
                 hasConflict: true,
-                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. ${allowContinueWithOtherDoctors ? 'Bạn có thể chọn bác sĩ khác hoặc thời gian khác.' : 'Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!'}`,
-                allowContinueWithOtherDoctors: allowContinueWithOtherDoctors, // ⭐ Cho phép tiếp tục với bác sĩ khác
+                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`,
+                allowContinueWithOtherDoctors: false,
                 workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
               };
             }
             
+            // ⭐ KHÔNG CÓ appointment cụ thể → cho phép tiếp tục (không hiển thị message)
             return {
-              hasConflict: true,
-              conflictMessage: 'Bạn đã có lịch khám vào khung giờ này. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!',
-              allowContinueWithOtherDoctors: true, // ⭐ Cho phép tiếp tục với bác sĩ khác
+              hasConflict: false, // ⭐ Coi như không có conflict để tiếp tục flow bình thường
+              allowContinueWithOtherDoctors: true, // ⭐ Flag để log (không hiển thị cho user)
               workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
