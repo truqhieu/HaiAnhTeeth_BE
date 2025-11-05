@@ -215,8 +215,16 @@ class AIBookingService {
     // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
     
     try {
-      // Validate arguments trước
-      const validatedArgs = this.validateFunctionArgs(functionName, functionArgs);
+      // Validate arguments trước với error handling
+      let validatedArgs;
+      try {
+        validatedArgs = this.validateFunctionArgs(functionName, functionArgs);
+      } catch (validationError) {
+        console.error(`❌ [AI] Validation error for ${functionName}:`, validationError);
+        return { 
+          error: `Lỗi validate tham số: ${validationError.message || 'Tham số không hợp lệ'}` 
+        };
+      }
       switch (functionName) {
         case 'check_appointment_conflict': {
           const { date, time } = validatedArgs;
@@ -1816,26 +1824,73 @@ class AIBookingService {
         
         // Call OpenAI again với function results (với retry logic)
         // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
-        response = await this.retryWithBackoff(async () => {
-          return await openai.chat.completions.create({
-            model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-4o-mini) cho consistency
-            messages: messages,
-            tools: toolsConfig.tools,
-            tool_choice: "auto",
-            max_tokens: 1000, // ⭐ Tối ưu cho tốc độ
-            temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
-            top_p: 0.9,
-            frequency_penalty: 0.3,
-            presence_penalty: 0.2
-            // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
-          });
-        }, 1, 200); // ⭐ Tối ưu tốc độ: chỉ retry 1 lần, baseDelay 200ms
-        
-        assistantMessage = response.choices[0].message;
+        try {
+          response = await this.retryWithBackoff(async () => {
+            return await openai.chat.completions.create({
+              model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-4o-mini) cho consistency
+              messages: messages,
+              tools: toolsConfig.tools,
+              tool_choice: "auto",
+              max_tokens: 1000, // ⭐ Tối ưu cho tốc độ
+              temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
+              top_p: 0.9,
+              frequency_penalty: 0.3,
+              presence_penalty: 0.2
+              // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
+            });
+          }, 1, 200); // ⭐ Tối ưu tốc độ: chỉ retry 1 lần, baseDelay 200ms
+          
+          // Validate response
+          if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
+            throw new Error('Invalid response from OpenAI API in iteration');
+          }
+          
+          assistantMessage = response.choices[0].message;
+        } catch (iterationError) {
+          console.error('❌ [AI Booking] Error in iteration:', iterationError);
+          // Nếu có lỗi trong iteration, break loop và trả về error message từ function results
+          break;
+        }
       }
       
       // Get final response from AI
-      const finalResponse = assistantMessage.content || "Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.";
+      // Nếu không có content, kiểm tra function results để tạo response phù hợp
+      let finalResponse = assistantMessage?.content;
+      
+      // Nếu không có content hoặc assistantMessage undefined, tạo response từ function results
+      if (!finalResponse || !assistantMessage) {
+        // Nếu có function results với error, tạo response từ đó
+        const lastErrorResult = functionResults
+          .filter(fr => fr.result && fr.result.error)
+          .pop();
+        
+        if (lastErrorResult) {
+          const errorResult = lastErrorResult.result;
+          
+          // Nếu có suggestions, tạo response với suggestions
+          if (errorResult.suggestions && errorResult.suggestions.length > 0) {
+            if (lastErrorResult.functionName === 'find_doctor_by_name') {
+              finalResponse = `${errorResult.error}\n\nDưới đây là danh sách bác sĩ có sẵn:\n${errorResult.suggestions.map((d, idx) => `${idx + 1}. ${d.name}${d.specialization ? ` - ${d.specialization}` : ''}`).join('\n')}\n\nBạn muốn chọn bác sĩ nào?`;
+            } else if (lastErrorResult.functionName === 'find_service_by_name') {
+              finalResponse = `${errorResult.error}\n\n${errorResult.suggestions.map((s, idx) => `${idx + 1}. ${s.name}${s.durationMinutes ? ` (${s.durationMinutes} phút)` : ''}${s.description ? ` - ${s.description}` : ''}`).join('\n')}\n\nBạn muốn chọn dịch vụ nào?`;
+            } else {
+              finalResponse = errorResult.error || 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.';
+            }
+          } else {
+            finalResponse = errorResult.error || 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn.';
+          }
+        } else {
+          // Nếu không có error từ function results, kiểm tra xem có function results thành công không
+          const lastResult = functionResults[functionResults.length - 1];
+          if (lastResult && lastResult.result && !lastResult.result.error) {
+            // Nếu có kết quả thành công nhưng AI không trả về content, tạo response từ kết quả
+            finalResponse = 'Đã xử lý yêu cầu của bạn thành công. Bạn có muốn tiếp tục không?';
+          } else {
+            // Nếu không có error từ function results, tạo generic response
+            finalResponse = 'Xin lỗi, mình không thể xử lý yêu cầu của bạn. Vui lòng thử lại với thông tin rõ ràng hơn.';
+          }
+        }
+      }
       
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
