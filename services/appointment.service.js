@@ -4,6 +4,7 @@ const Service = require('../models/service.model');
 const User = require('../models/user.model');
 const Customer = require('../models/customer.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
+const Doctor = require('../models/doctor.model');
 const EmailService = require('../config/emailConfig')
 const { calculateServicePrice } = require('../utils/promotionHelper');
 const emailService = require('./email.service');
@@ -1104,7 +1105,9 @@ class AppointmentService {
       console.log(`🔄 Cập nhật trạng thái ca khám ${appointmentId} → ${newStatus}`);
 
       // Tìm appointment
-      const appointment = await Appointment.findById(appointmentId);
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('doctorUserId', '_id')
+        .populate('replacedDoctorUserId', '_id');
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
       }
@@ -1134,6 +1137,41 @@ class AppointmentService {
         if (currentStatus !== 'CheckedIn') {
           throw new Error(`Không thể chuyển sang đang trong ca. Ca phải ở trạng thái "CheckedIn" (hiện tại: ${currentStatus})`);
         }
+
+        // ⭐ KIỂM TRA: Nếu bác sĩ đang On Leave, không cho phép chuyển sang InProgress
+        // Chỉ cho phép khi đã có bác sĩ thay thế và đã được confirm
+        
+        // Lấy doctorUserId hiện tại (bác sĩ đang được gán trong appointment)
+        const currentDoctorId = appointment.doctorUserId?._id || appointment.doctorUserId;
+        
+        if (currentDoctorId) {
+          const currentDoctor = await Doctor.findOne({ doctorUserId: currentDoctorId }).select('status');
+          
+          // Nếu bác sĩ hiện tại đang On Leave
+          if (currentDoctor && currentDoctor.status === 'On Leave') {
+            // Kiểm tra xem đã có bác sĩ thay thế chưa
+            const replacedDoctorId = appointment.replacedDoctorUserId?._id || appointment.replacedDoctorUserId;
+            
+            if (!replacedDoctorId) {
+              // Chưa có bác sĩ thay thế → không cho phép
+              throw new Error('Không thể bắt đầu ca khám. Bác sĩ hiện tại đang vắng mặt. Vui lòng gán bác sĩ mới trước khi bắt đầu ca khám.');
+            }
+            
+            // Đã có bác sĩ thay thế, kiểm tra xem đã được confirm chưa
+            // Nếu doctorUserId = replacedDoctorUserId → đã confirm
+            if (currentDoctorId.toString() === replacedDoctorId.toString()) {
+              // Đã confirm, kiểm tra bác sĩ mới có On Leave không
+              const newDoctor = await Doctor.findOne({ doctorUserId: replacedDoctorId }).select('status');
+              if (newDoctor && newDoctor.status === 'On Leave') {
+                throw new Error('Không thể bắt đầu ca khám. Bác sĩ thay thế đang vắng mặt. Vui lòng gán bác sĩ khác.');
+              }
+            } else {
+              // Chưa confirm (doctorUserId vẫn là bác sĩ cũ, replacedDoctorUserId là bác sĩ mới chờ confirm)
+              throw new Error('Không thể bắt đầu ca khám. Bác sĩ thay thế chưa được xác nhận. Vui lòng đợi bệnh nhân xác nhận hoặc gán bác sĩ khác.');
+            }
+          }
+        }
+
         appointment.inProgressAt = new Date();
         appointment.inProgressByUserId = userId;
       }
