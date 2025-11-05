@@ -348,21 +348,28 @@ class AIBookingService {
               .filter(w => w.length >= 2) // Lấy từ có ít nhất 2 ký tự
               .filter(w => !commonWords.includes(w)); // Loại bỏ từ chung chung
             
+            console.log(`🔍 [find_service_by_name] Input words after filtering:`, inputWords);
+            
             // Phải có ít nhất 1 từ có ý nghĩa mới match
             if (inputWords.length > 0) {
-              // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords)
+              // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords) - ƯU TIÊN CAO NHẤT
               // Khi user nhập từ khóa chung (ví dụ: "khám răng"), match với tất cả service có chứa từ khóa đó
               const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt'];
               
               // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
               // Ví dụ: "khám răng" → "răng" là category keyword
-              const categoryKeywordInInput = inputWords.find(word => 
-                categoryKeywords.some(keyword => 
-                  word === keyword || word.includes(keyword) || keyword.includes(word)
-                )
-              );
+              const categoryKeywordInInput = inputWords.find(word => {
+                const found = categoryKeywords.some(keyword => {
+                  // Exact match hoặc contains
+                  return word === keyword || word.includes(keyword) || keyword.includes(word);
+                });
+                if (found) {
+                  console.log(`✅ [find_service_by_name] Found category keyword in input: "${word}"`);
+                }
+                return found;
+              });
               
-              // Nếu có category keyword → match với tất cả service có chứa từ khóa đó
+              // ⭐ Nếu có category keyword → match với tất cả service có chứa từ khóa đó (ƯU TIÊN)
               if (categoryKeywordInInput) {
                 const matchedCategory = categoryKeywords.find(keyword => 
                   categoryKeywordInInput === keyword || 
@@ -371,16 +378,23 @@ class AIBookingService {
                 );
                 
                 if (matchedCategory) {
+                  console.log(`✅ [find_service_by_name] Matching category: "${matchedCategory}"`);
                   // ✅ Match với tất cả service có chứa category keyword
                   matchedServices = servicesWithPrice.filter(s => {
                     const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
-                    return serviceNameNormalized.includes(matchedCategory);
+                    const hasMatch = serviceNameNormalized.includes(matchedCategory);
+                    if (hasMatch) {
+                      console.log(`   → Match: "${s.serviceName}"`);
+                    }
+                    return hasMatch;
                   });
+                  console.log(`✅ [find_service_by_name] Found ${matchedServices.length} services matching category "${matchedCategory}"`);
                 }
               }
               
               // Nếu chưa match (không có category keyword hoặc không tìm thấy), dùng logic word-based matching
               if (matchedServices.length === 0) {
+                console.log(`⚠️ [find_service_by_name] No category keyword match, trying word-based matching...`);
                 matchedServices = servicesWithPrice.filter(s => {
                   const serviceNameLower = s.serviceName.toLowerCase();
                   const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
@@ -420,6 +434,7 @@ class AIBookingService {
                     return meaningfulMatches.length >= 2;
                   }
                 });
+                console.log(`⚠️ [find_service_by_name] Word-based matching found ${matchedServices.length} services`);
               }
             }
           }
@@ -1432,28 +1447,29 @@ class AIBookingService {
       ];
       
       console.log(`📤 [AI] Sending ${messages.length} messages to OpenAI with ${toolsConfig.tools.length} tools`);
+      console.log(`⚡ [AI] Optimized for speed: max_completion_tokens=1500, reasoning_effort=low, verbosity=low`);
       
       // Call OpenAI with function calling (với retry logic)
-      // ⭐ Tối ưu parameters cho độ chính xác cao
+      // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
       let response = await this.retryWithBackoff(async () => {
         return await openai.chat.completions.create({
           model: AI_MODEL, // ⭐ Dùng model từ config (gpt-5-mini)
           messages: messages,
           tools: toolsConfig.tools,
           tool_choice: "auto", // AI tự quyết định có gọi function hay không
-          max_completion_tokens: 2500, // ⭐ GPT-5-mini dùng max_completion_tokens thay vì max_tokens
-          reasoning_effort: "medium", // ⭐ GPT-5-mini: "minimal", "low", "medium", "high"
-          verbosity: "medium" // ⭐ GPT-5-mini: "low", "medium", "high"
+          max_completion_tokens: 1500, // ⭐ Giảm từ 2500 xuống 1500 để tăng tốc độ phản hồi
+          reasoning_effort: "low", // ⭐ Giảm từ "medium" xuống "low" để tăng tốc độ (nhanh hơn, đủ chính xác)
+          verbosity: "low" // ⭐ Giảm từ "medium" xuống "low" để response ngắn gọn, nhanh hơn
           // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
           // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
         });
-      }, 3, 1000);
+      }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
       
       let assistantMessage = response.choices[0].message;
       let functionResults = [];
       
       // Loop để handle multiple function calls (AI có thể gọi nhiều function liên tiếp)
-      let maxIterations = 5; // Giới hạn để tránh infinite loop
+      let maxIterations = 4; // ⭐ Giảm từ 5 xuống 4 để tăng tốc độ (đủ cho hầu hết cases)
       let iteration = 0;
       
       while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
@@ -1517,20 +1533,20 @@ class AIBookingService {
         }
         
         // Call OpenAI again với function results (với retry logic)
-        // ⭐ Tối ưu parameters cho độ chính xác cao
+        // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
         response = await this.retryWithBackoff(async () => {
           return await openai.chat.completions.create({
             model: AI_MODEL, // ⭐ Dùng cùng model từ config (gpt-5-mini) cho consistency
             messages: messages,
             tools: toolsConfig.tools,
             tool_choice: "auto",
-            max_completion_tokens: 2500, // ⭐ GPT-5-mini dùng max_completion_tokens thay vì max_tokens
-            reasoning_effort: "medium", // ⭐ GPT-5-mini: "minimal", "low", "medium", "high"
-            verbosity: "medium" // ⭐ GPT-5-mini: "low", "medium", "high"
+            max_completion_tokens: 1500, // ⭐ Giảm từ 2500 xuống 1500 để tăng tốc độ phản hồi
+            reasoning_effort: "low", // ⭐ Giảm từ "medium" xuống "low" để tăng tốc độ
+            verbosity: "low" // ⭐ Giảm từ "medium" xuống "low" để response ngắn gọn, nhanh hơn
             // ⚠️ GPT-5-mini KHÔNG hỗ trợ: temperature, top_p, frequency_penalty, presence_penalty
             // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
           });
-        }, 3, 1000);
+        }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
         
         assistantMessage = response.choices[0].message;
       }
