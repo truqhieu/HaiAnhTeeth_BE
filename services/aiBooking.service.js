@@ -12,6 +12,7 @@ const Customer = require('../models/customer.model');
 const availableSlotService = require('./availableSlot.service');
 const appointmentService = require('./appointment.service');
 const { calculateServicePrice } = require('../utils/promotionHelper');
+const ScheduleHelper = require('../utils/scheduleHelper');
 
 // Initialize OpenAI client
 // ⭐ Timeout được config ở client level (nếu cần), không phải request level
@@ -43,7 +44,7 @@ class AIBookingService {
       const searchDate = date instanceof Date ? date : new Date(date);
       searchDate.setHours(0, 0, 0, 0);
 
-      const schedules = await DoctorSchedule.find({
+      let schedules = await DoctorSchedule.find({
         doctorUserId: doctorUserId,
         date: searchDate,
         status: 'Available'
@@ -51,9 +52,43 @@ class AIBookingService {
       .select('workingHours')
       .lean();
 
+      // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
       if (schedules.length === 0) {
-        console.log(`⚠️ [getWorkingHoursFromDatabase] No schedules found for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}`);
-        return null;
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        
+        // Chỉ tự động tạo schedule cho ngày tương lai
+        if (searchDate >= now) {
+          console.log(`⚠️ [getWorkingHoursFromDatabase] No schedules found for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}. Auto-creating schedule...`);
+          
+          try {
+            // Tự động tạo schedule cho bác sĩ này vào ngày này
+            await ScheduleHelper.ensureScheduleForDoctor(doctorUserId, searchDate);
+            
+            // Query lại sau khi tạo
+            schedules = await DoctorSchedule.find({
+              doctorUserId: doctorUserId,
+              date: searchDate,
+              status: 'Available'
+            })
+            .select('workingHours')
+            .lean();
+            
+            if (schedules.length === 0) {
+              console.log(`⚠️ [getWorkingHoursFromDatabase] Failed to create schedule for doctorId ${doctorUserId}`);
+              return null;
+            }
+            
+            console.log(`✅ [getWorkingHoursFromDatabase] Auto-created schedule for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}`);
+          } catch (createError) {
+            console.error(`❌ [getWorkingHoursFromDatabase] Error auto-creating schedule:`, createError.message);
+            return null;
+          }
+        } else {
+          // Ngày quá khứ - không tự động tạo
+          console.log(`⚠️ [getWorkingHoursFromDatabase] No schedules found for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]} (past date, not auto-creating)`);
+          return null;
+        }
       }
 
       // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
@@ -431,20 +466,53 @@ class AIBookingService {
           const { date, time, doctorId } = validatedArgs;
           
           // ⭐ CỰC KỲ QUAN TRỌNG - LUÔN LẤY WORKING HOURS TỪ DATABASE
-          // Nếu không có doctorId hoặc không query được, trả về error thay vì dùng mặc định
           let workingHours = null;
           
           if (doctorId && mongoose.Types.ObjectId.isValid(doctorId)) {
+            // Nếu có doctorId, lấy workingHours từ bác sĩ đó
             workingHours = await this.getWorkingHoursFromDatabase(doctorId, date);
+          } else {
+            // Nếu không có doctorId, lấy workingHours từ một bác sĩ bất kỳ trong database
+            // để validate working hours (vì tất cả bác sĩ thường có cùng working hours)
+            try {
+              const searchDate = date instanceof Date ? date : new Date(date);
+              searchDate.setHours(0, 0, 0, 0);
+              
+              // Lấy schedule của bất kỳ bác sĩ nào vào ngày này (hoặc ngày gần nhất)
+              let anySchedule = await DoctorSchedule.findOne({
+                date: searchDate,
+                status: 'Available'
+              })
+              .select('workingHours')
+              .sort({ date: -1 })
+              .lean();
+              
+              // Nếu không có schedule cho ngày này, lấy schedule mới nhất của bất kỳ bác sĩ nào
+              if (!anySchedule) {
+                anySchedule = await DoctorSchedule.findOne({
+                  status: 'Available'
+                })
+                .select('workingHours')
+                .sort({ date: -1 })
+                .lean();
+              }
+              
+              if (anySchedule && anySchedule.workingHours) {
+                workingHours = anySchedule.workingHours;
+                console.log(`✅ [check_appointment_conflict] Using workingHours from any doctor's schedule:`, workingHours);
+              }
+            } catch (error) {
+              console.error(`❌ [check_appointment_conflict] Error getting workingHours from any doctor:`, error.message);
+            }
           }
           
-          // Nếu không có workingHours từ database, trả về error
+          // Nếu vẫn không có workingHours, không thể validate - trả về error
           if (!workingHours) {
             return {
               hasConflict: true,
               conflictMessage: doctorId 
                 ? `Không tìm thấy lịch làm việc của bác sĩ vào ngày ${date}. Vui lòng chọn ngày khác hoặc bác sĩ khác.`
-                : `Vui lòng chọn bác sĩ trước khi kiểm tra thời gian.`,
+                : `Không thể xác định khung giờ làm việc. Vui lòng chọn bác sĩ trước khi kiểm tra thời gian.`,
               workingHours: null
             };
           }
@@ -497,9 +565,10 @@ class AIBookingService {
           const isInAfternoon = timeInMinutes >= afternoonStart && timeInMinutes < afternoonEnd;
           
           if (!isInMorning && !isInAfternoon) {
+            // ⭐ HIỂN THỊ WORKING HOURS CỤ THỂ TRONG ERROR MESSAGE
             return {
               hasConflict: true,
-              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Vui lòng chọn thời gian trong khung giờ làm việc.`,
+              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn thời gian trong khung giờ làm việc.`,
               workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng trong error message
             };
           }
@@ -754,15 +823,25 @@ class AIBookingService {
           }
           
           // ⭐ FILTER CHẶT CHẼ - Chỉ match khi có từ khóa quan trọng
+          // ⭐ NORMALIZE: Loại bỏ dấu tiếng Việt để match cả "thay rang su" và "Thay răng sứ"
+          const normalizeString = (str) => {
+            return str
+              .toLowerCase()
+              .normalize('NFD') // Chuyển sang dạng decomposed (á → a + ́)
+              .replace(/[\u0300-\u036f]/g, '') // Loại bỏ dấu
+              .replace(/[^\w\s]/g, '') // Loại bỏ ký tự đặc biệt
+              .trim();
+          };
+          
           const inputLower = serviceName.toLowerCase().trim();
-          const normalizedInput = inputLower.replace(/[^\w\s]/g, '').trim();
+          const normalizedInput = normalizeString(serviceName);
           
           // Danh sách từ chung chung cần loại bỏ
           const commonWords = ['cho', 'và', 'của', 'có', 'là', 'để', 'với', 'từ', 'trong', 'theo', 'người', 'mới', 'đầu'];
           
-          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          // ✅ PRIORITY 1: Exact match (case-insensitive, không dấu)
           let matchedServices = servicesWithPrice.filter(s => {
-            const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
+            const serviceNameNormalized = normalizeString(s.serviceName);
             return serviceNameNormalized === normalizedInput;
           });
           
@@ -771,8 +850,7 @@ class AIBookingService {
           // Ví dụ: "khám tổng quát" chỉ match với "Khám tổng quát định kỳ", không match với "Trồng răng hàm"
           if (matchedServices.length === 0 && normalizedInput.length >= 3) {
             matchedServices = servicesWithPrice.filter(s => {
-              const serviceNameLower = s.serviceName.toLowerCase();
-              const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
+              const serviceNameNormalized = normalizeString(s.serviceName);
               
               // ⭐ Chỉ match nếu service name chứa input (không match ngược lại)
               // Và input phải có ít nhất 2 từ để tránh match quá rộng
@@ -795,27 +873,29 @@ class AIBookingService {
             if (inputWords.length > 0) {
               // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords) - ƯU TIÊN CAO NHẤT
               const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt'];
+              const categoryKeywordsNormalized = categoryKeywords.map(kw => normalizeString(kw));
               
-              // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
+              // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không (so sánh normalized)
               const categoryKeywordInInput = inputWords.find(word => 
-                categoryKeywords.some(keyword => 
-                  word === keyword || word.includes(keyword) || keyword.includes(word)
+                categoryKeywordsNormalized.some(keywordNormalized => 
+                  word === keywordNormalized || word.includes(keywordNormalized) || keywordNormalized.includes(word)
                 )
               );
               
               // ⭐ Nếu có category keyword → match với tất cả service có chứa từ khóa đó (ƯU TIÊN)
               if (categoryKeywordInInput) {
-                const matchedCategory = categoryKeywords.find(keyword => 
-                  categoryKeywordInInput === keyword || 
-                  categoryKeywordInInput.includes(keyword) || 
-                  keyword.includes(categoryKeywordInInput)
+                const matchedCategoryIndex = categoryKeywordsNormalized.findIndex(keywordNormalized => 
+                  categoryKeywordInInput === keywordNormalized || 
+                  categoryKeywordInInput.includes(keywordNormalized) || 
+                  keywordNormalized.includes(categoryKeywordInInput)
                 );
                 
-                if (matchedCategory) {
-                  // ✅ Match với tất cả service có chứa category keyword
+                if (matchedCategoryIndex >= 0) {
+                  const matchedCategory = categoryKeywords[matchedCategoryIndex];
+                  // ✅ Match với tất cả service có chứa category keyword (normalized)
                   matchedServices = servicesWithPrice.filter(s => {
-                    const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
-                    return serviceNameNormalized.includes(matchedCategory);
+                    const serviceNameNormalized = normalizeString(s.serviceName);
+                    return serviceNameNormalized.includes(categoryKeywordInInput);
                   });
                 }
               }
@@ -823,22 +903,22 @@ class AIBookingService {
               // Nếu chưa match (không có category keyword hoặc không tìm thấy), dùng logic word-based matching
           if (matchedServices.length === 0) {
                 matchedServices = servicesWithPrice.filter(s => {
-                  const serviceNameLower = s.serviceName.toLowerCase();
-                  const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
-                  const serviceWords = serviceNameLower.split(/\s+/);
+                  const serviceNameNormalized = normalizeString(s.serviceName);
+                  const serviceWords = serviceNameNormalized.split(/\s+/);
                   
                   // ⭐ STRICT MATCHING: Đếm số từ có ý nghĩa khớp
                   const matchedWords = inputWords.filter(inputWord => {
-                    const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                    const inputWordClean = normalizeString(inputWord);
                     
                     // Check 1: Match với từng từ trong service name (EXACT match hoặc contains)
                     const wordMatch = serviceWords.some(serviceWord => {
-                      const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
+                      const serviceWordClean = normalizeString(serviceWord);
                       if (inputWordClean.length < 2 || serviceWordClean.length < 2) {
                         return false;
                       }
                       return serviceWordClean === inputWordClean || 
-                             serviceWordClean.includes(inputWordClean);
+                             serviceWordClean.includes(inputWordClean) ||
+                             inputWordClean.includes(serviceWordClean);
                     });
                     
                     // Check 2: Match với toàn bộ service name
@@ -847,15 +927,17 @@ class AIBookingService {
                     return wordMatch || fullMatch;
                   });
                   
-                  // Loại bỏ các từ chung chung
-                  const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
+                  // Loại bỏ các từ chung chung (normalize để so sánh)
+                  const commonWordsNormalized = commonWords.map(w => normalizeString(w));
+                  const meaningfulMatches = matchedWords.filter(word => !commonWordsNormalized.includes(normalizeString(word)));
                   
                   const importantWords = ['khám', 'răng', 'tim', 'mạch', 'tổng', 'quát', 'định', 'kỳ', 'mắt'];
+                  const importantWordsNormalized = importantWords.map(w => normalizeString(w));
                   
                   if (inputWords.length === 1) {
                     return meaningfulMatches.length > 0;
                   } else if (inputWords.length === 2) {
-                    const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
+                    const hasImportantMatch = meaningfulMatches.some(word => importantWordsNormalized.includes(normalizeString(word)));
                     return meaningfulMatches.length >= 1 && hasImportantMatch;
                   } else {
                     return meaningfulMatches.length >= 2;
@@ -1361,8 +1443,40 @@ class AIBookingService {
             status: 'Available'
           }).lean();
           
+          // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
           if (schedules.length === 0) {
-            return { error: `Bác sĩ này không có lịch làm việc vào ngày ${date}` };
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            
+            // Chỉ tự động tạo schedule cho ngày tương lai
+            if (searchDate >= now) {
+              console.log(`⚠️ [get_available_slots] No schedules found for doctorId ${doctor._id}, date ${date}. Auto-creating schedule...`);
+              
+              try {
+                // Tự động tạo schedule cho bác sĩ này vào ngày này
+                await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+                
+                // Query lại sau khi tạo
+                const newSchedules = await DoctorSchedule.find({
+                  doctorUserId: doctor._id,
+                  date: searchDate,
+                  status: 'Available'
+                }).lean();
+                
+                if (newSchedules.length === 0) {
+                  return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+                }
+                
+                schedules = newSchedules;
+                console.log(`✅ [get_available_slots] Auto-created schedule for doctorId ${doctor._id}, date ${date}`);
+              } catch (createError) {
+                console.error(`❌ [get_available_slots] Error auto-creating schedule:`, createError.message);
+                return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+              }
+            } else {
+              // Ngày quá khứ - không tự động tạo
+              return { error: `Bác sĩ này không có lịch làm việc vào ngày ${date}` };
+            }
           }
           
           // ⭐ LUÔN LẤY WORKING HOURS TỪ DATABASE - KHÔNG DÙNG MẶC ĐỊNH
@@ -1827,8 +1941,40 @@ class AIBookingService {
               status: 'Available'
             }).lean();
             
+            // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
             if (schedules.length === 0) {
-              return { error: 'Bác sĩ này không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.' };
+              const now = new Date();
+              now.setHours(0, 0, 0, 0);
+              
+              // Chỉ tự động tạo schedule cho ngày tương lai
+              if (appointmentDate >= now) {
+                console.log(`⚠️ [create_appointment] No schedules found for doctorId ${doctor._id}, date ${normalizedDate}. Auto-creating schedule...`);
+                
+                try {
+                  // Tự động tạo schedule cho bác sĩ này vào ngày này
+                  await ScheduleHelper.ensureScheduleForDoctor(doctor._id, appointmentDate);
+                  
+                  // Query lại sau khi tạo
+                  const newSchedules = await DoctorSchedule.find({
+                    doctorUserId: doctor._id,
+                    date: appointmentDate,
+                    status: 'Available'
+                  }).lean();
+                  
+                  if (newSchedules.length === 0) {
+                    return { error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này. Vui lòng thử lại sau.' };
+                  }
+                  
+                  schedules = newSchedules;
+                  console.log(`✅ [create_appointment] Auto-created schedule for doctorId ${doctor._id}, date ${normalizedDate}`);
+                } catch (createError) {
+                  console.error(`❌ [create_appointment] Error auto-creating schedule:`, createError.message);
+                  return { error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này. Vui lòng thử lại sau.' };
+                }
+              } else {
+                // Ngày quá khứ - không tự động tạo
+                return { error: 'Bác sĩ này không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.' };
+              }
             }
             
             // Find schedule that matches the time slot (morning or afternoon)
