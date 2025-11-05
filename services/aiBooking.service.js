@@ -12,8 +12,10 @@ const appointmentService = require('./appointment.service');
 const { calculateServicePrice } = require('../utils/promotionHelper');
 
 // Initialize OpenAI client
+// ⭐ Timeout được config ở client level (nếu cần), không phải request level
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+  timeout: 30000, // 30 seconds timeout cho tất cả requests
 });
 
 // ⭐ AI Model Configuration - TẤT CẢ API calls đều dùng model này
@@ -1421,8 +1423,8 @@ class AIBookingService {
           top_p: 0.9, // ⭐ Nucleus sampling - chỉ xem xét 90% tokens có xác suất cao nhất
           frequency_penalty: 0.3, // ⭐ Giảm lặp lại từ/cụm từ (tăng tính đa dạng)
           presence_penalty: 0.2, // ⭐ Khuyến khích đề cập đến các chủ đề mới
-          max_tokens: 2500, // ⭐ Tăng lên để đảm bảo đủ tokens cho response chi tiết
-          timeout: 30000 // 30 seconds timeout
+          max_tokens: 2500 // ⭐ Tăng lên để đảm bảo đủ tokens cho response chi tiết
+          // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
         });
       }, 3, 1000);
       
@@ -1505,8 +1507,8 @@ class AIBookingService {
             top_p: 0.9,
             frequency_penalty: 0.3,
             presence_penalty: 0.2,
-            max_tokens: 2500,
-            timeout: 30000
+            max_tokens: 2500
+            // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
           });
         }, 3, 1000);
         
