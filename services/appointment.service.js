@@ -1424,9 +1424,11 @@ class AppointmentService {
         throw new Error('Lịch khám không tồn tại');
       }
 
-      // ✅ Sửa logic condition
-      if (!(appointment.status === 'Pending' || appointment.status === 'Approved')) {
-        throw new Error('Trạng thái lịch khám không khả dụng');
+      // ✅ Cho phép gán bác sĩ khi appointment ở status: Pending, Approved, CheckedIn
+      // (Khi bác sĩ On Leave, staff có thể gán bác sĩ mới cho appointment đã được check-in)
+      const allowedStatuses = ['Pending', 'Approved', 'CheckedIn'];
+      if (!allowedStatuses.includes(appointment.status)) {
+        throw new Error(`Trạng thái lịch khám (${appointment.status}) không khả dụng để gán bác sĩ. Chỉ cho phép với lịch ở trạng thái: ${allowedStatuses.join(', ')}`);
       }
 
       const newDoctor = await User.findById(newDoctorId).select('fullName');
