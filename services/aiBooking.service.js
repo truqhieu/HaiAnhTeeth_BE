@@ -225,20 +225,38 @@ class AIBookingService {
             return { hasConflict: false }; // Không có patientUserId thì không check
           }
           
-          // Parse date và time
+          // Parse date và time - QUAN TRỌNG: Convert về VN timezone (UTC+7)
           const [hours, minutes] = time.split(':').map(Number);
-          const appointmentDate = new Date(date);
-          appointmentDate.setHours(hours, minutes, 0, 0);
+          
+          // Parse date string (YYYY-MM-DD) và tạo Date object ở VN timezone
+          // date string là "2025-11-06" - cần tạo Date ở VN timezone (08:30 VN = 01:30 UTC)
+          // VN timezone = UTC+7, nên 08:30 VN = 01:30 UTC
+          const dateParts = date.split('-');
+          const year = parseInt(dateParts[0]);
+          const month = parseInt(dateParts[1]) - 1; // Month is 0-indexed
+          const day = parseInt(dateParts[2]);
+          
+          // Tạo Date ở UTC với thời gian VN (trừ 7 giờ để convert sang UTC)
+          // Xử lý trường hợp hours < 7 (ví dụ: 06:00 VN = 23:00 UTC ngày hôm trước)
+          let utcHours = hours - 7;
+          let utcDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+          if (utcHours < 0) {
+            // Nếu giờ UTC < 0, lùi lại 1 ngày và cộng 24 giờ
+            utcDate.setUTCDate(utcDate.getUTCDate() - 1);
+            utcHours += 24;
+          }
+          utcDate.setUTCHours(utcHours, minutes, 0, 0);
+          const appointmentDateUTC = utcDate;
           
           // Tính endTime (giả sử duration tối đa là 120 phút để check conflict)
-          const endTime = new Date(appointmentDate);
-          endTime.setMinutes(endTime.getMinutes() + 120);
+          const endTimeUTC = new Date(appointmentDateUTC);
+          endTimeUTC.setUTCMinutes(endTimeUTC.getUTCMinutes() + 120);
           
           // Check conflict với appointments của patient (BẤT KỲ bác sĩ nào)
           const Appointment = require('../models/appointment.model');
           const patientConflictAppointments = await Appointment.find({
             patientUserId: patientUserId,
-            status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+            status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
             timeslotId: { $exists: true }
           }).populate({
             path: 'timeslotId',
@@ -252,7 +270,8 @@ class AIBookingService {
             const aptEndTime = new Date(apt.timeslotId.endTime);
             
             // Conflict nếu: appointmentDate < aptEndTime && endTime > aptStartTime
-            return appointmentDate < aptEndTime && endTime > aptStartTime;
+            // So sánh trực tiếp UTC timestamps
+            return appointmentDateUTC < aptEndTime && endTimeUTC > aptStartTime;
           });
           
           if (hasConflict) {
@@ -261,15 +280,25 @@ class AIBookingService {
               if (!apt.timeslotId) return false;
               const aptStartTime = new Date(apt.timeslotId.startTime);
               const aptEndTime = new Date(apt.timeslotId.endTime);
-              return appointmentDate < aptEndTime && endTime > aptStartTime;
+              return appointmentDateUTC < aptEndTime && endTimeUTC > aptStartTime;
             });
             
             if (conflictAppt && conflictAppt.timeslotId) {
               const conflictStart = new Date(conflictAppt.timeslotId.startTime);
               const conflictEnd = new Date(conflictAppt.timeslotId.endTime);
-              const conflictDateVN = conflictStart.toLocaleDateString('vi-VN');
-              const conflictStartVN = conflictStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-              const conflictEndVN = conflictEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+              const conflictDateVN = conflictStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+              const conflictStartVN = conflictStart.toLocaleTimeString('vi-VN', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'Asia/Ho_Chi_Minh'
+              });
+              const conflictEndVN = conflictEnd.toLocaleTimeString('vi-VN', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'Asia/Ho_Chi_Minh'
+              });
               
               return {
                 hasConflict: true,
@@ -370,12 +399,22 @@ class AIBookingService {
           
           // ⭐ Tính giá sau khuyến mãi cho tất cả services
           const servicesWithPrice = await Promise.all(services.map(async (s) => {
-            const promotionData = await calculateServicePrice(s._id.toString(), s.price);
-            return {
-              ...s,
-              originalPrice: promotionData.originalPrice,
-              finalPrice: promotionData.finalPrice
-            };
+            try {
+              const promotionData = await calculateServicePrice(s._id.toString(), s.price);
+              return {
+                ...s,
+                originalPrice: promotionData.originalPrice,
+                finalPrice: promotionData.finalPrice
+              };
+            } catch (promoError) {
+              console.error(`⚠️ [AI] Error calculating price for service ${s._id}:`, promoError);
+              // Nếu lỗi tính giá, vẫn trả về service với giá gốc
+              return {
+                ...s,
+                originalPrice: s.price || 0,
+                finalPrice: s.price || 0
+              };
+            }
           }));
           
           // Check nếu input là số thứ tự
@@ -976,7 +1015,7 @@ class AIBookingService {
             // Lấy tất cả appointments của patient trong ngày đó
             const patientAppointments = await Appointment.find({
               patientUserId: patientUserId,
-              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
               timeslotId: { $exists: true }
             })
             .populate({
@@ -1447,7 +1486,7 @@ class AIBookingService {
             // 9. Check conflict với appointments của patient (BẤT KỲ bác sĩ nào) - không được đặt 2 bác sĩ khác nhau cùng giờ
             const patientConflictAppointments = await Appointment.find({
               patientUserId: patientUserId,
-              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
               timeslotId: { $exists: true }
             }).populate({
               path: 'timeslotId',
@@ -1472,7 +1511,7 @@ class AIBookingService {
             const sameDayAppointments = await Appointment.find({
               patientUserId,
               doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
-              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+              status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
               timeslotId: { $exists: true }
             }).populate({
               path: 'timeslotId',
