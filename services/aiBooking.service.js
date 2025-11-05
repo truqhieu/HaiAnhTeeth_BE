@@ -829,13 +829,26 @@ class AIBookingService {
             return { valid: false, error: 'Missing doctorId' };
           }
           
-          const doctor = await User.findOne({ 
-            _id: doctorId, 
-            role: 'Doctor',
-            status: 'Active' 
-          })
-          .select('_id fullName specialization email phoneNumber status role')
-          .lean();
+          const mongoose = require('mongoose');
+          const doctorIdStr = doctorId.toString();
+          
+          // Check nếu doctorId là ObjectId hợp lệ
+          let doctor = null;
+          if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
+            doctor = await User.findOne({ 
+              _id: doctorIdStr, 
+              role: 'Doctor',
+              status: 'Active' 
+            })
+            .select('_id fullName specialization email phoneNumber status role')
+            .lean();
+          } else {
+            // Nếu không phải ObjectId → có thể là tên bác sĩ (sai)
+            return { 
+              valid: false, 
+              error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc validate_doctor.` 
+            };
+          }
           
           if (!doctor) {
             return { valid: false, error: 'Doctor not found or inactive' };
@@ -961,9 +974,10 @@ class AIBookingService {
           
           const serviceDuration = service.durationMinutes || 30;
           
-          // Xử lý doctorId: có thể là ObjectId hoặc số thứ tự
+          // Xử lý doctorId: có thể là ObjectId, số thứ tự, hoặc tên bác sĩ (sai)
           let doctor = null;
           const doctorIdStr = doctorId.toString();
+          const mongoose = require('mongoose');
           
           // Check nếu doctorId là số thứ tự
           const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
@@ -1001,10 +1015,31 @@ class AIBookingService {
               return { error: `Số thứ tự ${doctorIdStr} không hợp lệ. Vui lòng chọn lại bác sĩ.` };
             }
           } else {
-            // Dùng doctorId trực tiếp (ObjectId)
-            doctor = await User.findById(doctorId)
+            // Check nếu doctorId là ObjectId hợp lệ
+            if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
+              // Dùng doctorId trực tiếp (ObjectId)
+              doctor = await User.findById(doctorIdStr)
+                .select('_id fullName specialization email phoneNumber status role')
+                .lean();
+            } else {
+              // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
+              // Tìm bác sĩ theo tên
+              const doctorByName = await User.findOne({ 
+                fullName: { $regex: new RegExp(`^${doctorIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                role: 'Doctor',
+                status: 'Active'
+              })
               .select('_id fullName specialization email phoneNumber status role')
               .lean();
+              
+              if (doctorByName) {
+                doctor = doctorByName;
+              } else {
+                return { 
+                  error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.` 
+                };
+              }
+            }
           }
           
           if (!doctor) {
@@ -1310,9 +1345,10 @@ class AIBookingService {
               return { error: 'Tài khoản của bạn không hợp lệ. Vui lòng đăng nhập lại.' };
             }
             
-            // 2. Validate service (có thể là ObjectId hoặc số thứ tự)
+            // 2. Validate service (có thể là ObjectId, số thứ tự, hoặc tên dịch vụ - sai)
             let service = null;
             const serviceIdStr = serviceId.toString();
+            const mongoose = require('mongoose');
             const serviceNumberMatch = serviceIdStr.match(/^\d+$/);
             
             if (serviceNumberMatch) {
@@ -1326,9 +1362,29 @@ class AIBookingService {
                 service = services[index];
               }
             } else {
-              service = await Service.findById(serviceId)
+              // Check nếu serviceId là ObjectId hợp lệ
+              if (mongoose.Types.ObjectId.isValid(serviceIdStr)) {
+                service = await Service.findById(serviceIdStr)
+                  .select('_id serviceName durationMinutes category price isPrepaid status description')
+                  .lean();
+              } else {
+                // Nếu không phải ObjectId và không phải số → có thể là tên dịch vụ (sai)
+                // Tìm dịch vụ theo tên
+                const serviceByName = await Service.findOne({ 
+                  serviceName: { $regex: new RegExp(`^${serviceIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                  status: 'Active' 
+                })
                 .select('_id serviceName durationMinutes category price isPrepaid status description')
                 .lean();
+                
+                if (serviceByName) {
+                  service = serviceByName;
+                } else {
+                  return { 
+                    error: `ServiceId "${serviceIdStr}" không hợp lệ. Vui lòng sử dụng serviceId (ObjectId) từ find_service_by_name hoặc số thứ tự từ danh sách dịch vụ.` 
+                  };
+                }
+              }
             }
             
             if (!service) {
@@ -1338,9 +1394,10 @@ class AIBookingService {
               return { error: 'Dịch vụ này hiện không khả dụng' };
             }
             
-            // 3. Validate doctor (có thể là ObjectId hoặc số thứ tự)
+            // 3. Validate doctor (có thể là ObjectId, số thứ tự, hoặc tên bác sĩ - sai)
             let doctor = null;
             const doctorIdStr = doctorId.toString();
+            const mongoose = require('mongoose');
             const doctorNumberMatch = doctorIdStr.match(/^\d+$/);
             
             if (doctorNumberMatch) {
@@ -1354,9 +1411,30 @@ class AIBookingService {
                 doctor = doctors[index];
               }
             } else {
-              doctor = await User.findById(doctorId)
+              // Check nếu doctorId là ObjectId hợp lệ
+              if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
+                doctor = await User.findById(doctorIdStr)
+                  .select('_id fullName specialization role status email phoneNumber')
+                  .lean();
+              } else {
+                // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
+                // Tìm bác sĩ theo tên
+                const doctorByName = await User.findOne({ 
+                  fullName: { $regex: new RegExp(`^${doctorIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                  role: 'Doctor',
+                  status: 'Active'
+                })
                 .select('_id fullName specialization role status email phoneNumber')
                 .lean();
+                
+                if (doctorByName) {
+                  doctor = doctorByName;
+                } else {
+                  return { 
+                    error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.` 
+                  };
+                }
+              }
             }
             
             if (!doctor) {
