@@ -642,15 +642,58 @@ HaiAnhTeeth Team
 };
 
 const getAppointmentCancelledEmailTemplate = (appointmentData) => {
-  const { fullName, serviceName, doctorName, startTime, endTime, type, mode, cancelReason } = appointmentData;
+  const { 
+    fullName, 
+    serviceName, 
+    doctorName, 
+    startTime, 
+    endTime, 
+    type, 
+    mode, 
+    cancelReason,
+    appointmentId,
+    patientPhone,
+    patientEmail,
+    servicePrice,
+    serviceDuration,
+    cancelledAt
+  } = appointmentData;
   
   // Format date and time
   const formattedDate = DateHelper.formatVietnameseDate(startTime);
   const formattedStartTime = DateHelper.formatVietnameseTime(startTime);
   const formattedEndTime = DateHelper.formatVietnameseTime(endTime);
+  // Format cancelledAt time
+  let formattedCancelledAt;
+  if (cancelledAt) {
+    try {
+      const cancelledDate = new Date(cancelledAt);
+      formattedCancelledAt = cancelledDate.toLocaleString('vi-VN', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    } catch (e) {
+      formattedCancelledAt = new Date().toLocaleString('vi-VN');
+    }
+  } else {
+    formattedCancelledAt = new Date().toLocaleString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh'
+    });
+  }
 
   const typeText = type === 'Consultation' ? 'Tư vấn' : type === 'Examination' ? 'Khám bệnh' : 'Tái khám';
   const modeText = mode === 'Online' ? 'Trực tuyến' : 'Trực tiếp';
+  
+  // Format price
+  const formattedPrice = servicePrice ? new Intl.NumberFormat('vi-VN', { 
+    style: 'currency', 
+    currency: 'VND' 
+  }).format(servicePrice) : 'Miễn phí';
 
   return {
     subject: `❌ Lịch ${typeText} đã bị hủy - HaiAnhTeeth`,
@@ -660,11 +703,20 @@ Xin chào ${fullName}!
 Chúng tôi xin thông báo rằng lịch ${typeText.toLowerCase()} của bạn đã bị hủy.
 
 THÔNG TIN CUỘC HẸN ĐÃ HỦY:
+- Mã lịch hẹn: ${appointmentId || 'N/A'}
 - Dịch vụ: ${serviceName}
 - Bác sĩ: ${doctorName}
 - Thời gian: ${formattedStartTime} - ${formattedEndTime}
 - Ngày: ${formattedDate}
 - Hình thức: ${modeText}
+- Thời lượng: ${serviceDuration || 30} phút
+- Giá dịch vụ: ${formattedPrice}
+- Thời gian hủy: ${formattedCancelledAt}
+
+THÔNG TIN KHÁCH HÀNG:
+- Họ tên: ${fullName}
+- Email: ${patientEmail || 'N/A'}
+- Số điện thoại: ${patientPhone || 'N/A'}
 
 LÝ DO HỦY:
 ${cancelReason}
@@ -714,6 +766,18 @@ HaiAnhTeeth Team
         <table style="width: 100%; border-collapse: collapse;">
           <tr style="border-bottom: 1px solid #fecaca;">
             <td style="padding: 12px 0; vertical-align: top; width: 36px;">
+              <span style="font-size: 20px;">🆔</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top; width: 100px;">
+              <span style="color: #7f1d1d; font-size: 14px; font-weight: 400;">Mã lịch hẹn</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #991b1b; font-size: 15px; font-weight: 500; font-family: monospace;">${appointmentId || 'N/A'}</span>
+            </td>
+          </tr>
+          
+          <tr style="border-bottom: 1px solid #fecaca;">
+            <td style="padding: 12px 0; vertical-align: top; width: 36px;">
               <span style="font-size: 20px;">💊</span>
             </td>
             <td style="padding: 12px 0; vertical-align: top; width: 100px;">
@@ -760,7 +824,31 @@ HaiAnhTeeth Team
             </td>
           </tr>
           
-          <tr>
+          <tr style="border-bottom: 1px solid #fecaca;">
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="font-size: 20px;">⏱️</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #7f1d1d; font-size: 14px; font-weight: 400;">Thời lượng</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #991b1b; font-size: 15px; font-weight: 500;">${serviceDuration || 30} phút</span>
+            </td>
+          </tr>
+          
+          <tr style="border-bottom: 1px solid #fecaca;">
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="font-size: 20px;">💰</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #7f1d1d; font-size: 14px; font-weight: 400;">Giá dịch vụ</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #991b1b; font-size: 15px; font-weight: 500;">${formattedPrice}</span>
+            </td>
+          </tr>
+          
+          <tr style="border-bottom: 1px solid #fecaca;">
             <td style="padding: 12px 0; vertical-align: top;">
               <span style="font-size: 20px;">${mode === 'Online' ? '💻' : '🏥'}</span>
             </td>
@@ -771,7 +859,40 @@ HaiAnhTeeth Team
               <span style="color: #991b1b; font-size: 15px; font-weight: 500;">${modeText}</span>
             </td>
           </tr>
+          
+          <tr>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="font-size: 20px;">⏰</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #7f1d1d; font-size: 14px; font-weight: 400;">Thời gian hủy</span>
+            </td>
+            <td style="padding: 12px 0; vertical-align: top;">
+              <span style="color: #991b1b; font-size: 15px; font-weight: 500;">${formattedCancelledAt}</span>
+            </td>
+          </tr>
         </table>
+        
+        <!-- Patient Info Section -->
+        <div style="background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 20px; margin: 20px 0;">
+          <h4 style="margin: 0 0 15px 0; color: #9a3412; font-size: 15px; font-weight: 600;">
+            👤 Thông tin khách hàng
+          </h4>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 8px 0; color: #7c2d12; font-size: 13px; font-weight: 400;">Họ tên:</td>
+              <td style="padding: 8px 0; color: #9a3412; font-size: 14px; font-weight: 500;">${fullName}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #7c2d12; font-size: 13px; font-weight: 400;">Email:</td>
+              <td style="padding: 8px 0; color: #9a3412; font-size: 14px; font-weight: 500;">${patientEmail || 'N/A'}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #7c2d12; font-size: 13px; font-weight: 400;">Số điện thoại:</td>
+              <td style="padding: 8px 0; color: #9a3412; font-size: 14px; font-weight: 500;">${patientPhone || 'N/A'}</td>
+            </tr>
+          </table>
+        </div>
       </div>
 
       <!-- Cancel Reason Box -->

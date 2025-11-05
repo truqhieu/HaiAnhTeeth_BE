@@ -725,16 +725,22 @@ class AppointmentService {
 
         console.log('✅ Appointment cancelled:', updatedAppointment._id);
 
-        // Prepare email
+        // Prepare email với đầy đủ thông tin
         emailData = {
           fullName: recipientName,
-          serviceName: updatedAppointment.serviceId.serviceName,
-          doctorName: updatedAppointment.doctorUserId.fullName,
-          startTime: updatedAppointment.timeslotId.startTime,
-          endTime: updatedAppointment.timeslotId.endTime,
-          type: updatedAppointment.type,
-          mode: updatedAppointment.mode,
-          cancelReason: cancelReason || 'Lịch hẹn đã bị hủy'
+          serviceName: updatedAppointment.serviceId?.serviceName || 'N/A',
+          doctorName: updatedAppointment.doctorUserId?.fullName || 'N/A',
+          startTime: updatedAppointment.timeslotId?.startTime || updatedAppointment.startTime,
+          endTime: updatedAppointment.timeslotId?.endTime || updatedAppointment.endTime,
+          type: updatedAppointment.type || 'Consultation',
+          mode: updatedAppointment.mode || 'Online',
+          cancelReason: cancelReason || 'Lịch hẹn đã bị hủy',
+          appointmentId: updatedAppointment._id?.toString() || appointmentId,
+          patientPhone: updatedAppointment.patientUserId?.phoneNumber || updatedAppointment.customerId?.phoneNumber || 'N/A',
+          patientEmail: emailRecipient,
+          servicePrice: updatedAppointment.serviceId?.price || 0,
+          serviceDuration: updatedAppointment.serviceId?.durationMinutes || 30,
+          cancelledAt: new Date().toISOString()
         };
 
         // ⭐ GỬI EMAIL ASYNC (NON-BLOCKING) - Không chờ xong mới trả response
