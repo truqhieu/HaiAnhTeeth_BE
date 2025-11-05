@@ -36,9 +36,29 @@ const getAllLeaveRequest = async (req, res) => {
       sort = 'desc',
     } = req.query;
 
+    console.log('📥 [getAllLeaveRequest Controller] Request query:', {
+      page,
+      limit,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort,
+      userRole: req.user?.role,
+      userId: req.user?.userId
+    });
+
     const result = await leaveRequestService.getAllLeaveRequests({
       page, limit, status, search, startDate, endDate, sort
     }, req.user?.role, req.user?.userId);
+
+    console.log('📤 [getAllLeaveRequest Controller] Response to send:', {
+      success: result.success,
+      total: result.total,
+      dataLength: result.data?.length || 0,
+      dataIsArray: Array.isArray(result.data),
+      hasData: !!result.data
+    });
 
     return res.status(200).json(result);
   } catch (error) {
