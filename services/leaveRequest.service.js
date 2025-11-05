@@ -3,10 +3,6 @@ const Appointment = require('../models/appointment.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
 const User = require('../models/user.model');
 const notificationService = require('./notification.service');
-const Appointment = require('../models/appointment.model');
-const DoctorSchedule = require('../models/doctorSchedule.model');
-const User = require('../models/user.model');
-const notificationService = require('./notification.service');
 
 const STATUS = LeaveRequest.schema.path('status').enumValues;
 
