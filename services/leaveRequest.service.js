@@ -144,7 +144,7 @@ class LeaveRequestService {
       LeaveRequest.find(filter)
         .populate({
           path: 'userId',
-          select: 'fullName role'
+          select: '_id fullName role' // ⭐ Thêm _id để frontend có thể extract
         })
         .populate({
           path: 'approvedByManager',

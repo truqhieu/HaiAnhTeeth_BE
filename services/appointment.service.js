@@ -861,8 +861,8 @@ class AppointmentService {
       const updatedAppointments = await Appointment.find(query)
         .populate('patientUserId', 'fullName email')
         .populate('customerId', 'fullName email')
-        .populate('doctorUserId', 'fullName email')
-        .populate('replacedDoctorUserId', 'fullName email')
+        .populate('doctorUserId', '_id fullName email') // ⭐ Thêm _id để frontend có thể extract
+        .populate('replacedDoctorUserId', '_id fullName email') // ⭐ Thêm _id để frontend có thể extract
         .populate('serviceId', 'serviceName price')
         .populate('timeslotId', 'startTime endTime')
         .sort({ createdAt: -1 });
