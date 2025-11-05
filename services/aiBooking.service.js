@@ -324,17 +324,37 @@ class AIBookingService {
       return functionArgs; // Không có validation rules, return as is
     }
 
+    // Lấy danh sách required fields từ tool definition
+    let requiredFields = [];
+    try {
+      const toolConfig = toolsConfig?.tools?.find(t => t.function?.name === functionName);
+      if (toolConfig?.function?.parameters?.required) {
+        requiredFields = toolConfig.function.parameters.required;
+      }
+    } catch (error) {
+      console.warn(`⚠️ Không thể lấy required fields cho ${functionName}, sử dụng validation rules mặc định`);
+    }
+
     const validated = {};
     for (const [key, validator] of Object.entries(rules)) {
       if (functionArgs.hasOwnProperty(key)) {
+        // Validate field nếu có trong functionArgs
         validated[key] = validator(functionArgs[key]);
-      } else if (validationRules[functionName][key]) {
-        // Required field missing
+      } else if (requiredFields.includes(key)) {
+        // Chỉ throw error nếu field là required và thiếu
+        throw new Error(`Thiếu tham số bắt buộc: ${key}`);
+      }
+      // Nếu field không có trong functionArgs và không phải required -> bỏ qua (optional field)
+    }
+
+    // Validate các required fields còn lại (nếu có trong functionArgs nhưng chưa được validate)
+    for (const key of requiredFields) {
+      if (!validated.hasOwnProperty(key) && !functionArgs.hasOwnProperty(key)) {
         throw new Error(`Thiếu tham số bắt buộc: ${key}`);
       }
     }
 
-    // Copy các fields không cần validate
+    // Copy các fields không cần validate (không có trong rules)
     Object.keys(functionArgs).forEach(key => {
       if (!validated.hasOwnProperty(key)) {
         validated[key] = functionArgs[key];
@@ -2195,6 +2215,56 @@ class AIBookingService {
               })
             });
             continue;
+          }
+          
+          // ⭐ Tự động thêm doctorId vào check_appointment_conflict nếu có trong conversation history
+          if (functionName === 'check_appointment_conflict' && !functionArgs.doctorId) {
+            // Tìm doctorId từ các function results trước đó (tìm ngược từ mới nhất đến cũ nhất)
+            for (let i = functionResults.length - 1; i >= 0; i--) {
+              const prevResult = functionResults[i];
+              
+              // Từ validate_doctor (ưu tiên cao nhất - đã được validate)
+              if (prevResult.functionName === 'validate_doctor') {
+                if (prevResult.result && prevResult.result.valid && prevResult.result.doctor && prevResult.result.doctor.id) {
+                  functionArgs.doctorId = prevResult.result.doctor.id;
+                  console.log(`✅ [AI] Auto-added doctorId from validate_doctor: ${functionArgs.doctorId}`);
+                  break;
+                }
+              }
+              
+              // Từ find_doctor_by_name (chỉ khi không có multiple hoặc đã chọn)
+              if (prevResult.functionName === 'find_doctor_by_name') {
+                if (prevResult.result && prevResult.result.found) {
+                  // Nếu chỉ có 1 doctor (không có multiple)
+                  if (prevResult.result.doctor && prevResult.result.doctor.id) {
+                    functionArgs.doctorId = prevResult.result.doctor.id;
+                    console.log(`✅ [AI] Auto-added doctorId from find_doctor_by_name: ${functionArgs.doctorId}`);
+                    break;
+                  }
+                }
+              }
+              
+              // Từ get_doctors (chỉ khi có 1 bác sĩ duy nhất)
+              if (prevResult.functionName === 'get_doctors') {
+                if (prevResult.result && prevResult.result.doctors && prevResult.result.doctors.length === 1) {
+                  functionArgs.doctorId = prevResult.result.doctors[0].id;
+                  console.log(`✅ [AI] Auto-added doctorId from get_doctors (single doctor): ${functionArgs.doctorId}`);
+                  break;
+                }
+              }
+            }
+            
+            // Nếu vẫn không có, tìm trong functionArgs của các function calls trước đó (get_available_slots, create_appointment)
+            if (!functionArgs.doctorId) {
+              for (let i = functionResults.length - 1; i >= 0; i--) {
+                const prevResult = functionResults[i];
+                if (prevResult.functionArgs && prevResult.functionArgs.doctorId) {
+                  functionArgs.doctorId = prevResult.functionArgs.doctorId;
+                  console.log(`✅ [AI] Auto-added doctorId from previous function args (${prevResult.functionName}): ${functionArgs.doctorId}`);
+                  break;
+                }
+              }
+            }
           }
           
           // Execute function với error handling tốt hơn
