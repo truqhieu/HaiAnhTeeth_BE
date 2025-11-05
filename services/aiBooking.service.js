@@ -144,21 +144,88 @@ class AIBookingService {
             }
           }
           
-          // ⭐ CHỈ MATCH CHÍNH XÁC - KHÔNG FILTER
-          // Normalize input để so sánh (loại bỏ dấu, ký tự đặc biệt, lowercase)
+          // ⭐ FILTER CHẶT CHẼ - Chỉ match khi có từ khóa quan trọng
           const inputLower = serviceName.toLowerCase().trim();
           const normalizedInput = inputLower.replace(/[^\w\s]/g, '').trim();
           
-          // ✅ CHỈ EXACT MATCH - So sánh chính xác tên dịch vụ (case-insensitive, sau khi normalize)
-          const matchedServices = servicesWithPrice.filter(s => {
+          // Danh sách từ chung chung cần loại bỏ
+          const commonWords = ['cho', 'và', 'của', 'có', 'là', 'để', 'với', 'từ', 'trong', 'theo', 'người', 'mới', 'đầu'];
+          
+          // ✅ PRIORITY 1: Exact match (case-insensitive)
+          let matchedServices = servicesWithPrice.filter(s => {
             const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
             return serviceNameNormalized === normalizedInput;
           });
           
-          // ❌ Không tìm thấy - CHỈ trả về error khi KHÔNG có exact match
+          // ✅ PRIORITY 2: Contains match - CHỈ khi input có ít nhất 3 ký tự và là từ có ý nghĩa
+          if (matchedServices.length === 0 && normalizedInput.length >= 3) {
+            matchedServices = servicesWithPrice.filter(s => {
+              const serviceNameLower = s.serviceName.toLowerCase();
+              const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
+              
+              // Chỉ match nếu service name chứa input (không match ngược lại để tránh quá rộng)
+              return serviceNameNormalized.includes(normalizedInput);
+            });
+          }
+          
+          // ✅ PRIORITY 3: Word-based matching - CHỈ match các từ có ý nghĩa (ít nhất 3 ký tự, không phải từ chung chung)
+          if (matchedServices.length === 0) {
+            const inputWords = normalizedInput.split(/\s+/)
+              .filter(w => w.length >= 3) // Chỉ lấy từ có ít nhất 3 ký tự
+              .filter(w => !commonWords.includes(w)); // Loại bỏ từ chung chung
+            
+            // Phải có ít nhất 1 từ có ý nghĩa mới match
+            if (inputWords.length > 0) {
+              matchedServices = servicesWithPrice.filter(s => {
+                const serviceNameLower = s.serviceName.toLowerCase();
+                const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
+                const serviceWords = serviceNameLower.split(/\s+/);
+                
+                // ⭐ STRICT MATCHING: Đếm số từ có ý nghĩa khớp
+                const matchedWords = inputWords.filter(inputWord => {
+                  const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                  
+                  // Check 1: Match với từng từ trong service name
+                  const wordMatch = serviceWords.some(serviceWord => {
+                    const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
+                    // Chỉ match nếu cả 2 đều có ít nhất 3 ký tự
+                    if (inputWordClean.length < 3 || serviceWordClean.length < 3) {
+                      return false;
+                    }
+                    return serviceWordClean.includes(inputWordClean) || 
+                           inputWordClean.includes(serviceWordClean);
+                  });
+                  
+                  // Check 2: Match với toàn bộ service name (để match "khám tổng quát" với "Khám tổng quát định kỳ")
+                  const fullMatch = serviceNameNormalized.includes(inputWordClean);
+                  
+                  return wordMatch || fullMatch;
+                });
+                
+                // ⭐ QUAN TRỌNG: 
+                // - Nếu có 1 từ → match nếu có ít nhất 1 từ khớp
+                // - Nếu có 2+ từ → match nếu có ít nhất 2 từ khớp (hoặc 1 từ nhưng là từ quan trọng như "khám", "răng")
+                // - Loại bỏ các từ chung chung
+                const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
+                
+                if (inputWords.length === 1) {
+                  // Chỉ có 1 từ → match nếu có ít nhất 1 từ có ý nghĩa khớp
+                  return meaningfulMatches.length > 0;
+                } else {
+                  // Có 2+ từ → match nếu có ít nhất 2 từ khớp HOẶC 1 từ quan trọng khớp
+                  const importantWords = ['khám', 'răng', 'tổng', 'quát', 'định', 'kỳ', 'tim', 'mạch'];
+                  const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
+                  
+                  return meaningfulMatches.length >= 2 || (meaningfulMatches.length >= 1 && hasImportantMatch);
+                }
+              });
+            }
+          }
+          
+          // ❌ Không tìm thấy
           if (matchedServices.length === 0) {
             return { 
-              error: `Không tìm thấy dịch vụ có tên chính xác là "${serviceName}". Vui lòng chọn một trong các dịch vụ có sẵn sau đây:`,
+              error: `Không tìm thấy dịch vụ phù hợp với "${serviceName}". Vui lòng chọn một trong các dịch vụ có sẵn sau đây:`,
               suggestions: servicesWithPrice.map(s => ({
                 id: s._id.toString(),
                 name: s.serviceName,
