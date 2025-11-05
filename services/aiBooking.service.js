@@ -1113,10 +1113,10 @@ class AIBookingService {
           
           // Lấy working hours từ schedule (lấy từ schedule đầu tiên, vì tất cả đều có cùng workingHours)
           const workingHours = schedules[0].workingHours || {
-            morningStart: '08:00',
+            morningStart: '07:00',
             morningEnd: '12:00',
-            afternoonStart: '13:00',
-            afternoonEnd: '17:00'
+            afternoonStart: '14:00',
+            afternoonEnd: '18:00'
           };
           
           // QUAN TRỌNG: Query Timeslots trực tiếp để lấy tất cả slots đã đặt (Reserved/Booked)
@@ -1616,13 +1616,15 @@ class AIBookingService {
             
             // Find schedule that matches the time slot (morning or afternoon)
             // hours và minutes đã được parse từ input (VN time)
+            // Lấy working hours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
+            const workingHours = schedules[0]?.workingHours || {
+              morningStart: '07:00',
+              morningEnd: '12:00',
+              afternoonStart: '14:00',
+              afternoonEnd: '18:00'
+            };
+            
             const schedule = schedules.find(s => {
-              const workingHours = s.workingHours || {
-                morningStart: '08:00',
-                morningEnd: '12:00',
-                afternoonStart: '13:00',
-                afternoonEnd: '17:00'
-              };
               
               if (s.shift === 'Morning') {
                 const [startHour, startMin] = workingHours.morningStart.split(':').map(Number);
@@ -1645,7 +1647,7 @@ class AIBookingService {
             if (!schedule) {
               // Lấy working hours từ schedule đầu tiên để hiển thị trong error message
               const workingHours = schedules[0]?.workingHours || {
-                morningStart: '08:00',
+                morningStart: '07:00',
                 morningEnd: '12:00',
                 afternoonStart: '14:00',
                 afternoonEnd: '18:00'
