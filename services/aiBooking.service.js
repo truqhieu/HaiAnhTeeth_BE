@@ -288,13 +288,12 @@ class AIBookingService {
           const afternoonStart = afternoonStartHour * 60 + afternoonStartMin;
           const afternoonEnd = afternoonEndHour * 60 + afternoonEndMin;
           
-          // Check xem time có nằm trong working hours không
-          const isInMorning = timeInMinutes >= morningStart && timeInMinutes < morningEnd;
-          const isInAfternoon = timeInMinutes >= afternoonStart && timeInMinutes < afternoonEnd;
-          const isMorningEndTime = timeInMinutes === morningEnd; // 12:00
-          const isAfternoonEndTime = timeInMinutes === afternoonEnd; // 18:00
+          // ⭐ CỰC KỲ QUAN TRỌNG - CHECK ENDTIME TRƯỚC (trước khi check isInMorning/isInAfternoon)
+          // Nếu time đúng bằng endTime, không thể đặt lịch vì đã hết ca
+          const isMorningEndTime = timeInMinutes === morningEnd;
+          const isAfternoonEndTime = timeInMinutes === afternoonEnd;
           
-          // ⭐ XỬ LÝ RIÊNG CHO ENDTIME (morningEnd và afternoonEnd từ database)
+          // ⭐ XỬ LÝ RIÊNG CHO ENDTIME (morningEnd và afternoonEnd từ database) - CHECK TRƯỚC
           if (isMorningEndTime) {
             return {
               hasConflict: true,
@@ -314,6 +313,10 @@ class AIBookingService {
               shift: 'Afternoon'
             };
           }
+          
+          // Check xem time có nằm trong working hours không (sau khi đã check endTime)
+          const isInMorning = timeInMinutes >= morningStart && timeInMinutes < morningEnd;
+          const isInAfternoon = timeInMinutes >= afternoonStart && timeInMinutes < afternoonEnd;
           
           if (!isInMorning && !isInAfternoon) {
             return {
