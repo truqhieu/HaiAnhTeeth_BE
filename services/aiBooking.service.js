@@ -245,16 +245,58 @@ class AIBookingService {
           // Check xem time có nằm trong working hours không
           const isInMorning = timeInMinutes >= morningStart && timeInMinutes < morningEnd;
           const isInAfternoon = timeInMinutes >= afternoonStart && timeInMinutes < afternoonEnd;
+          const isMorningEndTime = timeInMinutes === morningEnd; // 12:00
+          const isAfternoonEndTime = timeInMinutes === afternoonEnd; // 18:00
+          
+          // ⭐ XỬ LÝ RIÊNG CHO ENDTIME (12:00 và 18:00)
+          if (isMorningEndTime) {
+            return {
+              hasConflict: true,
+              conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi sáng. Vui lòng chọn thời gian trước ${time} hoặc chọn ca buổi chiều (từ 14:00).`,
+              isEndTime: true,
+              remainingMinutes: 0, // Hết ca
+              shift: 'Morning'
+            };
+          }
+          
+          if (isAfternoonEndTime) {
+            return {
+              hasConflict: true,
+              conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi chiều. Vui lòng chọn thời gian trước ${time}.`,
+              isEndTime: true,
+              remainingMinutes: 0, // Hết ca
+              shift: 'Afternoon'
+            };
+          }
           
           if (!isInMorning && !isInAfternoon) {
             return {
               hasConflict: true,
-              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Bác sĩ thường làm việc từ 07:00 - 12:00 (buổi sáng) và 14:00 - 18:00 (buổi chiều). Vui lòng chọn thời gian trong khung giờ làm việc.`
+              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Vui lòng chọn thời gian trong khung giờ làm việc.`
             };
           }
           
+          // ⭐ TÍNH THỜI GIAN CÒN LẠI TRONG CA để filter dịch vụ
+          // Tính dựa trên thời gian kết thúc của ca khám (endTime của shift), không phải ca làm việc
+          // Ví dụ: Nếu ca sáng kết thúc 12:00, user nhập 11:30 → remainingMinutes = 12:00 - 11:30 = 30 phút
+          let remainingMinutes = 0;
+          let currentShift = '';
+          if (isInMorning) {
+            currentShift = 'Morning';
+            // Thời gian còn lại = endTime của ca sáng - thời gian user nhập
+            remainingMinutes = morningEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca sáng (12:00)
+          } else if (isInAfternoon) {
+            currentShift = 'Afternoon';
+            // Thời gian còn lại = endTime của ca chiều - thời gian user nhập
+            remainingMinutes = afternoonEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca chiều (18:00)
+          }
+          
           if (!patientUserId) {
-            return { hasConflict: false }; // Không có patientUserId thì không check conflict
+            return { 
+              hasConflict: false,
+              remainingMinutes: remainingMinutes, // Thời gian còn lại trong ca
+              shift: currentShift // Ca hiện tại
+            };
           }
           
           // Parse date string (YYYY-MM-DD) và tạo Date object ở VN timezone
@@ -341,11 +383,15 @@ class AIBookingService {
             };
           }
           
-          return { hasConflict: false };
+          return { 
+            hasConflict: false,
+            remainingMinutes: remainingMinutes, // Thời gian còn lại trong ca
+            shift: currentShift // Ca hiện tại (Morning hoặc Afternoon)
+          };
         }
         
         case 'get_services': {
-          const { category } = validatedArgs;
+          const { category, maxDurationMinutes } = validatedArgs;
           const query = { status: 'Active' };
           if (category) {
             query.category = category;
@@ -355,9 +401,15 @@ class AIBookingService {
             .select('_id serviceName category durationMinutes price isPrepaid description')
             .sort({ category: 1, serviceName: 1 })
         .lean();
+          
+          // ⭐ FILTER DỊCH VỤ THEO THỜI GIAN CÒN LẠI (nếu có maxDurationMinutes)
+          let filteredServices = services;
+          if (maxDurationMinutes && maxDurationMinutes > 0) {
+            filteredServices = services.filter(s => (s.durationMinutes || 30) <= maxDurationMinutes);
+          }
 
           // ⭐ Tính giá sau khuyến mãi cho mỗi service
-          const servicesWithPrice = await Promise.all(services.map(async (s) => {
+          const servicesWithPrice = await Promise.all(filteredServices.map(async (s) => {
             const promotionData = await calculateServicePrice(s._id.toString(), s.price);
           return {
         id: s._id.toString(),
