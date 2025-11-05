@@ -350,82 +350,77 @@ class AIBookingService {
             
             // Phải có ít nhất 1 từ có ý nghĩa mới match
             if (inputWords.length > 0) {
-              matchedServices = servicesWithPrice.filter(s => {
-                const serviceNameLower = s.serviceName.toLowerCase();
-                const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
-                const serviceWords = serviceNameLower.split(/\s+/);
+              // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords)
+              // Khi user nhập từ khóa chung (ví dụ: "khám răng"), match với tất cả service có chứa từ khóa đó
+              const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt'];
+              
+              // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
+              // Ví dụ: "khám răng" → "răng" là category keyword
+              const categoryKeywordInInput = inputWords.find(word => 
+                categoryKeywords.some(keyword => 
+                  word === keyword || word.includes(keyword) || keyword.includes(word)
+                )
+              );
+              
+              // Nếu có category keyword → match với tất cả service có chứa từ khóa đó
+              if (categoryKeywordInInput) {
+                const matchedCategory = categoryKeywords.find(keyword => 
+                  categoryKeywordInInput === keyword || 
+                  categoryKeywordInInput.includes(keyword) || 
+                  keyword.includes(categoryKeywordInInput)
+                );
                 
-                // ⭐ STRICT MATCHING: Đếm số từ có ý nghĩa khớp
-                const matchedWords = inputWords.filter(inputWord => {
-                  const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                if (matchedCategory) {
+                  // ✅ Match với tất cả service có chứa category keyword
+                  matchedServices = servicesWithPrice.filter(s => {
+                    const serviceNameNormalized = s.serviceName.toLowerCase().replace(/[^\w\s]/g, '').trim();
+                    return serviceNameNormalized.includes(matchedCategory);
+                  });
+                }
+              }
+              
+              // Nếu chưa match (không có category keyword hoặc không tìm thấy), dùng logic word-based matching
+              if (matchedServices.length === 0) {
+                matchedServices = servicesWithPrice.filter(s => {
+                  const serviceNameLower = s.serviceName.toLowerCase();
+                  const serviceNameNormalized = serviceNameLower.replace(/[^\w\s]/g, '').trim();
+                  const serviceWords = serviceNameLower.split(/\s+/);
                   
-                  // Check 1: Match với từng từ trong service name (EXACT match hoặc contains)
-                  const wordMatch = serviceWords.some(serviceWord => {
-                    const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
-                    // Chỉ match nếu cả 2 đều có ít nhất 2 ký tự
-                    if (inputWordClean.length < 2 || serviceWordClean.length < 2) {
-                      return false;
-                    }
-                    // ⭐ EXACT match hoặc contains (không match ngược lại để tránh quá rộng)
-                    // Ví dụ: "răng" match với "răng" hoặc "răng" match với "răng hàm" (service chứa input)
-                    // Nhưng KHÔNG match "tổng" với "trồng" (vì "trồng" không chứa "tổng")
-                    return serviceWordClean === inputWordClean || 
-                           serviceWordClean.includes(inputWordClean);
+                  // ⭐ STRICT MATCHING: Đếm số từ có ý nghĩa khớp
+                  const matchedWords = inputWords.filter(inputWord => {
+                    const inputWordClean = inputWord.replace(/[^\w]/g, '');
+                    
+                    // Check 1: Match với từng từ trong service name (EXACT match hoặc contains)
+                    const wordMatch = serviceWords.some(serviceWord => {
+                      const serviceWordClean = serviceWord.replace(/[^\w]/g, '');
+                      if (inputWordClean.length < 2 || serviceWordClean.length < 2) {
+                        return false;
+                      }
+                      return serviceWordClean === inputWordClean || 
+                             serviceWordClean.includes(inputWordClean);
+                    });
+                    
+                    // Check 2: Match với toàn bộ service name
+                    const fullMatch = serviceNameNormalized.includes(inputWordClean);
+                    
+                    return wordMatch || fullMatch;
                   });
                   
-                  // Check 2: Match với toàn bộ service name (để match "khám tổng quát" với "Khám tổng quát định kỳ")
-                  const fullMatch = serviceNameNormalized.includes(inputWordClean);
+                  // Loại bỏ các từ chung chung
+                  const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
                   
-                  return wordMatch || fullMatch;
-                });
-                
-                // ⭐ QUAN TRỌNG: 
-                // - Loại bỏ các từ chung chung
-                const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
-                
-                // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords)
-                // Khi user nhập từ khóa chung (ví dụ: "khám răng"), match với tất cả service có chứa từ khóa đó
-                const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt', 'khám'];
-                
-                if (inputWords.length === 1) {
-                  // Chỉ có 1 từ → match nếu có ít nhất 1 từ có ý nghĩa khớp
-                  return meaningfulMatches.length > 0;
-                } else if (inputWords.length === 2) {
-                  // ⭐ Có 2 từ → Logic mới cho "khám răng" và các từ khóa chung
                   const importantWords = ['khám', 'răng', 'tim', 'mạch', 'tổng', 'quát', 'định', 'kỳ', 'mắt'];
                   
-                  // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
-                  // Ví dụ: "khám răng" → "răng" là category keyword
-                  // Nếu có → match với tất cả service có chứa từ khóa đó
-                  const categoryKeywordInInput = inputWords.find(word => 
-                    categoryKeywords.some(keyword => 
-                      word.includes(keyword) || keyword.includes(word)
-                    )
-                  );
-                  
-                  if (categoryKeywordInInput) {
-                    // Tìm category keyword tương ứng
-                    const matchedCategory = categoryKeywords.find(keyword => 
-                      categoryKeywordInInput.includes(keyword) || keyword.includes(categoryKeywordInInput)
-                    );
-                    
-                    if (matchedCategory && serviceNameNormalized.includes(matchedCategory)) {
-                      // ✅ Match! Service có chứa category keyword (ví dụ: "răng")
-                      // "khám răng" → match với "Bọc răng", "Làm sạch răng", "Nhổ răng", v.v.
-                      return true;
-                    }
+                  if (inputWords.length === 1) {
+                    return meaningfulMatches.length > 0;
+                  } else if (inputWords.length === 2) {
+                    const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
+                    return meaningfulMatches.length >= 1 && hasImportantMatch;
+                  } else {
+                    return meaningfulMatches.length >= 2;
                   }
-                  
-                  // Nếu không phải từ khóa category, dùng logic cũ
-                  const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
-                  return meaningfulMatches.length >= 1 && hasImportantMatch;
-                } else {
-                  // ⭐ Có 3+ từ → match nếu có ít nhất 2 từ khớp (để tránh match sai)
-                  // Ví dụ: "khám tổng quát" → cần ít nhất 2 trong 3 từ khớp
-                  // Điều này đảm bảo "khám tổng quát" KHÔNG match với "Trồng răng hàm" (không có từ nào khớp)
-                  return meaningfulMatches.length >= 2;
-                }
-              });
+                });
+              }
             }
           }
           
