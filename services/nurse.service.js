@@ -2,6 +2,7 @@ const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
 const Patient = require('../models/patient.model');
 const MedicalRecord = require('../models/medicalRecord.model');
+const Doctor = require('../models/doctor.model');
 
 class NurseService {
 
@@ -93,15 +94,41 @@ class NurseService {
       medicalRecordStatusMap[record.appointmentId.toString()] = record.status === 'Finalized';
     });
 
+    // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+    const doctorUserIds = appointments
+      .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
+      .map(apt => apt.doctorUserId._id);
+    
+    // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
+    const doctors = await Doctor.find({
+      doctorUserId: { $in: doctorUserIds }
+    }).select('doctorUserId status').lean();
+    
+    // Tạo map để lookup nhanh
+    const doctorStatusMap = new Map();
+    doctors.forEach(doctor => {
+      doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
+    });
+
     // Format response thành array dạng bảng
     return appointments.map(appointment => {
       const timeslot = appointment.timeslotId;
       const patient = appointment.patientUserId || appointment.customerId;
+      
+      // ⭐ Lấy doctorUserId và doctorStatus
+      let doctorUserId = null;
+      let doctorStatus = null;
+      if (appointment.doctorUserId && appointment.doctorUserId._id) {
+        doctorUserId = appointment.doctorUserId._id.toString();
+        doctorStatus = doctorStatusMap.get(doctorUserId) || null;
+      }
 
       return {
         appointmentId: appointment._id,
         patientId: patient?._id,
         doctorName: appointment.doctorUserId?.fullName || 'N/A',
+        doctorUserId: doctorUserId, // ⭐ Thêm doctorUserId
+        doctorStatus: doctorStatus, // ⭐ Thêm doctorStatus
         serviceName: appointment.serviceId?.serviceName || 'N/A',
         patientName: patient?.fullName || 'N/A',
         appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'N/A',
