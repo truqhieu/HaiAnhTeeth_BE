@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const Service = require('../models/service.model');
 const User = require('../models/user.model');
+const Doctor = require('../models/doctor.model');
 const DoctorSchedule = require('../models/doctorSchedule.model');
 const Appointment = require('../models/appointment.model');
 const Timeslot = require('../models/timeslot.model');
@@ -526,12 +527,32 @@ class AIBookingService {
             .sort({ fullName: 1 }) // Sort để có thứ tự cố định
             .lean();
           
+          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+          const doctorStatuses = await Doctor.find({
+            doctorUserId: { $in: doctors.map(d => d._id) }
+          }).select('doctorUserId status');
+          
+          // Tạo Map để lookup nhanh
+          const doctorStatusMap = new Map();
+          doctorStatuses.forEach(doc => {
+            doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+          });
+          
+          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+          const availableDoctors = doctors.filter(doctor => {
+            const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+            // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
+            if (!doctorStatus) return true;
+            // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+            return doctorStatus === 'Available' || doctorStatus === 'Busy';
+          });
+          
           // Check nếu input là số thứ tự
           const numberMatch = doctorName.match(/^\d+$/);
           if (numberMatch) {
             const index = parseInt(doctorName) - 1; // Convert to 0-based index
-            if (index >= 0 && index < doctors.length) {
-              const selectedDoctor = doctors[index];
+            if (index >= 0 && index < availableDoctors.length) {
+              const selectedDoctor = availableDoctors[index];
               return {
                 found: true,
                 doctor: {
@@ -551,10 +572,11 @@ class AIBookingService {
           const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
           
           // Tập hợp tất cả matches (không return ngay, để check xem có nhiều match không)
+          // ⭐ Sử dụng availableDoctors thay vì doctors để chỉ tìm trong các bác sĩ khả dụng
           let matchedDoctors = [];
           
           // ✅ PRIORITY 1: Exact match (case-insensitive)
-          const exactMatches = doctors.filter(d => 
+          const exactMatches = availableDoctors.filter(d => 
             d.fullName.toLowerCase() === inputLower
           );
           if (exactMatches.length > 0) {
@@ -563,7 +585,7 @@ class AIBookingService {
           
           // ✅ PRIORITY 2: Exact match bỏ "bác sĩ" prefix
           if (matchedDoctors.length === 0) {
-            const prefixMatches = doctors.filter(d => {
+            const prefixMatches = availableDoctors.filter(d => {
               const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
               return doctorNameClean === inputClean;
             });
@@ -576,7 +598,7 @@ class AIBookingService {
           // Nếu vẫn chưa có match hoặc có nhiều match từ PRIORITY 2, thử word-based
           if (matchedDoctors.length === 0 || matchedDoctors.length > 1) {
             if (inputWords.length > 0) {
-              const wordMatches = doctors.filter(d => {
+              const wordMatches = availableDoctors.filter(d => {
                 const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
                 const doctorWords = doctorNameClean.split(/\s+/);
                 
@@ -597,7 +619,7 @@ class AIBookingService {
           if (matchedDoctors.length === 0) {
             return { 
               error: 'Không tìm thấy bác sĩ',
-              suggestions: doctors.slice(0, 5).map(d => ({
+              suggestions: availableDoctors.slice(0, 5).map(d => ({
                 id: d._id.toString(),
                 name: d.fullName,
                 specialization: d.specialization || '',
@@ -654,7 +676,13 @@ class AIBookingService {
           
           if (!doctor) {
             return { valid: false, error: 'Doctor not found or inactive' };
-        }
+          }
+          
+          // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
+          const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
+          if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
+            return { valid: false, error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
+          }
 
         return {
             valid: true, 
@@ -670,12 +698,33 @@ class AIBookingService {
         }
         
         case 'get_doctors': {
+          // Lấy tất cả bác sĩ Active từ User
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
             .select('_id fullName specialization email phoneNumber status role')
             .lean();
           
+          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+          const doctorStatuses = await Doctor.find({
+            doctorUserId: { $in: doctors.map(d => d._id) }
+          }).select('doctorUserId status');
+          
+          // Tạo Map để lookup nhanh
+          const doctorStatusMap = new Map();
+          doctorStatuses.forEach(doc => {
+            doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+          });
+          
+          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+          const availableDoctors = doctors.filter(doctor => {
+            const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+            // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
+            if (!doctorStatus) return true;
+            // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+            return doctorStatus === 'Available' || doctorStatus === 'Busy';
+          });
+          
         return {
-            doctors: doctors.map(d => ({
+            doctors: availableDoctors.map(d => ({
         id: d._id.toString(),
               name: d.fullName,
               specialization: d.specialization || '',
@@ -741,9 +790,29 @@ class AIBookingService {
               .sort({ fullName: 1 })
               .lean();
             
+            // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+            const doctorStatuses = await Doctor.find({
+              doctorUserId: { $in: doctors.map(d => d._id) }
+            }).select('doctorUserId status');
+            
+            // Tạo Map để lookup nhanh
+            const doctorStatusMap = new Map();
+            doctorStatuses.forEach(doc => {
+              doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+            });
+            
+            // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+            const availableDoctors = doctors.filter(doctor => {
+              const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+              // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
+              if (!doctorStatus) return true;
+              // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+              return doctorStatus === 'Available' || doctorStatus === 'Busy';
+            });
+            
             const index = parseInt(doctorIdStr) - 1; // Convert to 0-based index
-            if (index >= 0 && index < doctors.length) {
-              doctor = doctors[index];
+            if (index >= 0 && index < availableDoctors.length) {
+              doctor = availableDoctors[index];
             } else {
               return { error: `Số thứ tự ${doctorIdStr} không hợp lệ. Vui lòng chọn lại bác sĩ.` };
             }
@@ -756,6 +825,12 @@ class AIBookingService {
           
           if (!doctor) {
             return { error: 'Bác sĩ không tồn tại. Vui lòng chọn lại bác sĩ.' };
+          }
+          
+          // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
+          const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
+          if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
+            return { error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
           }
           
           // Parse date
