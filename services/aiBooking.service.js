@@ -383,13 +383,40 @@ class AIBookingService {
                 // - Loại bỏ các từ chung chung
                 const meaningfulMatches = matchedWords.filter(word => !commonWords.includes(word));
                 
+                // ⭐ Từ khóa chung cho các loại dịch vụ (category keywords)
+                // Khi user nhập từ khóa chung (ví dụ: "khám răng"), match với tất cả service có chứa từ khóa đó
+                const categoryKeywords = ['răng', 'tim', 'mạch', 'mắt', 'khám'];
+                
                 if (inputWords.length === 1) {
                   // Chỉ có 1 từ → match nếu có ít nhất 1 từ có ý nghĩa khớp
                   return meaningfulMatches.length > 0;
                 } else if (inputWords.length === 2) {
-                  // ⭐ Có 2 từ → match nếu có ít nhất 1 từ khớp (để "khám răng" match với "Bọc răng")
-                  // Nhưng chỉ match nếu từ đó là từ quan trọng (như "răng", "khám")
-                  const importantWords = ['khám', 'răng', 'tim', 'mạch', 'tổng', 'quát', 'định', 'kỳ'];
+                  // ⭐ Có 2 từ → Logic mới cho "khám răng" và các từ khóa chung
+                  const importantWords = ['khám', 'răng', 'tim', 'mạch', 'tổng', 'quát', 'định', 'kỳ', 'mắt'];
+                  
+                  // ⭐ QUAN TRỌNG: Kiểm tra xem có từ khóa category trong input không
+                  // Ví dụ: "khám răng" → "răng" là category keyword
+                  // Nếu có → match với tất cả service có chứa từ khóa đó
+                  const categoryKeywordInInput = inputWords.find(word => 
+                    categoryKeywords.some(keyword => 
+                      word.includes(keyword) || keyword.includes(word)
+                    )
+                  );
+                  
+                  if (categoryKeywordInInput) {
+                    // Tìm category keyword tương ứng
+                    const matchedCategory = categoryKeywords.find(keyword => 
+                      categoryKeywordInInput.includes(keyword) || keyword.includes(categoryKeywordInInput)
+                    );
+                    
+                    if (matchedCategory && serviceNameNormalized.includes(matchedCategory)) {
+                      // ✅ Match! Service có chứa category keyword (ví dụ: "răng")
+                      // "khám răng" → match với "Bọc răng", "Làm sạch răng", "Nhổ răng", v.v.
+                      return true;
+                    }
+                  }
+                  
+                  // Nếu không phải từ khóa category, dùng logic cũ
                   const hasImportantMatch = meaningfulMatches.some(word => importantWords.includes(word));
                   return meaningfulMatches.length >= 1 && hasImportantMatch;
                 } else {
