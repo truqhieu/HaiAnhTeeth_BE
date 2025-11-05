@@ -125,6 +125,28 @@ class AIBookingService {
           return val.trim();
         }
       },
+      check_appointment_conflict: {
+        date: (val) => {
+          if (!val || typeof val !== 'string') {
+            throw new Error('date phải là chuỗi format YYYY-MM-DD');
+          }
+          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+          if (!dateRegex.test(val)) {
+            throw new Error('date phải có format YYYY-MM-DD');
+          }
+          return val.trim();
+        },
+        time: (val) => {
+          if (!val || typeof val !== 'string') {
+            throw new Error('time phải là chuỗi format HH:mm');
+          }
+          const timeRegex = /^([0-1][0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeRegex.test(val)) {
+            throw new Error('time phải có format HH:mm');
+          }
+          return val.trim();
+        }
+      },
       create_appointment: {
         serviceId: (val) => {
           if (!val || typeof val !== 'string' || val.trim().length === 0) {
@@ -196,6 +218,74 @@ class AIBookingService {
       // Validate arguments trước
       const validatedArgs = this.validateFunctionArgs(functionName, functionArgs);
       switch (functionName) {
+        case 'check_appointment_conflict': {
+          const { date, time } = validatedArgs;
+          
+          if (!patientUserId) {
+            return { hasConflict: false }; // Không có patientUserId thì không check
+          }
+          
+          // Parse date và time
+          const [hours, minutes] = time.split(':').map(Number);
+          const appointmentDate = new Date(date);
+          appointmentDate.setHours(hours, minutes, 0, 0);
+          
+          // Tính endTime (giả sử duration tối đa là 120 phút để check conflict)
+          const endTime = new Date(appointmentDate);
+          endTime.setMinutes(endTime.getMinutes() + 120);
+          
+          // Check conflict với appointments của patient (BẤT KỲ bác sĩ nào)
+          const Appointment = require('../models/appointment.model');
+          const patientConflictAppointments = await Appointment.find({
+            patientUserId: patientUserId,
+            status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+            timeslotId: { $exists: true }
+          }).populate({
+            path: 'timeslotId',
+            select: 'startTime endTime'
+          });
+          
+          const hasConflict = patientConflictAppointments.some(apt => {
+            if (!apt.timeslotId) return false;
+            
+            const aptStartTime = new Date(apt.timeslotId.startTime);
+            const aptEndTime = new Date(apt.timeslotId.endTime);
+            
+            // Conflict nếu: appointmentDate < aptEndTime && endTime > aptStartTime
+            return appointmentDate < aptEndTime && endTime > aptStartTime;
+          });
+          
+          if (hasConflict) {
+            // Tìm appointment conflict để hiển thị thông tin chi tiết
+            const conflictAppt = patientConflictAppointments.find(apt => {
+              if (!apt.timeslotId) return false;
+              const aptStartTime = new Date(apt.timeslotId.startTime);
+              const aptEndTime = new Date(apt.timeslotId.endTime);
+              return appointmentDate < aptEndTime && endTime > aptStartTime;
+            });
+            
+            if (conflictAppt && conflictAppt.timeslotId) {
+              const conflictStart = new Date(conflictAppt.timeslotId.startTime);
+              const conflictEnd = new Date(conflictAppt.timeslotId.endTime);
+              const conflictDateVN = conflictStart.toLocaleDateString('vi-VN');
+              const conflictStartVN = conflictStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+              const conflictEndVN = conflictEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+              
+              return {
+                hasConflict: true,
+                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`
+              };
+            }
+            
+            return {
+              hasConflict: true,
+              conflictMessage: 'Bạn đã có lịch khám vào khung giờ này. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!'
+            };
+          }
+          
+          return { hasConflict: false };
+        }
+        
         case 'get_services': {
           const { category } = validatedArgs;
           const query = { status: 'Active' };
@@ -1588,20 +1678,36 @@ class AIBookingService {
       
       // Call OpenAI with function calling (với retry logic)
       // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
-      let response = await this.retryWithBackoff(async () => {
-        return await openai.chat.completions.create({
-          model: AI_MODEL, // ⭐ Dùng model từ config (gpt-4o-mini)
-          messages: messages,
-          tools: toolsConfig.tools,
-          tool_choice: "auto", // AI tự quyết định có gọi function hay không
-          max_tokens: 1000, // ⭐ Tối ưu cho tốc độ: giảm xuống 1000 tokens
-          temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
-          top_p: 0.9,
-          frequency_penalty: 0.3,
-          presence_penalty: 0.2
-          // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
-        });
-      }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
+      let response;
+      try {
+        response = await this.retryWithBackoff(async () => {
+          return await openai.chat.completions.create({
+            model: AI_MODEL, // ⭐ Dùng model từ config (gpt-4o-mini)
+            messages: messages,
+            tools: toolsConfig.tools,
+            tool_choice: "auto", // AI tự quyết định có gọi function hay không
+            max_tokens: 1000, // ⭐ Tối ưu cho tốc độ: giảm xuống 1000 tokens
+            temperature: 0.2, // ⭐ Tối ưu cho độ chính xác
+            top_p: 0.9,
+            frequency_penalty: 0.3,
+            presence_penalty: 0.2
+            // ⚠️ Timeout KHÔNG được hỗ trợ trong request level, đã config ở client level
+          });
+        }, 2, 500); // ⭐ Giảm retry từ 3 lần xuống 2 lần, baseDelay từ 1000ms xuống 500ms để tăng tốc độ
+        
+        // Validate response
+        if (!response || !response.choices || !response.choices[0] || !response.choices[0].message) {
+          throw new Error('Invalid response from OpenAI API');
+        }
+      } catch (error) {
+        console.error('❌ [AI Booking] Error calling OpenAI:', error);
+        return {
+          success: false,
+          response: 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
+          conversationHistory: conversationHistory,
+          needsMoreInfo: false
+        };
+      }
       
       let assistantMessage = response.choices[0].message;
       let functionResults = [];
@@ -1725,7 +1831,13 @@ class AIBookingService {
       
     } catch (error) {
       console.error('❌ [AI Function Calling] Error:', error);
-      throw error;
+      // Trả về response lỗi thay vì throw để frontend có thể xử lý
+      return {
+        success: false,
+        response: 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
+        conversationHistory: conversationHistory || [],
+        needsMoreInfo: false
+      };
     }
   }
 
