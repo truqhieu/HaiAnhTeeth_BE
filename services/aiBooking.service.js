@@ -146,6 +146,16 @@ class AIBookingService {
             throw new Error('time phải có format HH:mm');
           }
           return val.trim();
+        },
+        doctorId: (val) => {
+          // Optional: Chỉ validate nếu có giá trị
+          if (val === undefined || val === null || val === '') {
+            return null; // Cho phép null/undefined
+          }
+          if (typeof val !== 'string' || val.trim().length === 0) {
+            throw new Error('doctorId phải là chuỗi hợp lệ (ObjectId)');
+          }
+          return val.trim();
         }
       },
       create_appointment: {
@@ -228,19 +238,55 @@ class AIBookingService {
       }
       switch (functionName) {
         case 'check_appointment_conflict': {
-          const { date, time } = validatedArgs;
+          const { date, time, doctorId } = validatedArgs;
           
           // ⭐ CỰC KỲ QUAN TRỌNG - VALIDATE WORKING HOURS TRƯỚC
-          // Validate xem time có nằm trong working hours hợp lý không
-          // (Vì chưa có doctorId, dùng working hours mặc định hợp lý: 07:00-12:00 và 14:00-18:00)
+          // Lấy working hours từ database nếu có doctorId, nếu không thì dùng mặc định
+          let workingHours = {
+            morningStart: '07:00',
+            morningEnd: '12:00',
+            afternoonStart: '14:00',
+            afternoonEnd: '18:00'
+          };
+          
+          // Nếu có doctorId, query DoctorSchedule để lấy workingHours từ database
+          if (doctorId && mongoose.Types.ObjectId.isValid(doctorId)) {
+            try {
+              const searchDate = new Date(date);
+              searchDate.setHours(0, 0, 0, 0);
+              
+              const schedules = await DoctorSchedule.find({
+                doctorUserId: doctorId,
+                date: searchDate,
+                status: 'Available'
+              })
+              .select('workingHours')
+              .lean();
+              
+              // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
+              if (schedules.length > 0 && schedules[0].workingHours) {
+                workingHours = schedules[0].workingHours;
+              }
+            } catch (error) {
+              // Nếu lỗi khi query, dùng working hours mặc định
+              console.log(`[check_appointment_conflict] Error querying DoctorSchedule for doctorId ${doctorId}:`, error.message);
+            }
+          }
+          
+          // Parse time và working hours
           const [hours, minutes] = time.split(':').map(Number);
           const timeInMinutes = hours * 60 + minutes;
           
-          // Working hours mặc định hợp lý (lấy từ database thường là 07:00-12:00 và 14:00-18:00)
-          const morningStart = 7 * 60; // 07:00
-          const morningEnd = 12 * 60; // 12:00
-          const afternoonStart = 14 * 60; // 14:00
-          const afternoonEnd = 18 * 60; // 18:00
+          // Parse working hours từ database (format HH:mm)
+          const [morningStartHour, morningStartMin] = workingHours.morningStart.split(':').map(Number);
+          const [morningEndHour, morningEndMin] = workingHours.morningEnd.split(':').map(Number);
+          const [afternoonStartHour, afternoonStartMin] = workingHours.afternoonStart.split(':').map(Number);
+          const [afternoonEndHour, afternoonEndMin] = workingHours.afternoonEnd.split(':').map(Number);
+          
+          const morningStart = morningStartHour * 60 + morningStartMin;
+          const morningEnd = morningEndHour * 60 + morningEndMin;
+          const afternoonStart = afternoonStartHour * 60 + afternoonStartMin;
+          const afternoonEnd = afternoonEndHour * 60 + afternoonEndMin;
           
           // Check xem time có nằm trong working hours không
           const isInMorning = timeInMinutes >= morningStart && timeInMinutes < morningEnd;
@@ -248,11 +294,11 @@ class AIBookingService {
           const isMorningEndTime = timeInMinutes === morningEnd; // 12:00
           const isAfternoonEndTime = timeInMinutes === afternoonEnd; // 18:00
           
-          // ⭐ XỬ LÝ RIÊNG CHO ENDTIME (12:00 và 18:00)
+          // ⭐ XỬ LÝ RIÊNG CHO ENDTIME (morningEnd và afternoonEnd từ database)
           if (isMorningEndTime) {
             return {
               hasConflict: true,
-              conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi sáng. Vui lòng chọn thời gian trước ${time} hoặc chọn ca buổi chiều (từ 14:00).`,
+              conflictMessage: `Thời gian ${time} là thời điểm kết thúc ca buổi sáng. Vui lòng chọn thời gian trước ${time} hoặc chọn ca buổi chiều (từ ${workingHours.afternoonStart}).`,
               isEndTime: true,
               remainingMinutes: 0, // Hết ca
               shift: 'Morning'
@@ -277,18 +323,18 @@ class AIBookingService {
           }
           
           // ⭐ TÍNH THỜI GIAN CÒN LẠI TRONG CA để filter dịch vụ
-          // Tính dựa trên thời gian kết thúc của ca khám (endTime của shift), không phải ca làm việc
-          // Ví dụ: Nếu ca sáng kết thúc 12:00, user nhập 11:30 → remainingMinutes = 12:00 - 11:30 = 30 phút
+          // Tính dựa trên thời gian kết thúc của ca khám (endTime của shift từ database)
+          // Ví dụ: Nếu ca sáng kết thúc 12:00 (từ workingHours.morningEnd), user nhập 11:30 → remainingMinutes = 12:00 - 11:30 = 30 phút
           let remainingMinutes = 0;
           let currentShift = '';
           if (isInMorning) {
             currentShift = 'Morning';
-            // Thời gian còn lại = endTime của ca sáng - thời gian user nhập
-            remainingMinutes = morningEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca sáng (12:00)
+            // Thời gian còn lại = endTime của ca sáng (từ database) - thời gian user nhập
+            remainingMinutes = morningEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca sáng
           } else if (isInAfternoon) {
             currentShift = 'Afternoon';
-            // Thời gian còn lại = endTime của ca chiều - thời gian user nhập
-            remainingMinutes = afternoonEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca chiều (18:00)
+            // Thời gian còn lại = endTime của ca chiều (từ database) - thời gian user nhập
+            remainingMinutes = afternoonEnd - timeInMinutes; // Thời gian còn lại đến khi kết thúc ca chiều
           }
           
           if (!patientUserId) {
