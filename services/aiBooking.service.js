@@ -230,12 +230,32 @@ class AIBookingService {
         case 'check_appointment_conflict': {
           const { date, time } = validatedArgs;
           
-          if (!patientUserId) {
-            return { hasConflict: false }; // Không có patientUserId thì không check
+          // ⭐ CỰC KỲ QUAN TRỌNG - VALIDATE WORKING HOURS TRƯỚC
+          // Validate xem time có nằm trong working hours hợp lý không
+          // (Vì chưa có doctorId, dùng working hours mặc định hợp lý: 07:00-12:00 và 14:00-18:00)
+          const [hours, minutes] = time.split(':').map(Number);
+          const timeInMinutes = hours * 60 + minutes;
+          
+          // Working hours mặc định hợp lý (lấy từ database thường là 07:00-12:00 và 14:00-18:00)
+          const morningStart = 7 * 60; // 07:00
+          const morningEnd = 12 * 60; // 12:00
+          const afternoonStart = 14 * 60; // 14:00
+          const afternoonEnd = 18 * 60; // 18:00
+          
+          // Check xem time có nằm trong working hours không
+          const isInMorning = timeInMinutes >= morningStart && timeInMinutes < morningEnd;
+          const isInAfternoon = timeInMinutes >= afternoonStart && timeInMinutes < afternoonEnd;
+          
+          if (!isInMorning && !isInAfternoon) {
+            return {
+              hasConflict: true,
+              conflictMessage: `Thời gian ${time} không nằm trong khung giờ làm việc của bác sĩ. Bác sĩ thường làm việc từ 07:00 - 12:00 (buổi sáng) và 14:00 - 18:00 (buổi chiều). Vui lòng chọn thời gian trong khung giờ làm việc.`
+            };
           }
           
-          // Parse date và time - QUAN TRỌNG: Convert về VN timezone (UTC+7)
-          const [hours, minutes] = time.split(':').map(Number);
+          if (!patientUserId) {
+            return { hasConflict: false }; // Không có patientUserId thì không check conflict
+          }
           
           // Parse date string (YYYY-MM-DD) và tạo Date object ở VN timezone
           // date string là "2025-11-06" - cần tạo Date ở VN timezone (08:30 VN = 01:30 UTC)
