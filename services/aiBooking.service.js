@@ -1643,7 +1643,17 @@ class AIBookingService {
             });
             
             if (!schedule) {
-              return { error: 'Khung giờ này không nằm trong lịch làm việc của bác sĩ. Vui lòng chọn thời gian khác.' };
+              // Lấy working hours từ schedule đầu tiên để hiển thị trong error message
+              const workingHours = schedules[0]?.workingHours || {
+                morningStart: '08:00',
+                morningEnd: '12:00',
+                afternoonStart: '14:00',
+                afternoonEnd: '18:00'
+              };
+              
+              return { 
+                error: `Khung giờ ${time} không nằm trong lịch làm việc của bác sĩ. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn thời gian trong khung giờ làm việc của bác sĩ.` 
+              };
             }
             
             // 8. Check conflict với timeslots đã có
