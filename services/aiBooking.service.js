@@ -1811,12 +1811,66 @@ class AIBookingService {
   /**
    * 🆕 Chat với AI sử dụng Function Calling (linh hoạt như ChatGPT)
    */
+  /**
+   * Lọc và làm sạch conversation history để loại bỏ thông tin không hợp lệ
+   * - Loại bỏ messages có error hoặc bị reject
+   * - Loại bỏ thông tin về time/date từ message cũ không liên quan
+   * - Chỉ giữ lại thông tin hợp lệ và liên quan đến booking hiện tại
+   */
+  filterConversationHistory(history) {
+    if (!Array.isArray(history) || history.length === 0) {
+      return [];
+    }
+    
+    // Filter logic:
+    // 1. Loại bỏ messages có chứa error keywords
+    const errorKeywords = [
+      'lỗi', 'error', 'không thể', 'không hợp lệ', 
+      'quá khứ', 'bị từ chối', 'rejected', 'failed'
+    ];
+    
+    // 2. Chỉ giữ lại messages có role hợp lệ
+    const filtered = history.filter(msg => {
+      if (!msg || typeof msg !== 'object') return false;
+      if (msg.role !== 'user' && msg.role !== 'assistant') return false;
+      if (!msg.content || typeof msg.content !== 'string') return false;
+      
+      // Loại bỏ messages có error (nhưng giữ lại nếu là assistant message có suggestions)
+      const content = msg.content.toLowerCase();
+      const hasError = errorKeywords.some(keyword => content.includes(keyword));
+      
+      // Nếu là assistant message và có error → có thể giữ nếu có suggestions
+      if (msg.role === 'assistant' && hasError) {
+        // Giữ lại nếu có suggestions hoặc hướng dẫn tiếp theo
+        const hasSuggestions = content.includes('vui lòng') || 
+                               content.includes('bạn có thể') ||
+                               content.includes('dịch vụ') ||
+                               content.includes('bác sĩ');
+        return hasSuggestions;
+      }
+      
+      // Nếu là user message và có error → có thể là message bị reject, bỏ đi
+      if (msg.role === 'user' && hasError) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    // 3. Giới hạn số lượng messages để tránh quá dài (chỉ giữ 10 messages gần nhất)
+    const maxMessages = 10;
+    return filtered.slice(-maxMessages);
+  }
+
   async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
     try {
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // ⭐ Preprocess user input để tăng độ chính xác
       const processedPrompt = this.preprocessUserInput(userPrompt);
+      
+      // ⭐ Filter conversation history để loại bỏ thông tin không hợp lệ
+      const filteredHistory = this.filterConversationHistory(conversationHistory);
       
       // Prepare date context
       const today = new Date();
@@ -1834,10 +1888,10 @@ class AIBookingService {
         .replace('{TOMORROW}', tomorrowStr)
         .replace('{DAY_AFTER_TOMORROW}', dayAfterTomorrowStr);
       
-      // Build messages array
+      // Build messages array với filtered history
       const messages = [
         { role: "system", content: systemPrompt },
-        ...conversationHistory,
+        ...filteredHistory,
         { role: "user", content: processedPrompt } // ⭐ Dùng processed prompt
       ];
       
@@ -1871,7 +1925,7 @@ class AIBookingService {
         return {
           success: false,
           response: 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
-          conversationHistory: conversationHistory,
+          conversationHistory: this.filterConversationHistory(conversationHistory),
           needsMoreInfo: false
         };
       }
@@ -2049,7 +2103,7 @@ class AIBookingService {
       return {
         success: false,
         response: 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
-        conversationHistory: conversationHistory || [],
+        conversationHistory: this.filterConversationHistory(conversationHistory || []),
         needsMoreInfo: false
       };
     }
