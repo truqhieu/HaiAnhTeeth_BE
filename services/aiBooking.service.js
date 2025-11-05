@@ -669,9 +669,20 @@ class AIBookingService {
                 timeZone: 'Asia/Ho_Chi_Minh'
               });
               
+              // ⭐ QUAN TRỌNG: Nếu có conflict với appointment cũ (bác sĩ khác), vẫn cho phép tiếp tục
+              // vì user có thể muốn đặt với bác sĩ khác. get_available_slots sẽ tự động exclude slot này.
+              // Chỉ block hoàn toàn nếu user đã chọn chính xác bác sĩ đó và time đó.
+              // Nếu chưa có doctorId hoặc doctorId khác với appointment conflict → cho phép tiếp tục
+              const conflictDoctorId = conflictAppt.doctorId?.toString();
+              const currentDoctorId = doctorId?.toString();
+              
+              // Nếu không có doctorId hoặc doctorId khác với appointment conflict → cho phép tiếp tục
+              const allowContinueWithOtherDoctors = !currentDoctorId || (conflictDoctorId && conflictDoctorId !== currentDoctorId);
+              
               return {
                 hasConflict: true,
-                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`,
+                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. ${allowContinueWithOtherDoctors ? 'Bạn có thể chọn bác sĩ khác hoặc thời gian khác.' : 'Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!'}`,
+                allowContinueWithOtherDoctors: allowContinueWithOtherDoctors, // ⭐ Cho phép tiếp tục với bác sĩ khác
                 workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
               };
             }
@@ -679,6 +690,7 @@ class AIBookingService {
             return {
               hasConflict: true,
               conflictMessage: 'Bạn đã có lịch khám vào khung giờ này. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!',
+              allowContinueWithOtherDoctors: true, // ⭐ Cho phép tiếp tục với bác sĩ khác
               workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
             };
           }
