@@ -1885,6 +1885,7 @@ class AIBookingService {
             if (isToday) {
               // Lấy thời gian hiện tại theo VN timezone (UTC+7)
               // Convert sang UTC để so sánh với shiftStart/shiftEnd
+              const now = new Date();
               const nowVN = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
               const currentTimeUTC = new Date(Date.UTC(
                 nowVN.getFullYear(),
