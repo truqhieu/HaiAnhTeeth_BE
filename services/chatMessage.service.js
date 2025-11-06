@@ -10,40 +10,36 @@ class ChatMessageService {
     try {
       // Tìm tất cả appointments của patient có status Completed hoặc Finalized
       const appointments = await Appointment.find({
-        patientId: patientId,
+        patientUserId: patientId,
         status: { $in: ['Completed', 'Finalized'] }
       })
-        .populate('doctorId', 'doctorUserId specialization')
-        .populate({
-          path: 'doctorId',
-          populate: {
-            path: 'doctorUserId',
-            select: 'fullName email phoneNumber'
-          }
-        })
+.populate('doctorUserId', '_id fullName email specialization')
+.populate('replacedDoctorUserId', '_id fullName email specialization')
         .lean();
 
       // Lấy danh sách doctor unique
       const doctorMap = new Map();
       
       appointments.forEach(appointment => {
-        if (appointment.doctorId && appointment.doctorId.doctorUserId) {
-          const doctorUserId = appointment.doctorId.doctorUserId._id.toString();
-          
-          if (!doctorMap.has(doctorUserId)) {
-            doctorMap.set(doctorUserId, {
-              doctorId: appointment.doctorId._id,
-              doctorUserId: appointment.doctorId.doctorUserId._id,
-              fullName: appointment.doctorId.doctorUserId.fullName,
-              email: appointment.doctorId.doctorUserId.email,
-              phoneNumber: appointment.doctorId.doctorUserId.phoneNumber,
-              specialization: appointment.doctorId.specialization,
-              appointmentId: appointment._id, // Appointment gần nhất
-              appointmentDate: appointment.appointmentDate
-            });
-          }
-        }
+  // Ưu tiên replacedDoctorUserId nếu có
+  const doctor = appointment.replacedDoctorUserId || appointment.doctorUserId;
+  
+  if (doctor && doctor._id) {
+    const doctorId = doctor._id.toString();
+    
+    if (!doctorMap.has(doctorId)) {
+      doctorMap.set(doctorId, {
+        _id: doctor._id,
+        fullName: doctor.fullName,
+        email: doctor.email,
+        specialization: doctor.specialization,
+        appointmentId: appointment._id,
+        appointmentDate: appointment.timeslotId?.startTime || appointment.createdAt
       });
+    }
+  }
+});
+
 
       // Convert Map to Array
       const doctors = Array.from(doctorMap.values());
@@ -80,24 +76,26 @@ class ChatMessageService {
       }
 
       // Kiểm tra sender là patient và receiver là doctor của appointment
-      if (appointment.patientId.toString() !== senderId.toString()) {
+      if (appointment.patientUserId.toString() !== senderId.toString()) {
         throw new Error('Bệnh nhân không có quyền chat với ca khám này');
       }
 
       // Tìm doctor từ appointment
-      const doctor = await Doctor.findById(appointment.doctorId);
+      const doctor = await Doctor.findById(appointment.doctorUserId);
       if (!doctor || doctor.doctorUserId.toString() !== receiverId.toString()) {
         throw new Error('Bác sĩ không thuộc ca khám này');
       }
 
       // Tạo message
-      const message = new ChatMessage({
-        senderId,
-        receiverId,
-        appointmentId,
-        content: content.trim(),
-        read: false
-      });
+const message = new ChatMessage({
+  appointmentId,
+  patientUserId: appointment.patientUserId, 
+  doctorUserId: appointment.replacedDoctorUserId || appointment.doctorUserId, 
+  senderId,
+  receiverId,
+  content: content.trim(),
+  status: 'Sent'
+});
 
       await message.save();
 
@@ -208,18 +206,18 @@ class ChatMessageService {
       }
 
       // Kiểm tra quyền truy cập
-      if (role === 'Patient') {
-        if (appointment.patientId.toString() !== userId.toString()) {
-          throw new Error('Bạn không có quyền xem tin nhắn này');
-        }
-      } else if (role === 'Doctor') {
-        const doctor = await Doctor.findById(appointment.doctorId);
-        if (!doctor || doctor.doctorUserId.toString() !== userId.toString()) {
-          throw new Error('Bạn không có quyền xem tin nhắn này');
-        }
-      } else {
-        throw new Error('Role không hợp lệ');
-      }
+     if (role === 'Patient') {
+  if (appointment.patientUserId.toString() !== userId.toString()) {
+    throw new Error('Bạn không có quyền xem tin nhắn này');
+  }
+} else if (role === 'Doctor') {
+  const doctorId = appointment.replacedDoctorUserId || appointment.doctorUserId;
+  if (!doctorId || doctorId.toString() !== userId.toString()) {
+    throw new Error('Bạn không có quyền xem tin nhắn này');
+  }
+} else {
+  throw new Error('Role không hợp lệ');
+}
 
       // Lấy tất cả messages
       const messages = await ChatMessage.find({ appointmentId })

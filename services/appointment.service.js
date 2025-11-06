@@ -990,12 +990,12 @@ class AppointmentService {
 
       const appointments = await Appointment.find(query)
         .populate('patientUserId', 'fullName email phoneNumber')
-        .populate('doctorUserId', 'fullName email specialization')
+        .populate('doctorUserId', '_id fullName email specialization')
         .populate('serviceId', 'serviceName price category durationMinutes')
         .populate('timeslotId', 'startTime endTime')
         .populate('customerId', 'fullName email phoneNumber')
         .populate('paymentId') // ⭐ Populate tất cả fields của paymentId để có _id
-        .populate('replacedDoctorUserId', 'fullName email') // ⭐ Populate replaced doctor
+        .populate('replacedDoctorUserId', '_id fullName email') // ⭐ Populate replaced doctor
         .sort({ createdAt: -1 })
         .lean(); // Sắp xếp theo thời gian tạo mới nhất
 
@@ -1053,10 +1053,11 @@ class AppointmentService {
           phoneNumber: apt.patientUserId.phoneNumber
         } : null,
         doctorUserId: apt.doctorUserId ? {
-          fullName: apt.doctorUserId.fullName,
-          email: apt.doctorUserId.email,
-          specialization: apt.doctorUserId.specialization
-        } : null,
+  _id: apt.doctorUserId._id?.toString() || apt.doctorUserId._id,
+  fullName: apt.doctorUserId.fullName,
+  email: apt.doctorUserId.email,
+  specialization: apt.doctorUserId.specialization
+} : null,
         serviceId: apt.serviceId ? {
           serviceName: apt.serviceId.serviceName,
           price: apt.serviceId.price,
@@ -1083,10 +1084,12 @@ class AppointmentService {
         checkedInAt: apt.checkedInAt || null,
         createdAt: apt.createdAt,
         updatedAt: apt.updatedAt,
-        replacedDoctorUserId: apt.replacedDoctorUserId ? {
-          fullName: apt.replacedDoctorUserId.fullName,
-          email: apt.replacedDoctorUserId.email
-        } : null,
+replacedDoctorUserId: apt.replacedDoctorUserId ? {
+  _id: apt.replacedDoctorUserId._id?.toString() || apt.replacedDoctorUserId._id,
+  fullName: apt.replacedDoctorUserId.fullName,
+  email: apt.replacedDoctorUserId.email,
+  specialization: apt.replacedDoctorUserId.specialization
+} : null,
         confirmDeadline: apt.confirmDeadline || null,
         doctorStatus: apt.doctorStatus || null // ⭐ Thêm doctorStatus
       }));
