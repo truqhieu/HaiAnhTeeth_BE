@@ -1291,11 +1291,104 @@ class AIBookingService {
             .select('_id fullName specialization email phoneNumber status role')
             .lean();
           } else {
-            // Nếu không phải ObjectId → có thể là tên bác sĩ (sai)
-            return { 
-              valid: false, 
-              error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc validate_doctor.` 
-            };
+            // Nếu không phải ObjectId → có thể là tên bác sĩ
+            // Sử dụng fuzzy matching tương tự như find_doctor_by_name
+            const allDoctors = await User.find({ role: 'Doctor', status: 'Active' })
+              .select('_id fullName specialization email phoneNumber status role')
+              .sort({ fullName: 1 })
+              .lean();
+            
+            // ⭐ THÊM: Filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+            const doctorStatuses = await Doctor.find({
+              doctorUserId: { $in: allDoctors.map(d => d._id) }
+            }).select('doctorUserId status');
+            
+            const doctorStatusMap = new Map();
+            doctorStatuses.forEach(doc => {
+              doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+            });
+            
+            const availableDoctors = allDoctors.filter(d => {
+              const doctorStatus = doctorStatusMap.get(d._id.toString());
+              if (!doctorStatus) return true;
+              return doctorStatus === 'Available' || doctorStatus === 'Busy';
+            });
+            
+            const inputLower = doctorIdStr.toLowerCase().trim();
+            const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+            const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+            
+            let matchedDoctors = [];
+            
+            // PRIORITY 1: Exact match (case-insensitive)
+            const exactMatches = availableDoctors.filter(d => 
+              d.fullName.toLowerCase() === inputLower
+            );
+            if (exactMatches.length > 0) {
+              matchedDoctors = exactMatches;
+            }
+            
+            // PRIORITY 2: Exact match bỏ "bác sĩ" prefix
+            if (matchedDoctors.length === 0) {
+              const prefixMatches = availableDoctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                return doctorNameClean === inputClean;
+              });
+              if (prefixMatches.length > 0) {
+                matchedDoctors = prefixMatches;
+              }
+            }
+            
+            // PRIORITY 3: Substring matching (chặt chẽ) - chỉ khi input ngắn và không có khoảng trắng
+            if (matchedDoctors.length === 0 && inputClean.length >= 2 && !inputClean.includes(' ')) {
+              const substringMatches = availableDoctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                return doctorNameClean.includes(inputClean);
+              });
+              if (substringMatches.length > 0) {
+                matchedDoctors = substringMatches;
+              }
+            }
+            
+            // PRIORITY 4: Word-based matching (match theo TỪ)
+            if (matchedDoctors.length === 0 && inputWords.length > 1) {
+              const wordMatches = availableDoctors.filter(d => {
+                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                const doctorWords = doctorNameClean.split(/\s+/);
+                return inputWords.every(inputWord => 
+                  doctorWords.some(doctorWord => doctorWord.includes(inputWord) || inputWord.includes(doctorWord))
+                );
+              });
+              if (wordMatches.length > 0) {
+                matchedDoctors = wordMatches;
+              }
+            }
+            
+            // ⭐ QUAN TRỌNG: Filter bỏ bác sĩ "On Leave" hoặc "Inactive" từ matchedDoctors
+            const finalMatchedDoctors = matchedDoctors.filter(d => {
+              const doctorStatus = doctorStatusMap.get(d._id.toString());
+              if (!doctorStatus) return true;
+              return doctorStatus === 'Available' || doctorStatus === 'Busy';
+            });
+            
+            if (finalMatchedDoctors.length === 1) {
+              // Chỉ có 1 bác sĩ match → sử dụng bác sĩ đó
+              doctor = finalMatchedDoctors[0];
+            } else if (finalMatchedDoctors.length > 1) {
+              // Có nhiều bác sĩ match → trả về lỗi
+              return { 
+                valid: false,
+                error: `Có nhiều bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`,
+                shouldCallFindDoctorByName: true
+              };
+            } else {
+              // Không tìm thấy bác sĩ nào
+              return { 
+                valid: false,
+                error: `Không tìm thấy bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`,
+                shouldCallFindDoctorByName: true
+              };
+            }
           }
           
           if (!doctor) {
@@ -1442,21 +1535,100 @@ class AIBookingService {
                 .select('_id fullName specialization email phoneNumber status role')
               .lean();
             } else {
-              // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
-              // Tìm bác sĩ theo tên
-              const doctorByName = await User.findOne({ 
-                fullName: { $regex: new RegExp(`^${doctorIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-                role: 'Doctor',
-                status: 'Active'
-              })
-              .select('_id fullName specialization email phoneNumber status role')
-              .lean();
+              // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ
+              // Sử dụng fuzzy matching tương tự như find_doctor_by_name
+              const allDoctors = await User.find({ role: 'Doctor', status: 'Active' })
+                .select('_id fullName specialization email phoneNumber status role')
+                .sort({ fullName: 1 })
+                .lean();
               
-              if (doctorByName) {
-                doctor = doctorByName;
-              } else {
+              // ⭐ THÊM: Filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+              const doctorStatuses = await Doctor.find({
+                doctorUserId: { $in: allDoctors.map(d => d._id) }
+              }).select('doctorUserId status');
+              
+              const doctorStatusMap = new Map();
+              doctorStatuses.forEach(doc => {
+                doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+              });
+              
+              const availableDoctors = allDoctors.filter(d => {
+                const doctorStatus = doctorStatusMap.get(d._id.toString());
+                if (!doctorStatus) return true;
+                return doctorStatus === 'Available' || doctorStatus === 'Busy';
+              });
+              
+              const inputLower = doctorIdStr.toLowerCase().trim();
+              const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+              
+              let matchedDoctors = [];
+              
+              // PRIORITY 1: Exact match (case-insensitive)
+              const exactMatches = availableDoctors.filter(d => 
+                d.fullName.toLowerCase() === inputLower
+              );
+              if (exactMatches.length > 0) {
+                matchedDoctors = exactMatches;
+              }
+              
+              // PRIORITY 2: Exact match bỏ "bác sĩ" prefix
+              if (matchedDoctors.length === 0) {
+                const prefixMatches = availableDoctors.filter(d => {
+                  const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                  return doctorNameClean === inputClean;
+                });
+                if (prefixMatches.length > 0) {
+                  matchedDoctors = prefixMatches;
+                }
+              }
+              
+              // PRIORITY 3: Substring matching (chặt chẽ) - chỉ khi input ngắn và không có khoảng trắng
+              if (matchedDoctors.length === 0 && inputClean.length >= 2 && !inputClean.includes(' ')) {
+                const substringMatches = availableDoctors.filter(d => {
+                  const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                  return doctorNameClean.includes(inputClean);
+                });
+                if (substringMatches.length > 0) {
+                  matchedDoctors = substringMatches;
+                }
+              }
+              
+              // PRIORITY 4: Word-based matching (match theo TỪ)
+              if (matchedDoctors.length === 0 && inputWords.length > 1) {
+                const wordMatches = availableDoctors.filter(d => {
+                  const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                  const doctorWords = doctorNameClean.split(/\s+/);
+                  return inputWords.every(inputWord => 
+                    doctorWords.some(doctorWord => doctorWord.includes(inputWord) || inputWord.includes(doctorWord))
+                  );
+                });
+                if (wordMatches.length > 0) {
+                  matchedDoctors = wordMatches;
+                }
+              }
+              
+              // ⭐ QUAN TRỌNG: Filter bỏ bác sĩ "On Leave" hoặc "Inactive" từ matchedDoctors
+              const finalMatchedDoctors = matchedDoctors.filter(d => {
+                const doctorStatus = doctorStatusMap.get(d._id.toString());
+                if (!doctorStatus) return true;
+                return doctorStatus === 'Available' || doctorStatus === 'Busy';
+              });
+              
+              if (finalMatchedDoctors.length === 1) {
+                // Chỉ có 1 bác sĩ match → sử dụng bác sĩ đó
+                doctor = finalMatchedDoctors[0];
+              } else if (finalMatchedDoctors.length > 1) {
+                // Có nhiều bác sĩ match → trả về lỗi với message hướng dẫn
                 return { 
-                  error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.` 
+                  error: `Có nhiều bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`,
+                  shouldCallFindDoctorByName: true
+                };
+              } else {
+                // Không tìm thấy bác sĩ nào
+                return { 
+                  error: `Không tìm thấy bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`,
+                  shouldCallFindDoctorByName: true
                 };
               }
             }
@@ -1862,21 +2034,98 @@ class AIBookingService {
                   .select('_id fullName specialization role status email phoneNumber')
                 .lean();
               } else {
-                // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ (sai)
-                // Tìm bác sĩ theo tên
-                const doctorByName = await User.findOne({ 
-                  fullName: { $regex: new RegExp(`^${doctorIdStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-                  role: 'Doctor',
-                  status: 'Active'
-                })
-                .select('_id fullName specialization role status email phoneNumber')
-                .lean();
+                // Nếu không phải ObjectId và không phải số → có thể là tên bác sĩ
+                // Sử dụng fuzzy matching tương tự như find_doctor_by_name
+                const allDoctors = await User.find({ role: 'Doctor', status: 'Active' })
+                  .select('_id fullName specialization role status email phoneNumber')
+                  .sort({ fullName: 1 })
+                  .lean();
                 
-                if (doctorByName) {
-                  doctor = doctorByName;
-                } else {
+                // ⭐ THÊM: Filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+                const doctorStatuses = await Doctor.find({
+                  doctorUserId: { $in: allDoctors.map(d => d._id) }
+                }).select('doctorUserId status');
+                
+                const doctorStatusMap = new Map();
+                doctorStatuses.forEach(doc => {
+                  doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+                });
+                
+                const availableDoctors = allDoctors.filter(d => {
+                  const doctorStatus = doctorStatusMap.get(d._id.toString());
+                  if (!doctorStatus) return true;
+                  return doctorStatus === 'Available' || doctorStatus === 'Busy';
+                });
+                
+                const inputLower = doctorIdStr.toLowerCase().trim();
+                const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
+                
+                let matchedDoctors = [];
+                
+                // PRIORITY 1: Exact match (case-insensitive)
+                const exactMatches = availableDoctors.filter(d => 
+                  d.fullName.toLowerCase() === inputLower
+                );
+                if (exactMatches.length > 0) {
+                  matchedDoctors = exactMatches;
+                }
+                
+                // PRIORITY 2: Exact match bỏ "bác sĩ" prefix
+                if (matchedDoctors.length === 0) {
+                  const prefixMatches = availableDoctors.filter(d => {
+                    const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                    return doctorNameClean === inputClean;
+                  });
+                  if (prefixMatches.length > 0) {
+                    matchedDoctors = prefixMatches;
+                  }
+                }
+                
+                // PRIORITY 3: Substring matching (chặt chẽ) - chỉ khi input ngắn và không có khoảng trắng
+                if (matchedDoctors.length === 0 && inputClean.length >= 2 && !inputClean.includes(' ')) {
+                  const substringMatches = availableDoctors.filter(d => {
+                    const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                    return doctorNameClean.includes(inputClean);
+                  });
+                  if (substringMatches.length > 0) {
+                    matchedDoctors = substringMatches;
+                  }
+                }
+                
+                // PRIORITY 4: Word-based matching (match theo TỪ)
+                if (matchedDoctors.length === 0 && inputWords.length > 1) {
+                  const wordMatches = availableDoctors.filter(d => {
+                    const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+                    const doctorWords = doctorNameClean.split(/\s+/);
+                    return inputWords.every(inputWord => 
+                      doctorWords.some(doctorWord => doctorWord.includes(inputWord) || inputWord.includes(doctorWord))
+                    );
+                  });
+                  if (wordMatches.length > 0) {
+                    matchedDoctors = wordMatches;
+                  }
+                }
+                
+                // ⭐ QUAN TRỌNG: Filter bỏ bác sĩ "On Leave" hoặc "Inactive" từ matchedDoctors
+                const finalMatchedDoctors = matchedDoctors.filter(d => {
+                  const doctorStatus = doctorStatusMap.get(d._id.toString());
+                  if (!doctorStatus) return true;
+                  return doctorStatus === 'Available' || doctorStatus === 'Busy';
+                });
+                
+                if (finalMatchedDoctors.length === 1) {
+                  // Chỉ có 1 bác sĩ match → sử dụng bác sĩ đó
+                  doctor = finalMatchedDoctors[0];
+                } else if (finalMatchedDoctors.length > 1) {
+                  // Có nhiều bác sĩ match → trả về lỗi
                   return { 
-                    error: `DoctorId "${doctorIdStr}" không hợp lệ. Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.` 
+                    error: `Có nhiều bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`
+                  };
+                } else {
+                  // Không tìm thấy bác sĩ nào
+                  return { 
+                    error: `Không tìm thấy bác sĩ tên "${doctorIdStr}". Vui lòng sử dụng doctorId (ObjectId) từ find_doctor_by_name hoặc số thứ tự từ danh sách bác sĩ.`
                   };
                 }
               }
