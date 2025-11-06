@@ -2796,19 +2796,16 @@ class AIBookingService {
       // Lấy ngày hôm nay theo VN timezone (YYYY-MM-DD)
       const todayStr = dateFormatter.format(now);
       
-      // Parse ngày hôm nay để tính ngày mai và ngày kia
-      const todayParts = partsFormatter.formatToParts(now);
-      let todayYear = parseInt(todayParts.find(p => p.type === 'year').value);
-      let todayMonth = parseInt(todayParts.find(p => p.type === 'month').value); // 1-12
-      let todayDay = parseInt(todayParts.find(p => p.type === 'day').value);
+      // ⭐ Tính ngày mai: Parse todayStr và tính toán trực tiếp với số nguyên (tránh timezone issues)
+      const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
       
-      // Tính ngày mai: thêm 1 ngày (xử lý trường hợp chuyển tháng/năm)
+      // Tính ngày mai: thêm 1 ngày (xử lý chuyển tháng/năm)
       let tomorrowYear = todayYear;
       let tomorrowMonth = todayMonth;
       let tomorrowDay = todayDay + 1;
       
-      // Kiểm tra số ngày trong tháng hiện tại
-      const daysInMonth = new Date(todayYear, todayMonth, 0).getDate(); // Tháng hiện tại có bao nhiêu ngày
+      // Kiểm tra số ngày trong tháng hiện tại (month là 1-12, nên cần -1 khi dùng với Date)
+      const daysInMonth = new Date(todayYear, todayMonth - 1, 0).getDate();
       if (tomorrowDay > daysInMonth) {
         tomorrowDay = 1;
         tomorrowMonth++;
@@ -2818,18 +2815,21 @@ class AIBookingService {
         }
       }
       
-      // Format ngày mai (YYYY-MM-DD)
+      // Format ngày mai (YYYY-MM-DD) - không cần dùng Date object, chỉ cần format string
       const tomorrowStr = `${tomorrowYear}-${String(tomorrowMonth).padStart(2, '0')}-${String(tomorrowDay).padStart(2, '0')}`;
       
-      // Tính ngày kia: thêm 2 ngày (tính từ ngày mai)
-      let dayAfterTomorrowYear = tomorrowYear;
-      let dayAfterTomorrowMonth = tomorrowMonth;
-      let dayAfterTomorrowDay = tomorrowDay + 1;
+      // ⭐ Tính ngày kia: thêm 2 ngày từ hôm nay
+      let dayAfterTomorrowYear = todayYear;
+      let dayAfterTomorrowMonth = todayMonth;
+      let dayAfterTomorrowDay = todayDay + 2;
       
-      // Kiểm tra số ngày trong tháng của ngày mai
-      const daysInTomorrowMonth = new Date(tomorrowYear, tomorrowMonth, 0).getDate();
-      if (dayAfterTomorrowDay > daysInTomorrowMonth) {
-        dayAfterTomorrowDay = 1;
+      // Xử lý chuyển tháng/năm
+      while (true) {
+        const daysInCurrentMonth = new Date(dayAfterTomorrowYear, dayAfterTomorrowMonth - 1, 0).getDate();
+        if (dayAfterTomorrowDay <= daysInCurrentMonth) {
+          break;
+        }
+        dayAfterTomorrowDay -= daysInCurrentMonth;
         dayAfterTomorrowMonth++;
         if (dayAfterTomorrowMonth > 12) {
           dayAfterTomorrowMonth = 1;
