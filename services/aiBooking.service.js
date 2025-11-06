@@ -54,11 +54,23 @@ class AIBookingService {
 
       // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
       if (schedules.length === 0) {
+        // ⭐ So sánh date trong VN timezone
         const now = new Date();
-        now.setHours(0, 0, 0, 0);
         
-        // Chỉ tự động tạo schedule cho ngày tương lai
-        if (searchDate >= now) {
+        // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
+        const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Ho_Chi_Minh',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const todayDateStr = todayVNFormatter.format(now);
+        
+        // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
+        const searchDateStr = todayVNFormatter.format(searchDate);
+        
+        // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
+        if (searchDateStr >= todayDateStr) {
           console.log(`⚠️ [getWorkingHoursFromDatabase] No schedules found for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}. Auto-creating schedule...`);
           
           try {
@@ -1663,58 +1675,109 @@ class AIBookingService {
           
           // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
           if (schedules.length === 0) {
+            // ⭐ So sánh date trong VN timezone
             const now = new Date();
-            now.setHours(0, 0, 0, 0);
             
-            // Chỉ tự động tạo schedule cho ngày tương lai
-            if (searchDate >= now) {
+            // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
+            const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            });
+            const todayDateStr = todayVNFormatter.format(now);
+            
+            // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
+            const searchDateStr = todayVNFormatter.format(searchDate);
+            
+            // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
+            if (searchDateStr >= todayDateStr) {
               console.log(`⚠️ [get_available_slots] No schedules found for doctorId ${doctor._id}, date ${date}. Auto-creating schedule...`);
               
               try {
-                // Tự động tạo schedule cho bác sĩ này vào ngày này
-                await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+                // ⭐ Đảm bảo date là Date object (không phải string)
+                const scheduleDate = searchDate instanceof Date ? new Date(searchDate) : new Date(searchDate);
+                scheduleDate.setHours(0, 0, 0, 0);
                 
-                // ⭐ Query lại sau khi tạo - KHÔNG filter theo status vì có thể có schedule với status 'Unavailable' (nhưng vẫn cần để lấy workingHours)
-                // Sau đó chỉ lấy những schedule có status 'Available' (hoặc có ít nhất 1 phần còn available)
+                // Tự động tạo schedule cho bác sĩ này vào ngày này
+                await ScheduleHelper.ensureScheduleForDoctor(doctor._id, scheduleDate);
+                
+                // ⭐ Đợi một chút để đảm bảo database đã commit
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                // ⭐ Query lại sau khi tạo - KHÔNG filter theo status để lấy tất cả schedules
+                // Sử dụng date range để đảm bảo match đúng (do MongoDB có thể lưu với timezone khác)
+                const startOfDay = new Date(scheduleDate);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(scheduleDate);
+                endOfDay.setHours(23, 59, 59, 999);
+                
                 let newSchedules = await DoctorSchedule.find({
                   doctorUserId: doctor._id,
-                  date: searchDate
+                  date: {
+                    $gte: startOfDay,
+                    $lte: endOfDay
+                  }
                 }).lean();
                 
-                // Nếu không tìm thấy schedule nào, có thể là lỗi
+                // Nếu vẫn không tìm thấy, thử query lại với date chính xác
                 if (newSchedules.length === 0) {
-                  console.error(`❌ [get_available_slots] Không tìm thấy schedule sau khi tạo cho doctorId ${doctor._id}, date ${date}`);
-                  return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+                  newSchedules = await DoctorSchedule.find({
+                    doctorUserId: doctor._id,
+                    date: scheduleDate
+                  }).lean();
+                }
+                
+                // Nếu vẫn không tìm thấy schedule nào, có thể là lỗi
+                if (newSchedules.length === 0) {
+                  console.error(`❌ [get_available_slots] Không tìm thấy schedule sau khi tạo cho doctorId ${doctor._id}, date ${date}, scheduleDate: ${scheduleDate.toISOString()}`);
+                  
+                  // Thử tạo lại một lần nữa
+                  try {
+                    await ScheduleHelper.ensureScheduleForDoctor(doctor._id, scheduleDate);
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                    newSchedules = await DoctorSchedule.find({
+                      doctorUserId: doctor._id,
+                      date: {
+                        $gte: startOfDay,
+                        $lte: endOfDay
+                      }
+                    }).lean();
+                    
+                    if (newSchedules.length === 0) {
+                      return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+                    }
+                  } catch (retryError) {
+                    console.error(`❌ [get_available_slots] Retry failed:`, retryError.message);
+                    return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+                  }
                 }
                 
                 // ⭐ Lọc chỉ lấy schedule có status 'Available' (ít nhất 1 ca còn available)
-                newSchedules = newSchedules.filter(s => s.status === 'Available');
+                const availableSchedules = newSchedules.filter(s => s.status === 'Available');
                 
                 // Nếu không có schedule nào Available (có thể cả 2 ca đã hết), vẫn dùng schedule để lấy workingHours
                 // Nhưng sẽ trả về error về không có slot available
-                if (newSchedules.length === 0) {
+                if (availableSchedules.length === 0) {
                   // Lấy schedule đầu tiên để lấy workingHours (dù status là Unavailable)
-                  newSchedules = await DoctorSchedule.find({
-                    doctorUserId: doctor._id,
-                    date: searchDate
-                  }).limit(1).lean();
+                  const firstSchedule = newSchedules[0];
                   
-                  if (newSchedules.length > 0) {
+                  if (firstSchedule && firstSchedule.workingHours) {
                     // Có schedule nhưng đã hết - có thể là đã qua giờ làm việc
-                    const workingHours = newSchedules[0]?.workingHours;
-                    if (workingHours) {
-                      return { 
-                        error: `Bác sĩ này không còn khung giờ khả dụng vào ngày ${date}. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn ngày khác.` 
-                      };
-                    }
+                    const workingHours = firstSchedule.workingHours;
+                    return { 
+                      error: `Bác sĩ này không còn khung giờ khả dụng vào ngày ${date}. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn ngày khác.` 
+                    };
                   }
                   return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
                 }
                 
-                schedules = newSchedules;
+                schedules = availableSchedules;
                 console.log(`✅ [get_available_slots] Auto-created schedule for doctorId ${doctor._id}, date ${date}, found ${schedules.length} available shifts`);
               } catch (createError) {
-                console.error(`❌ [get_available_slots] Error auto-creating schedule:`, createError.message);
+                console.error(`❌ [get_available_slots] Error auto-creating schedule:`, createError);
+                console.error(`   - Error stack:`, createError.stack);
                 return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
               }
             } else {
@@ -2244,7 +2307,7 @@ class AIBookingService {
             slotEndTime.setUTCMinutes(slotEndTime.getUTCMinutes() + service.durationMinutes);
             
             // 5. Find doctor schedule (CẦN LẤY TRƯỚC ĐỂ VALIDATE WORKING HOURS)
-            const schedules = await DoctorSchedule.find({
+            let schedules = await DoctorSchedule.find({
               doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
               date: appointmentDate,
               status: 'Available'
@@ -2252,32 +2315,85 @@ class AIBookingService {
             
             // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
             if (schedules.length === 0) {
+              // ⭐ So sánh date trong VN timezone
               const now = new Date();
-              now.setHours(0, 0, 0, 0);
               
-              // Chỉ tự động tạo schedule cho ngày tương lai
-              if (appointmentDate >= now) {
+              // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
+              const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Ho_Chi_Minh',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+              });
+              const todayDateStr = todayVNFormatter.format(now);
+              
+              // Lấy ngày của appointmentDate trong VN timezone (YYYY-MM-DD)
+              const appointmentDateStrVN = todayVNFormatter.format(appointmentDate);
+              
+              // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
+              if (appointmentDateStrVN >= todayDateStr) {
                 console.log(`⚠️ [create_appointment] No schedules found for doctorId ${doctor._id}, date ${normalizedDate}. Auto-creating schedule...`);
-                
+
                 try {
-                  // Tự động tạo schedule cho bác sĩ này vào ngày này
-                  await ScheduleHelper.ensureScheduleForDoctor(doctor._id, appointmentDate);
+                  // ⭐ Đảm bảo date là Date object (không phải string)
+                  const scheduleDate = appointmentDate instanceof Date ? new Date(appointmentDate) : new Date(appointmentDate);
+                  scheduleDate.setHours(0, 0, 0, 0);
                   
-                  // Query lại sau khi tạo
-                  const newSchedules = await DoctorSchedule.find({
+                  // Tự động tạo schedule cho bác sĩ này vào ngày này
+                  await ScheduleHelper.ensureScheduleForDoctor(doctor._id, scheduleDate);
+                  
+                  // ⭐ Đợi một chút để đảm bảo database đã commit
+                  await new Promise(resolve => setTimeout(resolve, 100));
+                  
+                  // ⭐ Query lại sau khi tạo - sử dụng date range để đảm bảo match đúng
+                  const startOfDay = new Date(scheduleDate);
+                  startOfDay.setHours(0, 0, 0, 0);
+                  const endOfDay = new Date(scheduleDate);
+                  endOfDay.setHours(23, 59, 59, 999);
+                  
+                  let newSchedules = await DoctorSchedule.find({
                     doctorUserId: doctor._id,
-                    date: appointmentDate,
+                    date: {
+                      $gte: startOfDay,
+                      $lte: endOfDay
+                    },
                     status: 'Available'
                   }).lean();
                   
+                  // Nếu vẫn không tìm thấy, thử query lại với date chính xác
                   if (newSchedules.length === 0) {
-                    return { error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này. Vui lòng thử lại sau.' };
+                    newSchedules = await DoctorSchedule.find({
+                      doctorUserId: doctor._id,
+                      date: scheduleDate,
+                      status: 'Available'
+                    }).lean();
+                  }
+                  
+                  // Nếu vẫn không tìm thấy, thử tạo lại
+                  if (newSchedules.length === 0) {
+                    console.log(`⚠️ [create_appointment] Retrying schedule creation...`);
+                    await ScheduleHelper.ensureScheduleForDoctor(doctor._id, scheduleDate);
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    
+                    newSchedules = await DoctorSchedule.find({
+                      doctorUserId: doctor._id,
+                      date: {
+                        $gte: startOfDay,
+                        $lte: endOfDay
+                      },
+                      status: 'Available'
+                    }).lean();
+                    
+                    if (newSchedules.length === 0) {
+                      return { error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này. Vui lòng thử lại sau.' };
+                    }
                   }
                   
                   schedules = newSchedules;
-                  console.log(`✅ [create_appointment] Auto-created schedule for doctorId ${doctor._id}, date ${normalizedDate}`);
+                  console.log(`✅ [create_appointment] Auto-created schedule for doctorId ${doctor._id}, date ${normalizedDate}, found ${schedules.length} available shifts`);
                 } catch (createError) {
-                  console.error(`❌ [create_appointment] Error auto-creating schedule:`, createError.message);
+                  console.error(`❌ [create_appointment] Error auto-creating schedule:`, createError);
+                  console.error(`   - Error stack:`, createError.stack);
                   return { error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này. Vui lòng thử lại sau.' };
                 }
               } else {
@@ -2657,15 +2773,74 @@ class AIBookingService {
       // ⭐ Filter conversation history để loại bỏ thông tin không hợp lệ
       const filteredHistory = this.filterConversationHistory(conversationHistory);
       
-      // Prepare date context
-      const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = tomorrow.toISOString().split('T')[0];
-      const dayAfterTomorrow = new Date(today);
-      dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
-      const dayAfterTomorrowStr = dayAfterTomorrow.toISOString().split('T')[0];
+      // ⭐ Prepare date context - SỬ DỤNG TIMEZONE VIỆT NAM (UTC+7)
+      // Lấy thời gian hiện tại theo VN timezone
+      const now = new Date();
+      
+      // Format date theo VN timezone (Asia/Ho_Chi_Minh)
+      const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      
+      // Lấy thông tin ngày hiện tại trong VN timezone
+      const partsFormatter = new Intl.DateTimeFormat('en', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      
+      // Lấy ngày hôm nay theo VN timezone (YYYY-MM-DD)
+      const todayStr = dateFormatter.format(now);
+      
+      // Parse ngày hôm nay để tính ngày mai và ngày kia
+      const todayParts = partsFormatter.formatToParts(now);
+      let todayYear = parseInt(todayParts.find(p => p.type === 'year').value);
+      let todayMonth = parseInt(todayParts.find(p => p.type === 'month').value); // 1-12
+      let todayDay = parseInt(todayParts.find(p => p.type === 'day').value);
+      
+      // Tính ngày mai: thêm 1 ngày (xử lý trường hợp chuyển tháng/năm)
+      let tomorrowYear = todayYear;
+      let tomorrowMonth = todayMonth;
+      let tomorrowDay = todayDay + 1;
+      
+      // Kiểm tra số ngày trong tháng hiện tại
+      const daysInMonth = new Date(todayYear, todayMonth, 0).getDate(); // Tháng hiện tại có bao nhiêu ngày
+      if (tomorrowDay > daysInMonth) {
+        tomorrowDay = 1;
+        tomorrowMonth++;
+        if (tomorrowMonth > 12) {
+          tomorrowMonth = 1;
+          tomorrowYear++;
+        }
+      }
+      
+      // Format ngày mai (YYYY-MM-DD)
+      const tomorrowStr = `${tomorrowYear}-${String(tomorrowMonth).padStart(2, '0')}-${String(tomorrowDay).padStart(2, '0')}`;
+      
+      // Tính ngày kia: thêm 2 ngày (tính từ ngày mai)
+      let dayAfterTomorrowYear = tomorrowYear;
+      let dayAfterTomorrowMonth = tomorrowMonth;
+      let dayAfterTomorrowDay = tomorrowDay + 1;
+      
+      // Kiểm tra số ngày trong tháng của ngày mai
+      const daysInTomorrowMonth = new Date(tomorrowYear, tomorrowMonth, 0).getDate();
+      if (dayAfterTomorrowDay > daysInTomorrowMonth) {
+        dayAfterTomorrowDay = 1;
+        dayAfterTomorrowMonth++;
+        if (dayAfterTomorrowMonth > 12) {
+          dayAfterTomorrowMonth = 1;
+          dayAfterTomorrowYear++;
+        }
+      }
+      
+      // Format ngày kia (YYYY-MM-DD)
+      const dayAfterTomorrowStr = `${dayAfterTomorrowYear}-${String(dayAfterTomorrowMonth).padStart(2, '0')}-${String(dayAfterTomorrowDay).padStart(2, '0')}`;
+      
+      console.log(`📅 [AI Booking] Date context (VN timezone): TODAY=${todayStr}, TOMORROW=${tomorrowStr}, DAY_AFTER_TOMORROW=${dayAfterTomorrowStr}`);
       
       // Build system prompt với date context
       const systemPrompt = toolsConfig.systemPrompt
