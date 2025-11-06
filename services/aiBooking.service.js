@@ -1359,6 +1359,10 @@ class AIBookingService {
           const { doctorId, date, serviceId } = validatedArgs;
           
           if (!doctorId || !date || !serviceId) {
+            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu thiếu doctorId, trả về error message hướng dẫn user chọn bác sĩ
+            if (!doctorId) {
+              return { error: 'Vui lòng chọn bác sĩ trước khi xem khung giờ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.' };
+            }
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
           }
           
@@ -1450,7 +1454,8 @@ class AIBookingService {
           }
           
           if (!doctor || doctor.role !== 'Doctor' || doctor.status !== 'Active') {
-            return { error: 'Bác sĩ không tồn tại. Vui lòng chọn lại bác sĩ.' };
+            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu doctorId không hợp lệ, trả về error message hướng dẫn user chọn bác sĩ
+            return { error: 'Bác sĩ không tồn tại hoặc không hợp lệ. Vui lòng chọn bác sĩ từ danh sách bác sĩ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.' };
           }
           
           // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
