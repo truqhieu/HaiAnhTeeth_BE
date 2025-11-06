@@ -133,8 +133,10 @@ class DateHelper {
     let tomorrowMonth = todayMonth;
     let tomorrowDay = todayDay + 1;
     
-    // Kiểm tra số ngày trong tháng hiện tại
-    const daysInMonth = new Date(tomorrowYear, tomorrowMonth - 1, 0).getDate();
+    // ⭐ Kiểm tra số ngày trong tháng hiện tại (tomorrowMonth)
+    // new Date(year, month, 0) trả về ngày cuối cùng của tháng (month - 1)
+    // Vậy để lấy số ngày trong tháng month, phải dùng new Date(year, month, 0)
+    const daysInMonth = new Date(tomorrowYear, tomorrowMonth, 0).getDate();
     if (tomorrowDay > daysInMonth) {
       tomorrowDay = 1;
       tomorrowMonth++;
@@ -160,9 +162,11 @@ class DateHelper {
     let dayAfterTomorrowMonth = todayMonth;
     let dayAfterTomorrowDay = todayDay + 2;
     
-    // Xử lý chuyển tháng/năm
+    // ⭐ Xử lý chuyển tháng/năm
+    // new Date(year, month, 0) trả về ngày cuối cùng của tháng (month - 1)
+    // Vậy để lấy số ngày trong tháng month, phải dùng new Date(year, month, 0)
     while (true) {
-      const daysInCurrentMonth = new Date(dayAfterTomorrowYear, dayAfterTomorrowMonth - 1, 0).getDate();
+      const daysInCurrentMonth = new Date(dayAfterTomorrowYear, dayAfterTomorrowMonth, 0).getDate();
       if (dayAfterTomorrowDay <= daysInCurrentMonth) {
         break;
       }
