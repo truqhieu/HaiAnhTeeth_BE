@@ -1238,14 +1238,17 @@ class AIBookingService {
             };
           }
           
-          // Nếu có nhiều bác sĩ available match → Trả về danh sách để user chọn
+          // ⭐ Nếu có nhiều bác sĩ available match → Trả về danh sách để user chọn
+          // CỰC KỲ QUAN TRỌNG: Phải trả về multiple=true và message rõ ràng để AI hỏi lại
           if (availableMatchedDoctors.length > 1) {
-          return {
-            found: true,
-            multiple: true,
+            return {
+              found: true,
+              multiple: true,
+              message: `Có nhiều bác sĩ tên "${doctorName}". Vui lòng chọn bác sĩ cụ thể từ danh sách bên dưới.`,
+              requiresUserSelection: true, // ⭐ Flag đặc biệt để AI biết PHẢI hỏi lại
               doctors: availableMatchedDoctors.map(d => ({
-              id: d._id.toString(),
-              name: d.fullName,
+                id: d._id.toString(),
+                name: d.fullName,
                 specialization: d.specialization || '',
                 email: d.email || '',
                 phoneNumber: d.phoneNumber || ''
