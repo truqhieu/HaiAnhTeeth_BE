@@ -1868,22 +1868,17 @@ class AIBookingService {
             ));
             
             // QUAN TRỌNG: Nếu là ngày hôm nay, chỉ hiển thị từ thời gian hiện tại trở đi
-            const now = new Date();
+            // ⭐ So sánh ngày theo VN timezone để nhất quán
+            const todayVN = DateHelper.getTodayVN(); // YYYY-MM-DD
+            const searchDateFormatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            });
+            const searchDateVN = searchDateFormatter.format(searchDate); // YYYY-MM-DD
             
-            // So sánh ngày: searchDate và today (lấy year, month, date)
-            // searchDate đã được set về 00:00:00 local time, nên lấy local date
-            const searchYear = searchDate.getFullYear();
-            const searchMonth = searchDate.getMonth();
-            const searchDay = searchDate.getDate();
-            
-            const nowYear = now.getFullYear();
-            const nowMonth = now.getMonth();
-            const nowDay = now.getDate();
-            
-            const isToday = 
-              searchYear === nowYear &&
-              searchMonth === nowMonth &&
-              searchDay === nowDay;
+            const isToday = searchDateVN === todayVN;
             
             // Nếu là hôm nay, tính thời gian hiện tại và điều chỉnh shiftStart
             let actualShiftStart = shiftStart;
