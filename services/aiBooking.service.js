@@ -1420,8 +1420,12 @@ class AIBookingService {
           } else {
             // Check nếu doctorId là ObjectId hợp lệ
             if (mongoose.Types.ObjectId.isValid(doctorIdStr)) {
-            // Dùng doctorId trực tiếp (ObjectId)
-              doctor = await User.findById(doctorIdStr)
+            // Dùng doctorId trực tiếp (ObjectId) - ⭐ THÊM: Kiểm tra role và status
+              doctor = await User.findOne({
+                _id: doctorIdStr,
+                role: 'Doctor',
+                status: 'Active'
+              })
                 .select('_id fullName specialization email phoneNumber status role')
               .lean();
             } else {
@@ -1445,7 +1449,7 @@ class AIBookingService {
             }
           }
           
-          if (!doctor) {
+          if (!doctor || doctor.role !== 'Doctor' || doctor.status !== 'Active') {
             return { error: 'Bác sĩ không tồn tại. Vui lòng chọn lại bác sĩ.' };
           }
           
