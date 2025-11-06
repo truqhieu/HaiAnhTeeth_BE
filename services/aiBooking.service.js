@@ -1359,9 +1359,14 @@ class AIBookingService {
           const { doctorId, date, serviceId } = validatedArgs;
           
           if (!doctorId || !date || !serviceId) {
-            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu thiếu doctorId, trả về error message hướng dẫn user chọn bác sĩ
+            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu thiếu doctorId, trả về error message hướng dẫn AI gọi get_doctors()
+            // AI sẽ tự động gọi get_doctors() để hiển thị danh sách bác sĩ cho user chọn
             if (!doctorId) {
-              return { error: 'Vui lòng chọn bác sĩ trước khi xem khung giờ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.' };
+              return { 
+                error: 'doctor_not_found',
+                message: 'Vui lòng chọn bác sĩ trước khi xem khung giờ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.',
+                shouldCallGetDoctors: true
+              };
             }
             return { error: 'Missing required parameters: doctorId, date, serviceId' };
           }
@@ -1454,8 +1459,13 @@ class AIBookingService {
           }
           
           if (!doctor || doctor.role !== 'Doctor' || doctor.status !== 'Active') {
-            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu doctorId không hợp lệ, trả về error message hướng dẫn user chọn bác sĩ
-            return { error: 'Bác sĩ không tồn tại hoặc không hợp lệ. Vui lòng chọn bác sĩ từ danh sách bác sĩ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.' };
+            // ⭐ CỰC KỲ QUAN TRỌNG: Nếu doctorId không hợp lệ, trả về error message hướng dẫn AI gọi get_doctors()
+            // AI sẽ tự động gọi get_doctors() để hiển thị danh sách bác sĩ cho user chọn
+            return { 
+              error: 'doctor_not_found',
+              message: 'Vui lòng chọn bác sĩ từ danh sách bác sĩ khả dụng. Tôi sẽ hiển thị danh sách bác sĩ cho bạn.',
+              shouldCallGetDoctors: true
+            };
           }
           
           // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
@@ -1889,7 +1899,10 @@ class AIBookingService {
             
             // Kiểm tra date có hợp lệ không (ví dụ: 31/02/2025 không hợp lệ)
             const checkDate = new Date(normalizedDate);
-            const [year, month, day] = normalizedDate.split('-').map(Number);
+            const dateParts = normalizedDate.split('-').map(Number);
+            const year = dateParts[0];
+            const month = dateParts[1];
+            const day = dateParts[2];
             if (checkDate.getFullYear() !== year || checkDate.getMonth() + 1 !== month || checkDate.getDate() !== day) {
               return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
             }
@@ -1903,57 +1916,93 @@ class AIBookingService {
             }
             
             // Create startTime and endTime (VN timezone)
-            const slotStartTime = new Date(Date.UTC(
-              appointmentDate.getFullYear(),
-              appointmentDate.getMonth(),
-              appointmentDate.getDate(),
-              hours - 7, // Convert VN time (UTC+7) to UTC
-              minutes,
-              0
-            ));
+            // ⭐ CỰC KỲ QUAN TRỌNG: Xử lý timezone conversion đúng cách
+            // normalizedDate là string "YYYY-MM-DD" (ví dụ: "2025-11-06")
+            // hours và minutes là thời gian VN (UTC+7)
+            // year, month, day đã được parse ở trên
+            let slotStartTime;
+            if (hours >= 7) {
+              // Nếu giờ >= 7, convert trực tiếp: hours - 7 = UTC hours
+              slotStartTime = new Date(Date.UTC(
+                year,
+                month - 1, // Month is 0-indexed
+                day,
+                hours - 7,
+                minutes,
+                0,
+                0
+              ));
+            } else {
+              // Nếu giờ < 7 (ví dụ: 6h VN = 23h UTC ngày hôm trước)
+              // Tính ngày trước: nếu day = 1, lùi về tháng trước
+              let prevDay = day - 1;
+              let prevMonth = month;
+              let prevYear = year;
+              
+              if (prevDay < 1) {
+                prevMonth--;
+                if (prevMonth < 1) {
+                  prevMonth = 12;
+                  prevYear--;
+                }
+                // Tính số ngày trong tháng trước
+                const daysInPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
+                prevDay = daysInPrevMonth;
+              }
+              
+              slotStartTime = new Date(Date.UTC(
+                prevYear,
+                prevMonth - 1, // Month is 0-indexed
+                prevDay,
+                hours - 7 + 24, // +24 để convert sang UTC
+                minutes,
+                0,
+                0
+              ));
+            }
             
             const slotEndTime = new Date(slotStartTime);
-            slotEndTime.setMinutes(slotEndTime.getMinutes() + service.durationMinutes);
+            slotEndTime.setUTCMinutes(slotEndTime.getUTCMinutes() + service.durationMinutes);
             
             // 5. Validate time không ở quá khứ (so với thời gian hiện tại VN timezone)
-            // Lấy thời gian hiện tại theo VN timezone (UTC+7)
+            // ⭐ CỰC KỲ QUAN TRỌNG: So sánh trong cùng timezone (VN timezone)
             const now = new Date();
-            const nowVN = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-            const nowVNUtc = new Date(Date.UTC(
-              nowVN.getFullYear(),
-              nowVN.getMonth(),
-              nowVN.getDate(),
-              nowVN.getHours() - 7, // Convert VN time (UTC+7) to UTC
-              nowVN.getMinutes(),
-              0
-            ));
             
-            // So sánh date và time
-            const appointmentDateOnly = new Date(Date.UTC(
-              appointmentDate.getFullYear(),
-              appointmentDate.getMonth(),
-              appointmentDate.getDate(),
-              0, 0, 0
-            ));
-            const todayDateOnly = new Date(Date.UTC(
-              nowVN.getFullYear(),
-              nowVN.getMonth(),
-              nowVN.getDate(),
-              0, 0, 0
-            ));
+            // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
+            // Sử dụng Intl.DateTimeFormat để lấy date string chính xác trong VN timezone
+            const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
+            });
+            const todayDateStr = todayVNFormatter.format(now); // Format: YYYY-MM-DD
             
-            // Check nếu date là quá khứ
-            if (appointmentDateOnly.getTime() < todayDateOnly.getTime()) {
+            // normalizedDate đã là string "YYYY-MM-DD" (từ input)
+            const appointmentDateStr = normalizedDate; // YYYY-MM-DD
+            
+            // Check nếu date là quá khứ (ngày < hôm nay)
+            if (appointmentDateStr < todayDateStr) {
               const dateVN = appointmentDate.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-              const todayVN = nowVN.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-              return { error: `Không thể đặt lịch trong quá khứ. Ngày bạn chọn là ${dateVN}, nhưng hôm nay là ${todayVN}. Vui lòng chọn ngày trong tương lai.` };
+              const todayVNFormatted = now.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+              return { error: `Không thể đặt lịch trong quá khứ. Ngày bạn chọn là ${dateVN}, nhưng hôm nay là ${todayVNFormatted}. Vui lòng chọn ngày trong tương lai.` };
             }
             
             // Nếu date là hôm nay, check time không được trong quá khứ
-            if (appointmentDateOnly.getTime() === todayDateOnly.getTime()) {
-              if (slotStartTime.getTime() < nowVNUtc.getTime()) {
+            // ⭐ QUAN TRỌNG: So sánh slotStartTime (UTC) với now (UTC) - cả hai đều là UTC nên so sánh chính xác
+            if (appointmentDateStr === todayDateStr) {
+              // So sánh slotStartTime (UTC) với now (UTC)
+              // slotStartTime đã được tính ở UTC, now cũng là UTC
+              // ⭐ QUAN TRỌNG: Chỉ báo lỗi nếu slotStartTime < now (không bao gồm =)
+              // Vì nếu = thì có thể là thời gian hiện tại, nhưng vẫn nên cho phép để tránh race condition
+              if (slotStartTime.getTime() < now.getTime()) {
                 const timeVN = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-                const nowTimeVN = nowVN.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
+                const nowTimeVN = now.toLocaleTimeString('vi-VN', { 
+                  hour: '2-digit', 
+                  minute: '2-digit', 
+                  hour12: false, 
+                  timeZone: 'Asia/Ho_Chi_Minh' 
+                });
                 return { error: `Không thể đặt lịch trong quá khứ. Thời gian bạn chọn là ${timeVN}, nhưng hiện tại là ${nowTimeVN}. Vui lòng chọn thời gian trong tương lai.` };
               }
             }
