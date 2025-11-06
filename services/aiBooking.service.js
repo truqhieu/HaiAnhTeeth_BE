@@ -65,21 +65,22 @@ class AIBookingService {
             // Tự động tạo schedule cho bác sĩ này vào ngày này
             await ScheduleHelper.ensureScheduleForDoctor(doctorUserId, searchDate);
             
-            // Query lại sau khi tạo
-            schedules = await DoctorSchedule.find({
+            // ⭐ Query lại sau khi tạo - KHÔNG filter theo status để lấy workingHours (dù status là Unavailable)
+            let newSchedules = await DoctorSchedule.find({
               doctorUserId: doctorUserId,
-              date: searchDate,
-              status: 'Available'
+              date: searchDate
             })
-            .select('workingHours')
+            .select('workingHours status')
             .lean();
             
-            if (schedules.length === 0) {
+            if (newSchedules.length === 0) {
               console.log(`⚠️ [getWorkingHoursFromDatabase] Failed to create schedule for doctorId ${doctorUserId}`);
               return null;
             }
             
-            console.log(`✅ [getWorkingHoursFromDatabase] Auto-created schedule for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}`);
+            // Lấy workingHours từ schedule đầu tiên (tất cả schedules đều có cùng workingHours)
+            schedules = newSchedules;
+            console.log(`✅ [getWorkingHoursFromDatabase] Auto-created schedule for doctorId ${doctorUserId}, date ${searchDate.toISOString().split('T')[0]}, found ${schedules.length} schedules`);
           } catch (createError) {
             console.error(`❌ [getWorkingHoursFromDatabase] Error auto-creating schedule:`, createError.message);
             return null;
@@ -1501,19 +1502,45 @@ class AIBookingService {
                 // Tự động tạo schedule cho bác sĩ này vào ngày này
                 await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
                 
-                // Query lại sau khi tạo
-                const newSchedules = await DoctorSchedule.find({
+                // ⭐ Query lại sau khi tạo - KHÔNG filter theo status vì có thể có schedule với status 'Unavailable' (nhưng vẫn cần để lấy workingHours)
+                // Sau đó chỉ lấy những schedule có status 'Available' (hoặc có ít nhất 1 phần còn available)
+                let newSchedules = await DoctorSchedule.find({
                   doctorUserId: doctor._id,
-                  date: searchDate,
-                  status: 'Available'
+                  date: searchDate
                 }).lean();
                 
+                // Nếu không tìm thấy schedule nào, có thể là lỗi
                 if (newSchedules.length === 0) {
+                  console.error(`❌ [get_available_slots] Không tìm thấy schedule sau khi tạo cho doctorId ${doctor._id}, date ${date}`);
+                  return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
+                }
+                
+                // ⭐ Lọc chỉ lấy schedule có status 'Available' (ít nhất 1 ca còn available)
+                newSchedules = newSchedules.filter(s => s.status === 'Available');
+                
+                // Nếu không có schedule nào Available (có thể cả 2 ca đã hết), vẫn dùng schedule để lấy workingHours
+                // Nhưng sẽ trả về error về không có slot available
+                if (newSchedules.length === 0) {
+                  // Lấy schedule đầu tiên để lấy workingHours (dù status là Unavailable)
+                  newSchedules = await DoctorSchedule.find({
+                    doctorUserId: doctor._id,
+                    date: searchDate
+                  }).limit(1).lean();
+                  
+                  if (newSchedules.length > 0) {
+                    // Có schedule nhưng đã hết - có thể là đã qua giờ làm việc
+                    const workingHours = newSchedules[0]?.workingHours;
+                    if (workingHours) {
+                      return { 
+                        error: `Bác sĩ này không còn khung giờ khả dụng vào ngày ${date}. Bác sĩ làm việc từ ${workingHours.morningStart} - ${workingHours.morningEnd} (buổi sáng) và ${workingHours.afternoonStart} - ${workingHours.afternoonEnd} (buổi chiều). Vui lòng chọn ngày khác.` 
+                      };
+                    }
+                  }
                   return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
                 }
                 
                 schedules = newSchedules;
-                console.log(`✅ [get_available_slots] Auto-created schedule for doctorId ${doctor._id}, date ${date}`);
+                console.log(`✅ [get_available_slots] Auto-created schedule for doctorId ${doctor._id}, date ${date}, found ${schedules.length} available shifts`);
               } catch (createError) {
                 console.error(`❌ [get_available_slots] Error auto-creating schedule:`, createError.message);
                 return { error: `Không thể tạo lịch làm việc cho bác sĩ vào ngày ${date}. Vui lòng thử lại sau.` };
