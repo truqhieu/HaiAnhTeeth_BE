@@ -104,6 +104,93 @@ class DateHelper {
     // Convert sang UTC (trừ 7 giờ)
     return this.vietnamTimeToUTC(vnDate);
   }
+
+  /**
+   * Lấy ngày hôm nay theo timezone Việt Nam (UTC+7)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: "2025-11-06")
+   */
+  static getTodayVN() {
+    const now = new Date();
+    const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return dateFormatter.format(now);
+  }
+
+  /**
+   * Lấy ngày mai theo timezone Việt Nam (UTC+7)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: "2025-11-07")
+   */
+  static getTomorrowVN() {
+    const todayStr = this.getTodayVN();
+    const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
+    
+    // Tính ngày mai: thêm 1 ngày
+    let tomorrowYear = todayYear;
+    let tomorrowMonth = todayMonth;
+    let tomorrowDay = todayDay + 1;
+    
+    // Kiểm tra số ngày trong tháng hiện tại
+    const daysInMonth = new Date(tomorrowYear, tomorrowMonth - 1, 0).getDate();
+    if (tomorrowDay > daysInMonth) {
+      tomorrowDay = 1;
+      tomorrowMonth++;
+      if (tomorrowMonth > 12) {
+        tomorrowMonth = 1;
+        tomorrowYear++;
+      }
+    }
+    
+    return `${tomorrowYear}-${String(tomorrowMonth).padStart(2, '0')}-${String(tomorrowDay).padStart(2, '0')}`;
+  }
+
+  /**
+   * Lấy ngày kia theo timezone Việt Nam (UTC+7)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: "2025-11-08")
+   */
+  static getDayAfterTomorrowVN() {
+    const todayStr = this.getTodayVN();
+    const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
+    
+    // Tính ngày kia: thêm 2 ngày
+    let dayAfterTomorrowYear = todayYear;
+    let dayAfterTomorrowMonth = todayMonth;
+    let dayAfterTomorrowDay = todayDay + 2;
+    
+    // Xử lý chuyển tháng/năm
+    while (true) {
+      const daysInCurrentMonth = new Date(dayAfterTomorrowYear, dayAfterTomorrowMonth - 1, 0).getDate();
+      if (dayAfterTomorrowDay <= daysInCurrentMonth) {
+        break;
+      }
+      dayAfterTomorrowDay -= daysInCurrentMonth;
+      dayAfterTomorrowMonth++;
+      if (dayAfterTomorrowMonth > 12) {
+        dayAfterTomorrowMonth = 1;
+        dayAfterTomorrowYear++;
+      }
+    }
+    
+    return `${dayAfterTomorrowYear}-${String(dayAfterTomorrowMonth).padStart(2, '0')}-${String(dayAfterTomorrowDay).padStart(2, '0')}`;
+  }
+
+  /**
+   * Lấy thông tin ngày hiện tại theo timezone Việt Nam (UTC+7)
+   * @returns {Object} - { year, month, day, dateString } (month là 1-12, day là 1-31)
+   */
+  static getTodayInfoVN() {
+    const todayStr = this.getTodayVN();
+    const [year, month, day] = todayStr.split('-').map(Number);
+    return {
+      year,
+      month,
+      day,
+      dateString: todayStr
+    };
+  }
 }
 
 module.exports = DateHelper;

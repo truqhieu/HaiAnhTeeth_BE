@@ -13,6 +13,7 @@ const availableSlotService = require('./availableSlot.service');
 const appointmentService = require('./appointment.service');
 const { calculateServicePrice } = require('../utils/promotionHelper');
 const ScheduleHelper = require('../utils/scheduleHelper');
+const DateHelper = require('../utils/dateHelper');
 
 // Initialize OpenAI client
 // ⭐ Timeout được config ở client level (nếu cần), không phải request level
@@ -55,19 +56,16 @@ class AIBookingService {
       // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
       if (schedules.length === 0) {
         // ⭐ So sánh date trong VN timezone
-        const now = new Date();
+        const todayDateStr = DateHelper.getTodayVN();
         
-        // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
-        const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+        // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
+        const searchDateFormatter = new Intl.DateTimeFormat('en-CA', {
           timeZone: 'Asia/Ho_Chi_Minh',
           year: 'numeric',
           month: '2-digit',
           day: '2-digit'
         });
-        const todayDateStr = todayVNFormatter.format(now);
-        
-        // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
-        const searchDateStr = todayVNFormatter.format(searchDate);
+        const searchDateStr = searchDateFormatter.format(searchDate);
         
         // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
         if (searchDateStr >= todayDateStr) {
@@ -1676,19 +1674,16 @@ class AIBookingService {
           // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
           if (schedules.length === 0) {
             // ⭐ So sánh date trong VN timezone
-            const now = new Date();
+            const todayDateStr = DateHelper.getTodayVN();
             
-            // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
-            const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+            // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
+            const searchDateFormatter = new Intl.DateTimeFormat('en-CA', {
               timeZone: 'Asia/Ho_Chi_Minh',
               year: 'numeric',
               month: '2-digit',
               day: '2-digit'
             });
-            const todayDateStr = todayVNFormatter.format(now);
-            
-            // Lấy ngày của searchDate trong VN timezone (YYYY-MM-DD)
-            const searchDateStr = todayVNFormatter.format(searchDate);
+            const searchDateStr = searchDateFormatter.format(searchDate);
             
             // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
             if (searchDateStr >= todayDateStr) {
@@ -2316,19 +2311,16 @@ class AIBookingService {
             // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai)
             if (schedules.length === 0) {
               // ⭐ So sánh date trong VN timezone
-              const now = new Date();
+              const todayDateStr = DateHelper.getTodayVN();
               
-              // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
-              const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
+              // Lấy ngày của appointmentDate trong VN timezone (YYYY-MM-DD)
+              const appointmentDateFormatter = new Intl.DateTimeFormat('en-CA', {
                 timeZone: 'Asia/Ho_Chi_Minh',
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit'
               });
-              const todayDateStr = todayVNFormatter.format(now);
-              
-              // Lấy ngày của appointmentDate trong VN timezone (YYYY-MM-DD)
-              const appointmentDateStrVN = todayVNFormatter.format(appointmentDate);
+              const appointmentDateStrVN = appointmentDateFormatter.format(appointmentDate);
               
               // Chỉ tự động tạo schedule cho ngày tương lai (so sánh string YYYY-MM-DD)
               if (appointmentDateStrVN >= todayDateStr) {
@@ -2463,13 +2455,8 @@ class AIBookingService {
             
             // Lấy ngày hôm nay trong VN timezone (YYYY-MM-DD)
             // Sử dụng Intl.DateTimeFormat để lấy date string chính xác trong VN timezone
-            const todayVNFormatter = new Intl.DateTimeFormat('en-CA', {
-              timeZone: 'Asia/Ho_Chi_Minh',
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit'
-            });
-            const todayDateStr = todayVNFormatter.format(now); // Format: YYYY-MM-DD
+            // ⭐ Sử dụng DateHelper để lấy ngày hôm nay theo VN timezone
+            const todayDateStr = DateHelper.getTodayVN(); // Format: YYYY-MM-DD
             
             // normalizedDate đã là string "YYYY-MM-DD" (từ input)
             const appointmentDateStr = normalizedDate; // YYYY-MM-DD
@@ -2477,7 +2464,7 @@ class AIBookingService {
             // Check nếu date là quá khứ (ngày < hôm nay)
             if (appointmentDateStr < todayDateStr) {
               const dateVN = appointmentDate.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
-              const todayVNFormatted = now.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
+              const todayVNFormatted = new Date().toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
               return { error: `Không thể đặt lịch trong quá khứ. Ngày bạn chọn là ${dateVN}, nhưng hôm nay là ${todayVNFormatted}. Vui lòng chọn ngày trong tương lai.` };
             }
             
@@ -2774,71 +2761,10 @@ class AIBookingService {
       const filteredHistory = this.filterConversationHistory(conversationHistory);
       
       // ⭐ Prepare date context - SỬ DỤNG TIMEZONE VIỆT NAM (UTC+7)
-      // Lấy thời gian hiện tại theo VN timezone
-      const now = new Date();
-      
-      // Format date theo VN timezone (Asia/Ho_Chi_Minh)
-      const dateFormatter = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      });
-      
-      // Lấy thông tin ngày hiện tại trong VN timezone
-      const partsFormatter = new Intl.DateTimeFormat('en', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      });
-      
-      // Lấy ngày hôm nay theo VN timezone (YYYY-MM-DD)
-      const todayStr = dateFormatter.format(now);
-      
-      // ⭐ Tính ngày mai: Parse todayStr và tính toán trực tiếp với số nguyên (tránh timezone issues)
-      const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
-      
-      // Tính ngày mai: thêm 1 ngày (xử lý chuyển tháng/năm)
-      let tomorrowYear = todayYear;
-      let tomorrowMonth = todayMonth;
-      let tomorrowDay = todayDay + 1;
-      
-      // Kiểm tra số ngày trong tháng hiện tại (month là 1-12, nên cần -1 khi dùng với Date)
-      const daysInMonth = new Date(todayYear, todayMonth - 1, 0).getDate();
-      if (tomorrowDay > daysInMonth) {
-        tomorrowDay = 1;
-        tomorrowMonth++;
-        if (tomorrowMonth > 12) {
-          tomorrowMonth = 1;
-          tomorrowYear++;
-        }
-      }
-      
-      // Format ngày mai (YYYY-MM-DD) - không cần dùng Date object, chỉ cần format string
-      const tomorrowStr = `${tomorrowYear}-${String(tomorrowMonth).padStart(2, '0')}-${String(tomorrowDay).padStart(2, '0')}`;
-      
-      // ⭐ Tính ngày kia: thêm 2 ngày từ hôm nay
-      let dayAfterTomorrowYear = todayYear;
-      let dayAfterTomorrowMonth = todayMonth;
-      let dayAfterTomorrowDay = todayDay + 2;
-      
-      // Xử lý chuyển tháng/năm
-      while (true) {
-        const daysInCurrentMonth = new Date(dayAfterTomorrowYear, dayAfterTomorrowMonth - 1, 0).getDate();
-        if (dayAfterTomorrowDay <= daysInCurrentMonth) {
-          break;
-        }
-        dayAfterTomorrowDay -= daysInCurrentMonth;
-        dayAfterTomorrowMonth++;
-        if (dayAfterTomorrowMonth > 12) {
-          dayAfterTomorrowMonth = 1;
-          dayAfterTomorrowYear++;
-        }
-      }
-      
-      // Format ngày kia (YYYY-MM-DD)
-      const dayAfterTomorrowStr = `${dayAfterTomorrowYear}-${String(dayAfterTomorrowMonth).padStart(2, '0')}-${String(dayAfterTomorrowDay).padStart(2, '0')}`;
+      // Sử dụng DateHelper để lấy ngày chính xác theo VN timezone
+      const todayStr = DateHelper.getTodayVN();
+      const tomorrowStr = DateHelper.getTomorrowVN();
+      const dayAfterTomorrowStr = DateHelper.getDayAfterTomorrowVN();
       
       console.log(`📅 [AI Booking] Date context (VN timezone): TODAY=${todayStr}, TOMORROW=${tomorrowStr}, DAY_AFTER_TOMORROW=${dayAfterTomorrowStr}`);
       
