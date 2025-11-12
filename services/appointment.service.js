@@ -10,6 +10,20 @@ const { calculateServicePrice } = require('../utils/promotionHelper');
 const emailService = require('./email.service');
 const notificationService = require('../services/notification.service');
 const leaveRequestService = require('./leaveRequest.service');
+const MedicalRecord = require('../models/medicalRecord.model');
+const PdfPrinter = require('pdfmake')
+const path = require('path')
+
+const fonts = {
+  Roboto: {
+    normal: path.join(__dirname, '../fonts/Roboto-Regular.ttf'),   
+    bold: path.join(__dirname, '../fonts/Roboto-Bold.ttf'),         
+    italics: path.join(__dirname, '../fonts/Roboto-Italic.ttf'),
+    bolditalics: path.join(__dirname, '../fonts/Roboto-BoldItalic.ttf')
+  }
+};
+
+const printer = new PdfPrinter(fonts)
 
 class AppointmentService {
 
@@ -1650,7 +1664,294 @@ async cancelChangeDoctor(appointmentId) {
     throw error;     
     }
   }
-  
+
+
+ async getVisitTicketPDF(appointmentId, res) {
+    try {
+
+      const appointment = await Appointment
+        .findById(appointmentId)
+        .populate('doctorUserId', 'fullName')
+        .populate('patientUserId', 'fullName dob gender')
+        .populate('serviceId', 'serviceName price')
+        .populate('customerId', 'fullName phone');
+
+      if (!appointment) throw new Error('Không tìm thấy ca khám');
+      if (appointment.status !== 'Completed') throw new Error('Ca khám chưa hoàn thành');
+
+      const record = await MedicalRecord
+        .findOne({ appointmentId })
+        .populate('nurseId', 'fullName')
+        .populate('additionalServiceIds', 'name price');
+
+      if (!record) throw new Error('Chưa có hồ sơ khám');
+
+      // PDF layout
+const docDefinition = {
+  pageSize: 'A5',
+  pageOrientation: 'portrait',
+  pageMargins: [25, 40, 25, 50],
+  defaultStyle: {
+    font: 'Roboto',
+    fontSize: 10,
+    lineHeight: 1.3
+  },
+
+  // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
+  header: {
+    margin: [25, 15, 25, 0],
+    columns: [
+      {
+        text: 'NHA KHOA HẢI ANH',
+        style: 'clinicName',
+        alignment: 'left'
+      },
+      {
+        text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+        fontSize: 8,
+        alignment: 'right',
+        color: '#555'
+      }
+    ]
+  },
+
+  content: [
+    // === TIÊU ĐỀ ===
+    {
+      text: 'PHIẾU KHÁM BỆNH',
+      style: 'header',
+      alignment: 'center',
+      margin: [0, 10, 0, 12]
+    },
+
+    // === MÃ + NGÀY ===
+    {
+      columns: [
+        { text: `Mã phiếu: ${appointment._id}`, width: '60%' },
+        { text: `Ngày: ${new Date(appointment.updatedAt).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'right' }
+      ],
+      fontSize: 9,
+      color: '#555',
+      margin: [0, 0, 0, 12]
+    },
+
+    // === THÔNG TIN BỆNH NHÂN ===
+    { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
+    {
+      style: 'infoTable',
+      table: {
+        widths: ['30%', '70%'],
+        body: [
+          ['Họ tên', appointment.patientUserId.fullName || '—'],
+          ['Giới tính', appointment.patientUserId.gender === 'Male' ? 'Nam' : 'Nữ'],
+          ['Tuổi', record.patientAge ? `${record.patientAge} tuổi` : '—'],
+          ['Địa chỉ', record.address || '—']
+        ]
+      },
+      layout: 'lightHorizontalLines'
+    },
+
+    '\n',
+
+    // === BẢNG DỊCH VỤ + GIÁ ===
+    {
+      table: {
+        headerRows: 1,
+        widths: ['8%', '35%', '25%', '15%', '17%'],
+        body: [
+          [
+            { text: 'STT', style: 'tableHeader' },
+            { text: 'Dịch vụ', style: 'tableHeader' },
+            { text: 'Bác sĩ', style: 'tableHeader' },
+            { text: 'Đơn giá', style: 'tableHeader', alignment: 'right' },
+            { text: 'Thành tiền', style: 'tableHeader', alignment: 'right' }
+          ],
+          [
+            '1',
+            appointment.serviceId?.serviceName || '—',
+            appointment.doctorUserId?.fullName?.split(' ').pop() || '—',
+            { text: formatPrice(appointment.serviceId?.price || 0), alignment: 'right' },
+            { text: formatPrice(appointment.serviceId?.price || 0), alignment: 'right' }
+          ]
+        ]
+      },
+      layout: {
+        hLineWidth: () => 0.5,
+        vLineWidth: () => 0.5,
+        hLineColor: () => '#aaa',
+        vLineColor: () => '#aaa'
+      }
+    },
+
+    // === TỔNG TIỀN ===
+    {
+      columns: [
+        {},
+        {
+          width: '50%',
+          table: {
+            widths: ['60%', '40%'],
+            body: [
+              [{ text: 'Tổng tiền:', bold: true }, { text: formatPrice(appointment.serviceId?.price || 0), alignment: 'right', bold: true }]
+            ]
+          },
+          layout: 'noBorders',
+          margin: [0, 8, 0, 0]
+        }
+      ]
+    },
+
+    '\n',
+
+    // === KẾT LUẬN ===
+    { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
+    { text: record.diagnosis || '—', margin: [0, 0, 0, 10] },
+
+    // === TOA THUỐC ===
+    { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
+    record.prescription?.medicine ? [
+      { text: `• Thuốc: ${record.prescription.medicine}` },
+      { text: `  Liều: ${record.prescription.dosage || '—'}` },
+      { text: `  Thời gian: ${record.prescription.duration || '—'}`, margin: [0, 0, 0, 10] }
+    ] : { text: 'Không có toa thuốc', italics: true, color: '#888', margin: [0, 0, 0, 10] },
+
+    // === CH...
+    {
+      columns: [
+        {
+          width: '40%',
+          stack: [
+            { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+            { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+            '\n\n\n',
+            // { text: appointment.patientUserId.fullName, alignment: 'center', bold: true }
+          ]
+        },
+        {
+          width: '75%',
+          stack: [
+            { text: 'BÁC SĨ', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+            { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+            '\n\n\n',
+            // { text: appointment.doctorUserId?.fullName || '—', alignment: 'center', bold: true }
+          ]
+        }
+      ]
+    }
+  ],
+
+  styles: {
+    clinicName: {
+      fontSize: 13,
+      bold: true,
+      color: '#d32f2f'
+    },
+    header: { fontSize: 18, bold: true, color: '#1a5eaa' },
+    subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
+    tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
+  }
+};
+
+function formatPrice(price) {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
+}
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename=visit-ticket.pdf');
+
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+
+    } catch (error) {
+      console.error('❌ Lỗi PDF:', error);
+      res.status(400).json({ message: error.message });
+    }
+  }
+
+
+  async managerDashboard(startDate, endDate) {
+    try { 
+      // Auto filter 7 ngày gần nhất
+      let start, end;
+      if (!startDate || !endDate) {
+        end = new Date();
+        start = new Date();
+        start.setDate(end.getDate() - 7);
+      } else {
+        start = new Date(startDate);
+        end = new Date(endDate);
+      }
+
+      const filter = {
+        createdAt: { $gte: start, $lte: end }
+      };
+
+      // Thống kê các lịch khám
+      const totalAppointments = await Appointment.countDocuments(filter);
+      const completedAppointments = await Appointment.countDocuments({
+        ...filter,
+        status: "Completed"
+      });
+      const cancelledAppointments = await Appointment.countDocuments({
+        ...filter,
+        status: "Cancelled"
+      });
+
+      // Thống kê các doanh thu theo thể loại dịch vụ
+      const completedList = await Appointment.find({
+        ...filter,
+        status: "Completed"
+      }).populate("serviceId", "price category");
+
+      let revenueByCategory = {
+        Examination: 0,
+        Consultation: 0
+      };
+
+      completedList.forEach(a => {
+        if (a.serviceId?.category && a.serviceId?.price) {
+          revenueByCategory[a.serviceId.category] += a.serviceId.price;
+        }
+      });
+
+      const totalRevenue =
+        revenueByCategory.Examination + revenueByCategory.Consultation;
+
+      // Thống kê bệnh nhân
+      const totalPatients = await User.countDocuments({ role: "Patient" });
+      const newPatients = await User.countDocuments({
+        role: "Patient",
+        createdAt: filter.createdAt
+      });
+
+      const otherAppointment = totalAppointments - completedAppointments - cancelledAppointments;
+
+      return {
+        filterRange: {
+          startDate: start,
+          endDate: end
+        },
+        appointments: {
+          total: totalAppointments,
+          completed: completedAppointments,
+          cancelled: cancelledAppointments,
+          other : otherAppointment
+        },
+        revenue: {
+          ...revenueByCategory,
+          total: totalRevenue
+        },
+        patients: {
+          total: totalPatients,
+          newPatients
+        }
+      };
+    } catch (error) {
+      console.error("❌ Lỗi dashboard:", error);
+      throw new Error(error.message);
+    }
+  }
 
 }
 

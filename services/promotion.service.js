@@ -148,68 +148,80 @@ class PromotionService {
    * Lấy danh sách promotions
    */
   async getAllPromotions(filters = {}) {
-    const {
-      search,
-      startDate,
-      endDate,
-      discountType,
-      status,
-      sort = 'desc',
-      page = 1,
-      limit = 10
-    } = filters;
+      const {
+    search,
+    status,
+    sort = 'desc',
+    page = 1,
+    limit = 10
+  } = filters;
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
-    const skip = (pageNum - 1) * limitNum;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+  const skip = (pageNum - 1) * limitNum;
 
-    const filter = {};
-    if (discountType) filter.discountType = discountType;
-    if (status) filter.status = status;
+  const filter = {};
+  if (status) filter.status = status;
 
-    if (search && String(search).trim().length > 0) {
-      const searchKey = String(search).trim();
-      const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(safe, 'i');
-      filter.$or = [
-        { title: { $regex: regex } },
-        { description: { $regex: regex } }
-      ];
+  if (search && String(search).trim().length > 0) {
+    const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(safe, 'i');
+    filter.$or = [{ title: regex }, { description: regex }];
+  }
+
+  const sortOrder = sort.toLowerCase() === 'asc' ? 1 : -1;
+
+  // 🧠 Lấy danh sách promotion
+  const [total, promotions] = await Promise.all([
+    Promotion.countDocuments(filter),
+    Promotion.find(filter)
+      .sort({ startDate: sortOrder })
+      .skip(skip)
+      .limit(limitNum)
+      .lean()
+  ]);
+
+  // ⚙️ Lấy danh sách service cho từng promotion (nếu applyToAll = false)
+  const promotionIds = promotions.map(p => p._id);
+  const promoServices = await PromotionServiceModel.find({
+    promotionId: { $in: promotionIds }
+  })
+    .populate('serviceId', 'serviceName price category status')
+    .lean();
+
+  // Gom các service theo promotionId
+  const promoServiceMap = {};
+  for (const ps of promoServices) {
+    const pid = ps.promotionId.toString();
+    if (!promoServiceMap[pid]) promoServiceMap[pid] = [];
+    promoServiceMap[pid].push(ps.serviceId);
+  }
+
+  // 🧾 Format lại kết quả cuối
+  const formattedPromotions = promotions.map(promo => {
+    const promoId = promo._id.toString();
+    if (promo.applyToAll) {
+      return {
+        ...promo,
+        applyNote: 'Áp dụng cho toàn bộ dịch vụ hệ thống',
+        services: []
+      };
+    } else {
+      return {
+        ...promo,
+        applyNote: 'Áp dụng cho các dịch vụ cụ thể',
+        services: promoServiceMap[promoId] || []
+      };
     }
+  });
 
-    if (startDate || endDate) {
-      filter.startDate = {};
-      if (startDate) {
-        const start = new Date(startDate);
-        if (!isNaN(start)) filter.startDate.$gte = start;
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        if (!isNaN(end)) filter.startDate.$lte = end;
-      }
-    }
-
-    const sortOrder = sort.toLowerCase() === 'asc' ? 1 : -1;
-
-    const [total, promotions] = await Promise.all([
-      Promotion.countDocuments(filter),
-      Promotion.find(filter)
-        .select('-__v')
-        .sort({ startDate: sortOrder })
-        .skip(skip)
-        .limit(limitNum)
-        .lean()
-    ]);
-
-    const totalPages = Math.max(1, Math.ceil(total / limitNum));
-
-    return {
-      total,
-      totalPages,
-      page: pageNum,
-      limit: limitNum,
-      data: promotions
-    };
+  return {
+    total,
+    totalPages: Math.max(1, Math.ceil(total / limitNum)),
+    page: pageNum,
+    limit: limitNum,
+    data: formattedPromotions
+  };
   }
 
   /**

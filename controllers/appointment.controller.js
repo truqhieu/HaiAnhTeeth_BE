@@ -1515,6 +1515,39 @@ const cancelChangeDoctor = async(req,res) =>{
   }
 }
 
+  const getVisitTicket = async(req,res) =>{
+      try {
+          const {appointmentId} = req.params
+          await appointmentService.getVisitTicketPDF(appointmentId,res);
+      } catch (error) {
+      console.error('❌ getVisitTicket error:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Lỗi máy chủ',
+        error: error.message
+      });
+      }
+  }
+
+  const managerDashboard = async(req,res) =>{
+    try {
+      const {startDate, endDate} = req.query
+      const result = await appointmentService.managerDashboard(startDate, endDate);
+      return res.status(200).json({
+      success: true,
+      message: 'Doanh thu',
+      result
+    }); 
+    } catch (error) {
+    console.error('❌ Error in managerDashboard:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });           
+    }
+  }
+
 
 module.exports = {
   createConsultationAppointment,
@@ -1535,4 +1568,6 @@ module.exports = {
   assignDoctorToAppointment,
   confirmChangeDoctor,
   cancelChangeDoctor,
+  getVisitTicket,
+  managerDashboard
 };

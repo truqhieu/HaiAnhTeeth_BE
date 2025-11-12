@@ -18,7 +18,9 @@ const {
   getAllDoctors,
   assignDoctorToAppointment,
   confirmChangeDoctor,
-  cancelChangeDoctor
+  cancelChangeDoctor,
+  getVisitTicket,
+  managerDashboard
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -91,5 +93,11 @@ router.post('/:appointmentId/confirm-change-doctor', verifyToken, verifyRole('Pa
 
 // ⭐ Từ chối đổi bác sĩ mới thay thế bác sĩ cũ
 router.post('/:appointmentId/cancel-change-doctor', verifyToken, verifyRole('Patient'), cancelChangeDoctor);
+
+// ⭐ Lấy phiếu khám bệnh
+router.get('/:appointmentId/visit-ticket/pdf', verifyToken, verifyRole('Staff'), getVisitTicket);
+
+// ⭐ Lấy doanh thu
+router.get('/dashboard', verifyToken, verifyRole('Manager'), managerDashboard);
 
 module.exports = router;
