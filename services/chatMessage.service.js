@@ -2,7 +2,7 @@
 const ChatMessage = require('../models/chatMessage.model');
 const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
-const Doctor = require('../models/doctor.model');
+const MedicalRecord = require('../models/medicalRecord.model');
 
 class ChatMessageService {
   // Lấy danh sách bác sĩ đã từng khám cho patient (appointments có status Completed hoặc Finalized)
@@ -75,14 +75,9 @@ class ChatMessageService {
         throw new Error('Chỉ có thể chat với bác sĩ sau khi ca khám hoàn thành');
       }
 
-      // Kiểm tra sender là patient và receiver là doctor của appointment
-      if (appointment.patientUserId.toString() !== senderId.toString()) {
-        throw new Error('Bệnh nhân không có quyền chat với ca khám này');
-      }
-
       // Tìm doctor từ appointment
-      const doctor = await Doctor.findById(appointment.doctorUserId);
-      if (!doctor || doctor.doctorUserId.toString() !== receiverId.toString()) {
+      const doctor = await User.findById(appointment.doctorUserId);
+      if (!doctor) {
         throw new Error('Bác sĩ không thuộc ca khám này');
       }
 
@@ -197,56 +192,138 @@ const message = new ChatMessage({
   }
 
   // Lấy tất cả tin nhắn theo appointmentId
-  async getMessagesByAppointment(appointmentId, userId, role) {
-    try {
-      // Validate user có quyền xem messages của appointment này
-      const appointment = await Appointment.findById(appointmentId);
-      if (!appointment) {
-        throw new Error('Không tìm thấy ca khám');
-      }
-
-      // Kiểm tra quyền truy cập
-     if (role === 'Patient') {
-  if (appointment.patientUserId.toString() !== userId.toString()) {
-    throw new Error('Bạn không có quyền xem tin nhắn này');
-  }
-} else if (role === 'Doctor') {
-  const doctorId = appointment.replacedDoctorUserId || appointment.doctorUserId;
-  if (!doctorId || doctorId.toString() !== userId.toString()) {
-    throw new Error('Bạn không có quyền xem tin nhắn này');
-  }
-} else {
-  throw new Error('Role không hợp lệ');
-}
-
-      // Lấy tất cả messages
-      const messages = await ChatMessage.find({ appointmentId })
-        .populate('senderId', 'fullName email role')
-        .populate('receiverId', 'fullName email role')
-        .populate('appointmentId', 'appointmentDate status')
-        .sort({ createdAt: 1 }) // Sắp xếp theo thời gian tăng dần
-        .lean();
-
-      // Đánh dấu messages là đã đọc nếu receiver là current user
-      if (role === 'Doctor') {
-        await ChatMessage.updateMany(
-          {
-            appointmentId,
-            receiverId: userId,
-            read: false
-          },
-          {
-            read: true
-          }
-        );
-      }
-
-      return messages;
-    } catch (error) {
-      console.error('Error in getMessagesByAppointment:', error);
-      throw error;
+ async getMessagesByAppointment(appointmentId, userId, role) {
+  try {
+    // Validate user có quyền xem messages của appointment này
+    const appointment = await Appointment.findById(appointmentId)
+      .populate('patientUserId', 'fullName email phone')
+      .populate('doctorUserId', 'fullName email specialization');
+    
+    if (!appointment) {
+      throw new Error('Không tìm thấy ca khám');
     }
+
+    // Kiểm tra quyền truy cập
+    if (role === 'Patient') {
+      if (appointment.patientUserId._id.toString() !== userId.toString()) {
+        throw new Error('Bạn không có quyền xem tin nhắn này');
+      }
+    } else if (role === 'Doctor') {
+      const doctorId = appointment.replacedDoctorUserId || appointment.doctorUserId._id;
+      if (!doctorId || doctorId.toString() !== userId.toString()) {
+        throw new Error('Bạn không có quyền xem tin nhắn này');
+      }
+    } else {
+      throw new Error('Vai trò không hợp lệ');
+    }
+
+    // Lấy tất cả messages
+    const messages = await ChatMessage.find({ appointmentId })
+      .populate('senderId', 'fullName email role')
+      .populate('receiverId', 'fullName email role')
+      .populate('appointmentId', 'appointmentDate status')
+      .sort({ createdAt: 1 })
+      .lean();
+
+    // Lấy medical record
+    const medicalRecord = await MedicalRecord.findOne({ 
+      appointmentId: appointmentId 
+    }).lean();
+
+    // Format medical record
+    let formattedMedicalRecord = null;
+    if (medicalRecord) {
+      formattedMedicalRecord = {
+        _id: medicalRecord._id,
+        appointmentId: medicalRecord.appointmentId,
+        
+        // Thông tin bệnh nhân
+        patient: {
+          _id: appointment.patientUserId._id,
+          fullName: appointment.patientUserId.fullName,
+          email: appointment.patientUserId.email,
+          phone: appointment.patientUserId.phone,
+          age: medicalRecord.patientAge,
+          address: medicalRecord.address
+        },
+        
+        // Thông tin bác sĩ
+        doctor: {
+          _id: appointment.doctorUserId._id || medicalRecord.doctorUserId,
+          fullName: appointment.doctorUserId.fullName,
+          email: appointment.doctorUserId.email,
+          specialization: appointment.doctorUserId.specialization
+        },
+        
+        // Thông tin ca khám
+        appointment: {
+          date: appointment.appointmentDate,
+          status: appointment.status
+        },
+        
+        // Thông tin y tế
+        medicalInfo: {
+          symptoms: medicalRecord.symptoms || 'Không có',
+          diagnosis: medicalRecord.diagnosis || 'Chưa có chẩn đoán',
+          conclusion: medicalRecord.conclusion || 'Không có',
+          nurseNote: medicalRecord.nurseNote || 'Không có ghi chú',
+        },
+        
+        // Đơn thuốc
+        prescription: {
+          medicine: medicalRecord.prescription?.medicine || 'Không có',
+          dosage: medicalRecord.prescription?.dosage || 'Không có',
+          duration: medicalRecord.prescription?.duration || 'Không có'
+        },
+        
+        // Dịch vụ bổ sung
+        additionalServices: medicalRecord.additionalServiceIds || [],
+        
+        // Theo dõi sau
+        followUp: {
+          date: medicalRecord.followUpDate || null,
+          appointmentId: medicalRecord.followUpAppointmentId || null
+        },
+        
+        // Thông tin hệ thống
+        status: medicalRecord.status,
+        createdAt: medicalRecord.createdAt,
+        updatedAt: medicalRecord.updatedAt
+      };
+    }
+
+    // Đánh dấu messages là đã đọc nếu receiver là current user
+    if (role === 'Doctor') {
+      await ChatMessage.updateMany(
+        {
+          appointmentId,
+          receiverId: userId,
+          read: false
+        },
+        {
+          read: true
+        }
+      );
+    }
+
+    return {
+      success: true,
+      data: {
+        medicalRecord: formattedMedicalRecord,
+        messages: messages,
+        appointment: {
+          _id: appointment._id,
+          appointmentDate: appointment.appointmentDate,
+          status: appointment.status
+        }
+      },
+      message: 'Lấy tin nhắn thành công'
+    };
+  } catch (error) {
+    console.error('Error in getMessagesByAppointment:', error);
+    throw error;
   }
+}
 }
 
 module.exports = new ChatMessageService();
