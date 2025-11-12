@@ -75,15 +75,25 @@ class ChatMessageService {
         throw new Error('Chỉ có thể chat với bác sĩ sau khi ca khám hoàn thành');
       }
 
-      // Kiểm tra sender là patient và receiver là doctor của appointment
-      if (appointment.patientUserId.toString() !== senderId.toString()) {
-        throw new Error('Bệnh nhân không có quyền chat với ca khám này');
-      }
+      // Lấy thông tin doctor và patient của appointment
+      const actualDoctorUserId = appointment.replacedDoctorUserId || appointment.doctorUserId;
+      const patientUserId = appointment.patientUserId;
 
-      // Tìm doctor từ appointment
-      const doctor = await Doctor.findById(appointment.doctorUserId);
-      if (!doctor || doctor.doctorUserId.toString() !== receiverId.toString()) {
-        throw new Error('Bác sĩ không thuộc ca khám này');
+      // Validate: người gửi và người nhận phải là patient và doctor của appointment này
+      const isPatientSender = patientUserId.toString() === senderId.toString();
+      const isDoctorSender = actualDoctorUserId.toString() === senderId.toString();
+      const isPatientReceiver = patientUserId.toString() === receiverId.toString();
+      const isDoctorReceiver = actualDoctorUserId.toString() === receiverId.toString();
+
+      // Trường hợp hợp lệ:
+      // 1. Patient gửi cho Doctor
+      // 2. Doctor gửi cho Patient
+      const isValidChat = 
+        (isPatientSender && isDoctorReceiver) || 
+        (isDoctorSender && isPatientReceiver);
+
+      if (!isValidChat) {
+        throw new Error('Bạn không có quyền chat trong ca khám này. Chỉ bệnh nhân và bác sĩ của ca khám mới có thể chat với nhau.');
       }
 
       // Tạo message
@@ -119,10 +129,14 @@ const message = new ChatMessage({
       let conversations = [];
 
       if (role === 'Patient') {
-        // Lấy tất cả conversations của patient, group theo appointment và doctor
+        // Lấy TẤT CẢ tin nhắn mà patient tham gia (cả gửi và nhận)
         const messages = await ChatMessage.find({
-          senderId: userId
+          $or: [
+            { senderId: userId },
+            { receiverId: userId }
+          ]
         })
+          .populate('senderId', 'fullName email')
           .populate('receiverId', 'fullName email')
           .populate('appointmentId', 'appointmentDate status')
           .sort({ createdAt: -1 })
@@ -133,28 +147,44 @@ const message = new ChatMessage({
         messages.forEach(msg => {
           const appointmentId = msg.appointmentId._id.toString();
           if (!conversationMap.has(appointmentId)) {
+            // Xác định doctor (người còn lại không phải patient)
+            const doctor = msg.senderId._id.toString() === userId.toString() 
+              ? msg.receiverId 
+              : msg.senderId;
+
+            // Đếm unread messages (tin nhắn patient nhận được chưa đọc)
+            const unreadCount = messages.filter(m => 
+              m.appointmentId._id.toString() === appointmentId && 
+              !m.read && 
+              m.receiverId._id.toString() === userId.toString()
+            ).length;
+
             conversationMap.set(appointmentId, {
               appointmentId: msg.appointmentId._id,
               appointmentDate: msg.appointmentId.appointmentDate,
               status: msg.appointmentId.status,
               doctor: {
-                _id: msg.receiverId._id,
-                fullName: msg.receiverId.fullName,
-                email: msg.receiverId.email
+                _id: doctor._id,
+                fullName: doctor.fullName,
+                email: doctor.email
               },
               lastMessage: msg,
-              unreadCount: 0 // Patient không có unread vì họ là người gửi
+              unreadCount
             });
           }
         });
 
         conversations = Array.from(conversationMap.values());
       } else if (role === 'Doctor') {
-        // Lấy tất cả conversations của doctor, group theo appointment và patient
+        // Lấy TẤT CẢ tin nhắn mà doctor tham gia (cả gửi và nhận)
         const messages = await ChatMessage.find({
-          receiverId: userId
+          $or: [
+            { senderId: userId },
+            { receiverId: userId }
+          ]
         })
           .populate('senderId', 'fullName email')
+          .populate('receiverId', 'fullName email')
           .populate('appointmentId', 'appointmentDate status')
           .sort({ createdAt: -1 })
           .lean();
@@ -164,7 +194,12 @@ const message = new ChatMessage({
         messages.forEach(msg => {
           const appointmentId = msg.appointmentId._id.toString();
           if (!conversationMap.has(appointmentId)) {
-            // Đếm unread messages
+            // Xác định patient (người còn lại không phải doctor)
+            const patient = msg.senderId._id.toString() === userId.toString() 
+              ? msg.receiverId 
+              : msg.senderId;
+
+            // Đếm unread messages (tin nhắn doctor nhận được chưa đọc)
             const unreadCount = messages.filter(m => 
               m.appointmentId._id.toString() === appointmentId && 
               !m.read && 
@@ -176,9 +211,9 @@ const message = new ChatMessage({
               appointmentDate: msg.appointmentId.appointmentDate,
               status: msg.appointmentId.status,
               patient: {
-                _id: msg.senderId._id,
-                fullName: msg.senderId.fullName,
-                email: msg.senderId.email
+                _id: patient._id,
+                fullName: patient.fullName,
+                email: patient.email
               },
               lastMessage: msg,
               unreadCount
@@ -227,19 +262,17 @@ const message = new ChatMessage({
         .sort({ createdAt: 1 }) // Sắp xếp theo thời gian tăng dần
         .lean();
 
-      // Đánh dấu messages là đã đọc nếu receiver là current user
-      if (role === 'Doctor') {
-        await ChatMessage.updateMany(
-          {
-            appointmentId,
-            receiverId: userId,
-            read: false
-          },
-          {
-            read: true
-          }
-        );
-      }
+      // Đánh dấu messages là đã đọc nếu receiver là current user (cả Doctor và Patient)
+      await ChatMessage.updateMany(
+        {
+          appointmentId,
+          receiverId: userId,
+          read: false
+        },
+        {
+          read: true
+        }
+      );
 
       return messages;
     } catch (error) {

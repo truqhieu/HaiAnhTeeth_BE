@@ -72,33 +72,18 @@ const sendMessage = async (req, res) => {
 
     // Gửi notification real-time cho receiver qua Socket.IO
     if (io) {
+      // message đã được populate bởi chatMessageService.createMessage
       // Nếu sender là Patient, gửi notification cho Doctor
       if (role === 'Patient') {
         io.to(`user_${receiverId}`).emit('new-message', {
-          message: {
-            _id: message._id,
-            senderId: message.senderId,
-            receiverId: message.receiverId,
-            appointmentId: message.appointmentId,
-            content: message.content,
-            read: message.read,
-            createdAt: message.createdAt
-          },
+          message: message, // Full populated message
           notification: `Bạn có tin nhắn mới từ bệnh nhân ${sender.fullName}`,
           senderName: sender.fullName
         });
       } else if (role === 'Doctor') {
         // Nếu sender là Doctor, gửi notification cho Patient
         io.to(`user_${receiverId}`).emit('new-message', {
-          message: {
-            _id: message._id,
-            senderId: message.senderId,
-            receiverId: message.receiverId,
-            appointmentId: message.appointmentId,
-            content: message.content,
-            read: message.read,
-            createdAt: message.createdAt
-          },
+          message: message, // Full populated message
           notification: `Bạn có tin nhắn mới từ bác sĩ ${sender.fullName}`,
           senderName: sender.fullName
         });
