@@ -553,277 +553,39 @@ const getRescheduleAvailableSlots = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Không tìm thấy lịch hẹn' });
     }
 
-    // Kiểm tra lịch làm việc của bác sĩ trong ngày đó
-    const DoctorSchedule = require('../models/doctorSchedule.model');
-    const serviceDuration = appointment.serviceId.durationMinutes || 30;
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
-    // Tìm lịch làm việc của bác sĩ trong ngày
-    const doctorSchedules = await DoctorSchedule.find({
+    const scheduleRangeResult = await availableSlotService.getDoctorScheduleRange({
       doctorUserId: appointment.doctorUserId._id,
+      serviceId: appointment.serviceId._id,
       date: searchDate,
-      status: 'Available'
-    }).sort({ startTime: 1 });
-
-    let workingHours;
-    let hasDoctorSchedule = false;
-
-    if (doctorSchedules.length === 0) {
-      // Nếu không có doctorSchedule, sử dụng workingHours mặc định
-      // Lấy workingHours từ bác sĩ hoặc sử dụng mặc định
-      const Doctor = require('../models/doctor.model');
-      const doctor = await Doctor.findOne({ userId: appointment.doctorUserId._id });
-      
-      if (doctor && doctor.workingHours) {
-        workingHours = doctor.workingHours;
-      } else {
-        // Sử dụng workingHours mặc định nếu không có
-        workingHours = {
-          morningStart: '08:00',
-          morningEnd: '12:00',
-          afternoonStart: '14:00',
-          afternoonEnd: '18:00'
-        };
-      }
-      
-      console.log('📅 No doctorSchedule found, using default workingHours:', workingHours);
-    } else {
-      // Sử dụng workingHours từ DoctorSchedule đầu tiên
-      workingHours = doctorSchedules[0].workingHours || {
-        morningStart: '08:00',
-        morningEnd: '12:00',
-        afternoonStart: '14:00',
-        afternoonEnd: '18:00'
-      };
-      hasDoctorSchedule = true;
-    }
-
-    // ⭐ THAY ĐỔI: Trả về thông tin khoảng thời gian khả dụng thay vì tạo slots cố định
-    // Người dùng có thể chọn bất kỳ thời gian nào trong khoảng này
-    
-    // Tạo thông tin ca sáng và chiều
-    const morningRange = {
-      start: workingHours.morningStart,
-      end: workingHours.morningEnd,
-      available: true
-    };
-    
-    const afternoonRange = {
-      start: workingHours.afternoonStart,
-      end: workingHours.afternoonEnd,
-      available: true
-    };
-    
-    console.log(`📅 Morning range: ${morningRange.start} - ${morningRange.end}`);
-    console.log(`📅 Afternoon range: ${afternoonRange.start} - ${afternoonRange.end}`);
-
-    // Lấy thông tin các timeslots đã được đặt để kiểm tra conflict
-    const Timeslot = require('../models/timeslot.model');
-    
-    // Tạo date range chính xác cho ngày được chọn
-    const startOfDay = new Date(searchDate);
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(searchDate);
-    endOfDay.setUTCHours(23, 59, 59, 999);
-    
-    const existingTimeslots = await Timeslot.find({
-      doctorUserId: appointment.doctorUserId._id,
-      startTime: { 
-        $gte: startOfDay,
-        $lt: endOfDay
-      },
-      status: { $in: ['Reserved', 'Booked'] }
+      patientUserId: appointment.patientUserId || null,
+      appointmentFor: appointment.appointmentFor || 'self'
     });
 
-    console.log(`🔴 Found ${existingTimeslots.length} existing timeslots for this doctor on ${date}`);
+    const scheduleRanges = scheduleRangeResult?.scheduleRanges || [];
+    const flattenedGaps = scheduleRanges.flatMap(range => range.availableGaps || []);
 
-    const bookedSlots = existingTimeslots.map(ts => ({
-      start: new Date(ts.startTime),
-      end: new Date(ts.endTime)
-    }));
-
-    // Debug: Log booked slots
-    bookedSlots.forEach((booked, index) => {
-      const vnStart = new Date(booked.start.getTime() + 7 * 60 * 60 * 1000);
-      const vnEnd = new Date(booked.end.getTime() + 7 * 60 * 60 * 1000);
-      console.log(`   Booked ${index + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
-    });
-
-    // Lấy thời gian dịch vụ
-    const appointmentServiceDuration = appointment.serviceId.durationMinutes || 30;
-    
-    console.log(`⏱️ Service duration: ${appointmentServiceDuration} minutes`);
-
-    // Hàm kiểm tra xem có thể đặt lịch tại thời điểm startTime không
-    // KHÔNG cộng buffer time - cho phép đặt liên tiếp
-    const canBookAtTime = (startTimeStr) => {
-      const [startHour, startMinute] = startTimeStr.split(':').map(Number);
-      const startDate = new Date(searchDate);
-      startDate.setUTCHours(startHour, startMinute, 0, 0);
-      
-      const endDate = new Date(startDate.getTime() + appointmentServiceDuration * 60000);
-      
-      // Kiểm tra xem có conflict với lịch đã có không (KHÔNG cộng buffer time)
-      const hasConflict = bookedSlots.some(booked => {
-        const bookedStart = new Date(booked.start);
-        const bookedEnd = new Date(booked.end);
-        
-        // Conflict nếu: startDate < bookedEnd && endDate > bookedStart (không cộng buffer time)
-        return startDate < bookedEnd && endDate > bookedStart;
-      });
-      
-      return !hasConflict;
+    const responseData = {
+      date,
+      serviceName: appointment.serviceId.serviceName,
+      serviceDuration: appointment.serviceId.durationMinutes,
+      doctorName: appointment.doctorUserId.fullName,
+      doctorScheduleId: scheduleRangeResult?.doctorScheduleId || null,
+      scheduleRanges,
+      availableGaps: flattenedGaps,
+      hasDoctorSchedule: !!(scheduleRanges && scheduleRanges.length > 0),
+      message:
+        scheduleRangeResult?.message ||
+        (scheduleRanges.length > 0
+          ? 'Bạn có thể chọn bất kỳ thời gian nào trong các khoảng khả dụng bên dưới.'
+          : 'Bác sĩ không có thời gian phù hợp trong ngày này. Vui lòng chọn ngày khác.'),
     };
-
-    // ⭐ SỬA LỖI: Logic điều chỉnh thời gian dựa trên lịch đã đặt
-    const adjustTimeRange = (range) => {
-      // Nếu không có lịch đặt, giữ nguyên thời gian mặc định
-      if (bookedSlots.length === 0) {
-        return {
-          start: range.start,
-          end: range.end,
-          available: true
-        };
-      }
-      
-      // Tính điểm bắt đầu khả dụng sơ bộ = max(range.start, max(endBooked) trong range) - KHÔNG cộng buffer
-      const [startHour, startMinute] = range.start.split(':').map(Number);
-      const [endHour, endMinute] = range.end.split(':').map(Number);
-
-      const toMinutes = (h, m) => h * 60 + m;
-      const fromMinutes = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
-
-      const rangeStartMins = toMinutes(startHour, startMinute);
-      const rangeEndMins = toMinutes(endHour, endMinute);
-
-      // Lấy phút của các booked end trong ca này (KHÔNG cộng buffer - cho phép đặt liên tiếp)
-      let earliestCandidateMins = rangeStartMins;
-      bookedSlots.forEach(b => {
-        const endDate = new Date(b.end); // b.end không cộng buffer
-        // Chuyển sang giờ Việt Nam (UTC+7) để so sánh với workingHours (định nghĩa theo VN time)
-        const endVN = new Date(endDate.getTime() + 7 * 60 * 60 * 1000);
-        const endH = endVN.getUTCHours();
-        const endM = endVN.getUTCMinutes();
-        const endMins = toMinutes(endH, endM);
-        // Nếu slot này nằm trước khi kết thúc ca và kéo dãn earliest
-        if (endMins > earliestCandidateMins && endMins <= rangeEndMins) {
-          earliestCandidateMins = endMins;
-        }
-      });
-
-      let adjustedStart = null;
-      let adjustedEnd = null;
-
-      // Quét từ earliestCandidateMins tới cuối ca để tìm phút đầu hợp lệ
-      for (let minuteTotal = earliestCandidateMins; minuteTotal <= rangeEndMins; minuteTotal++) {
-        const timeStr = fromMinutes(minuteTotal);
-        if (canBookAtTime(timeStr)) {
-          adjustedStart = timeStr;
-          break;
-        }
-      }
-      
-      // Tìm thời gian kết thúc khả dụng cuối cùng
-      for (let minuteTotal = rangeEndMins; minuteTotal >= rangeStartMins; minuteTotal--) {
-        const timeStr = fromMinutes(minuteTotal);
-        if (canBookAtTime(timeStr)) {
-          adjustedEnd = timeStr;
-          break;
-        }
-      }
-      
-      // Nếu không tìm thấy thời gian khả dụng nào, trả về range rỗng
-      if (!adjustedStart || !adjustedEnd) {
-        return {
-          start: range.start,
-          end: range.start,
-          available: false
-        };
-      }
-      
-      return {
-        start: adjustedStart,
-        end: adjustedEnd,
-        available: adjustedStart < adjustedEnd
-      };
-    };
-
-    // Điều chỉnh ca sáng và chiều
-    const adjustedMorningRange = adjustTimeRange(morningRange);
-    const adjustedAfternoonRange = adjustTimeRange(afternoonRange);
-    
-    console.log(`📅 Original morning: ${morningRange.start} - ${morningRange.end}`);
-    console.log(`📅 Adjusted morning: ${adjustedMorningRange.start} - ${adjustedMorningRange.end} (available: ${adjustedMorningRange.available})`);
-    console.log(`📅 Original afternoon: ${afternoonRange.start} - ${afternoonRange.end}`);
-    console.log(`📅 Adjusted afternoon: ${adjustedAfternoonRange.start} - ${adjustedAfternoonRange.end} (available: ${adjustedAfternoonRange.available})`);
-    
-    // Debug: Test một số thời điểm cụ thể
-    console.log(`🔍 Testing specific times:`);
-    console.log(`   - 08:00: ${canBookAtTime('08:00')}`);
-    console.log(`   - 08:30: ${canBookAtTime('08:30')}`);
-    console.log(`   - 08:40: ${canBookAtTime('08:40')}`);
-    console.log(`   - 09:10: ${canBookAtTime('09:10')}`);
-    console.log(`   - 09:20: ${canBookAtTime('09:20')}`);
-    console.log(`   - 09:30: ${canBookAtTime('09:30')}`);
-
-    // ⭐ THÊM: Kiểm tra thời gian hiện tại để điều chỉnh khoảng thời gian khả dụng
-    const now = new Date();
-    console.log(`⏰ Current time: ${now.toISOString()}`);
-    
-    // Nếu là hôm nay, điều chỉnh thời gian bắt đầu dựa trên thời gian hiện tại
-    const todayStr = new Date().toISOString().split('T')[0];
-    if (date === todayStr) {
-      const currentVNTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-      const currentHour = currentVNTime.getHours();
-      const currentMinute = currentVNTime.getMinutes();
-      const currentTimeStr = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
-      
-      console.log(`🕐 Current VN time: ${currentTimeStr}`);
-      
-      // Điều chỉnh ca sáng nếu cần
-      if (adjustedMorningRange.start < currentTimeStr && adjustedMorningRange.end > currentTimeStr) {
-        adjustedMorningRange.start = currentTimeStr;
-        console.log(`📅 Adjusted morning start to: ${adjustedMorningRange.start}`);
-      }
-      
-      // Điều chỉnh ca chiều nếu cần
-      if (adjustedAfternoonRange.start < currentTimeStr && adjustedAfternoonRange.end > currentTimeStr) {
-        adjustedAfternoonRange.start = currentTimeStr;
-        console.log(`📅 Adjusted afternoon start to: ${adjustedAfternoonRange.start}`);
-      }
-    }
-
-    // Cập nhật ranges với thông tin đã điều chỉnh
-    Object.assign(morningRange, adjustedMorningRange);
-    Object.assign(afternoonRange, adjustedAfternoonRange);
 
     return res.status(200).json({
       success: true,
-      data: {
-        date,
-        serviceName: appointment.serviceId.serviceName,
-        serviceDuration: appointment.serviceId.durationMinutes,
-        doctorName: appointment.doctorUserId.fullName,
-        // ⭐ THAY ĐỔI: Trả về thông tin khoảng thời gian thay vì slots cố định
-        morningRange: morningRange,
-        afternoonRange: afternoonRange,
-        bookedSlots: bookedSlots.map(slot => ({
-          start: slot.start.toISOString(),
-          end: slot.end.toISOString(),
-          // Convert to VN time for display
-          displayStart: new Date(slot.start.getTime() + 7 * 60 * 60 * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }),
-          displayEnd: new Date(slot.end.getTime() + 7 * 60 * 60 * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })
-        })),
-        hasDoctorSchedule: hasDoctorSchedule,
-        message: hasDoctorSchedule 
-          ? 'Bạn có thể chọn bất kỳ thời gian nào trong khoảng thời gian làm việc của bác sĩ'
-          : 'Bạn có thể chọn bất kỳ thời gian nào trong khoảng thời gian làm việc mặc định',
-        // Giữ lại để tương thích với frontend cũ
-        morningAvailable: morningRange,
-        afternoonAvailable: afternoonRange
-      },
+      data: responseData,
     });
   } catch (error) {
     console.error('❌ Error in getRescheduleAvailableSlots:', error);
@@ -1281,7 +1043,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       
       // Chuẩn bị ngày tìm kiếm (normalize về 00:00:00)
       const searchDate = new Date(startDateTime);
-      searchDate.setHours(0, 0, 0, 0);
+      searchDate.setUTCHours(0, 0, 0, 0);
       
       // ⭐ Đảm bảo bác sĩ có schedule cho ngày này (tạo nếu chưa có)
       let doctorSchedule = await DoctorSchedule.findOne({

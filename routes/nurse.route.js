@@ -1,7 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const { getNurseSchedule, getAppointmentDetail, getPatientDetail, getAllDoctors } = require('../controllers/nurse.controller');
-const { getOrCreateMedicalRecord, updateNurseNote } = require('../controllers/medicalRecord.controller');
+const {
+  getOrCreateMedicalRecord,
+  updateNurseNote,
+  updateMedicalRecordForNurse,
+  getActiveServicesForNurse,
+  updateAdditionalServicesForNurse,
+} = require('../controllers/medicalRecord.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
 // ⭐ Nurse xem danh sách lịch hẹn của tất cả bác sĩ (tuần hiện tại + tuần tiếp theo)
@@ -15,7 +21,10 @@ router.get('/patients/:patientId', verifyToken, verifyRole('Nurse'), getPatientD
 
 // ⭐ Medical Record (Nurse)
 router.get('/medical-records/:appointmentId', verifyToken, verifyRole('Nurse'), getOrCreateMedicalRecord);
+router.patch('/medical-records/:appointmentId', verifyToken, verifyRole('Nurse'), updateMedicalRecordForNurse);
 router.patch('/medical-records/:appointmentId/nurse-note', verifyToken, verifyRole('Nurse'), updateNurseNote);
+router.patch('/medical-records/:appointmentId/additional-services', verifyToken, verifyRole('Nurse'), updateAdditionalServicesForNurse);
+router.get('/services', verifyToken, verifyRole('Nurse'), getActiveServicesForNurse);
 
 // ⭐ Lấy danh sách tất cả bác sĩ (cho filter)
 router.get('/doctors', verifyToken, verifyRole('Nurse'), getAllDoctors);

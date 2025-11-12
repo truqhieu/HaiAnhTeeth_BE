@@ -60,7 +60,7 @@ class AvailableSlotService {
 
     // 4. Lấy DoctorSchedule của ngày đó
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     let schedules = await DoctorSchedule.find({
       doctorUserId,
@@ -107,10 +107,10 @@ class AvailableSlotService {
 
     // 5. Lấy tất cả appointments đã book của bác sĩ trong ngày đó
     const startOfDay = new Date(searchDate);
-    startOfDay.setHours(0, 0, 0, 0);
+    startOfDay.setUTCHours(0, 0, 0, 0);
     
     const endOfDay = new Date(searchDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    endOfDay.setUTCHours(23, 59, 59, 999);
 
     // ⭐ FIXED: Query appointments có timeslot rảnh trong ngày (không dùng createdAt)
     // ⭐ Loại trừ appointments của chính bệnh nhân này - cho phép họ đặt nhiều slots liên tiếp
@@ -399,7 +399,7 @@ class AvailableSlotService {
 
     // 4. Chuẩn bị ngày tìm kiếm
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     console.log('🔍 Search date:', searchDate.toISOString());
     console.log('📅 Searching for doctors with schedule on:', searchDate.toISOString().split('T')[0]);
@@ -663,7 +663,7 @@ class AvailableSlotService {
 
     // 4. Chuẩn bị ngày tìm kiếm
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     // ⭐ slotStartTime và slotEndTime đã được khai báo ở trên (dòng 375-376)
     // Không cần khai báo lại
@@ -897,7 +897,7 @@ class AvailableSlotService {
 
     // 3. Chuẩn bị ngày tìm kiếm
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     console.log('🔍 Search date:', searchDate.toISOString());
     console.log('📅 Searching for doctors with schedule on:', searchDate.toISOString().split('T')[0]);
@@ -1287,7 +1287,7 @@ class AvailableSlotService {
 
     // 3. Lấy doctor schedule (DoctorSchedule) của ngày đó
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     const schedules = await DoctorSchedule.find({
       doctorUserId,
@@ -1767,7 +1767,7 @@ class AvailableSlotService {
 
     // 5. Check xem doctor có bị booked trong khoảng thời gian này không
     const searchDate = new Date(date);
-    searchDate.setHours(0, 0, 0, 0);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     // ⭐ Loại trừ appointments của chính bệnh nhân này khi check conflict
     // Cho phép bệnh nhân đặt nhiều slots liên tiếp cho chính họ

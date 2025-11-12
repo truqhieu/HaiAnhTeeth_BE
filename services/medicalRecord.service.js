@@ -27,7 +27,7 @@ class MedicalRecordService {
   /**
    * Get or create medical record for appointment
    */
-  async getOrCreateMedicalRecord(appointmentId, nurseUserId) {
+  async getOrCreateMedicalRecord(appointmentId, currentUserId, currentUserRole = null) {
     if (!appointmentId) {
       throw new Error('Thiếu appointmentId');
     }
@@ -57,12 +57,19 @@ class MedicalRecordService {
         initialServiceIds.push(appointment.serviceId._id);
       }
 
+      const nurseOwnerId =
+        currentUserRole === 'Nurse'
+          ? currentUserId
+          : appointment.inProgressByUserId ||
+            appointment.checkInByUserId ||
+            currentUserId;
+
       record = await MedicalRecord.create({
         appointmentId: appointment._id,
         doctorUserId: appointment.doctorUserId,
         patientUserId: appointment.patientUserId || null,
         customerId: appointment.customerId || null,
-        nurseId: nurseUserId,
+        nurseId: nurseOwnerId,
         patientAge,
         address,
         additionalServiceIds: initialServiceIds, // Thêm dịch vụ chính
@@ -101,6 +108,25 @@ class MedicalRecordService {
     console.log('🔍 [getOrCreateMedicalRecord] Record additionalServiceIds:', record?.additionalServiceIds);
     console.log('🔍 [getOrCreateMedicalRecord] Mapped additionalServices:', additionalServices);
 
+    const appointmentStatus = appointment.status;
+    const recordStatus = record?.status || 'Draft';
+    const isAppointmentLocked = ['Completed', 'Finalized'].includes(appointmentStatus);
+    const isRecordFinalized = recordStatus === 'Finalized';
+
+    const nurseCanEdit = !isAppointmentLocked && !isRecordFinalized;
+    const doctorCanEdit = !isAppointmentLocked && !isRecordFinalized;
+
+    let nurseLockReason = null;
+    let doctorLockReason = null;
+
+    if (isAppointmentLocked) {
+      nurseLockReason = 'Ca khám đã hoàn thành, không thể chỉnh sửa hồ sơ.';
+      doctorLockReason = nurseLockReason;
+    } else if (isRecordFinalized) {
+      nurseLockReason = 'Hồ sơ đã được bác sĩ duyệt, điều dưỡng không thể chỉnh sửa.';
+      doctorLockReason = 'Hồ sơ đã được duyệt. Nếu cần chỉnh sửa, vui lòng liên hệ quản trị.';
+    }
+
     return {
       record,
       display: {
@@ -113,6 +139,18 @@ class MedicalRecordService {
         email,
         phoneNumber,
         gender
+      },
+      permissions: {
+        appointmentStatus,
+        recordStatus,
+        nurse: {
+          canEdit: nurseCanEdit,
+          reason: nurseLockReason
+        },
+        doctor: {
+          canEdit: doctorCanEdit,
+          reason: doctorLockReason
+        }
       }
     };
   }
@@ -120,18 +158,71 @@ class MedicalRecordService {
   /**
    * Update nurse note
    */
-  async updateNurseNote(appointmentId, nurseNote) {
+  async updateNurseNote(appointmentId, nurseNote, nurseUserId) {
+    return this.updateMedicalRecordForNurse(
+      appointmentId,
+      { nurseNote },
+      nurseUserId
+    );
+  }
+
+  /**
+   * Update medical record draft values by nurse (save only)
+   */
+  async updateMedicalRecordForNurse(appointmentId, updateData = {}, nurseUserId) {
     if (!appointmentId) {
       throw new Error('Thiếu appointmentId');
     }
+    if (!nurseUserId) {
+      throw new Error('Không xác định được điều dưỡng đang chỉnh sửa.');
+    }
 
-    const record = await MedicalRecord.findOneAndUpdate(
+    const appointment = await Appointment.findById(appointmentId).select('status');
+    if (!appointment) {
+      throw new Error('Không tìm thấy lịch hẹn');
+    }
+
+    if (['Completed', 'Finalized'].includes(appointment.status)) {
+      throw new Error('Ca khám đã hoàn thành, không thể chỉnh sửa hồ sơ.');
+    }
+
+    const record = await MedicalRecord.findOne({ appointmentId });
+    if (!record) {
+      throw new Error('Hồ sơ khám bệnh chưa được khởi tạo. Vui lòng tạo hồ sơ trước khi lưu.');
+    }
+
+    if (record.status === 'Finalized') {
+      throw new Error('Hồ sơ đã được bác sĩ duyệt, điều dưỡng không thể chỉnh sửa.');
+    }
+
+    const allowedFields = ['nurseNote', 'diagnosis', 'conclusion', 'patientAge', 'address'];
+    const updateFields = {};
+
+    allowedFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+        updateFields[field] = updateData[field];
+      }
+    });
+
+    if (Object.prototype.hasOwnProperty.call(updateData, 'prescription')) {
+      const prescription = updateData.prescription || {};
+      updateFields.prescription = {
+        medicine: prescription.medicine || '',
+        dosage: prescription.dosage || '',
+        duration: prescription.duration || ''
+      };
+    }
+
+    updateFields.status = 'Draft';
+    updateFields.nurseId = nurseUserId;
+
+    const updatedRecord = await MedicalRecord.findOneAndUpdate(
       { appointmentId },
-      { $set: { nurseNote } },
-      { new: true, upsert: true }
-    );
+      { $set: updateFields },
+      { new: true }
+    ).populate({ path: 'additionalServiceIds', select: 'serviceName price' });
 
-    return record;
+    return updatedRecord;
   }
 
   /**
@@ -156,13 +247,31 @@ class MedicalRecordService {
       throw new Error('serviceIds phải là mảng');
     }
 
-    const record = await MedicalRecord.findOneAndUpdate(
+    const appointment = await Appointment.findById(appointmentId).select('status');
+    if (!appointment) {
+      throw new Error('Không tìm thấy lịch hẹn');
+    }
+
+    if (['Completed', 'Finalized'].includes(appointment.status)) {
+      throw new Error('Ca khám đã hoàn thành, không thể chỉnh sửa dịch vụ.');
+    }
+
+    const record = await MedicalRecord.findOne({ appointmentId });
+    if (!record) {
+      throw new Error('Hồ sơ khám bệnh chưa được khởi tạo.');
+    }
+
+    if (record.status === 'Finalized') {
+      throw new Error('Hồ sơ đã được bác sĩ duyệt, không thể cập nhật dịch vụ bổ sung.');
+    }
+
+    const updatedRecord = await MedicalRecord.findOneAndUpdate(
       { appointmentId },
-      { $set: { additionalServiceIds: serviceIds } },
-      { new: true, upsert: true }
+      { $set: { additionalServiceIds: serviceIds, status: 'Draft' } },
+      { new: true }
     ).populate({ path: 'additionalServiceIds', select: 'serviceName price' });
 
-    return record;
+    return updatedRecord;
   }
 
   /**
@@ -177,29 +286,49 @@ class MedicalRecordService {
 
     const { diagnosis, conclusion, prescription, nurseNote, approve } = updateData;
 
+    const appointment = await Appointment.findById(appointmentId).select('status');
+    if (!appointment) {
+      throw new Error('Không tìm thấy lịch hẹn');
+    }
+
+    if (['Completed', 'Finalized'].includes(appointment.status)) {
+      throw new Error('Ca khám đã hoàn thành, không thể chỉnh sửa hồ sơ.');
+    }
+
+    const record = await MedicalRecord.findOne({ appointmentId });
+    if (!record) {
+      throw new Error('Hồ sơ khám bệnh chưa được khởi tạo.');
+    }
+
+    if (record.status === 'Finalized' && approve !== true) {
+      throw new Error('Hồ sơ đã được duyệt, không thể chỉnh sửa.');
+    }
+
     const updateFields = {};
     if (diagnosis !== undefined) updateFields.diagnosis = diagnosis;
     if (conclusion !== undefined) updateFields.conclusion = conclusion;
-    if (prescription !== undefined) updateFields.prescription = prescription;
+    if (prescription !== undefined) {
+      updateFields.prescription = {
+        medicine: prescription?.medicine || '',
+        dosage: prescription?.dosage || '',
+        duration: prescription?.duration || ''
+      };
+    }
     if (nurseNote !== undefined) updateFields.nurseNote = nurseNote;
 
-    // Set status dựa trên approve flag
-    // approve = false (hoặc không có) → status = "Draft" (Lưu)
-    // approve = true → status = "Finalized" (Duyệt hồ sơ)
     if (approve === true) {
       updateFields.status = 'Finalized';
     } else {
-      // Mặc định là Draft khi chỉ lưu
       updateFields.status = 'Draft';
     }
 
-    const record = await MedicalRecord.findOneAndUpdate(
+    const updatedRecord = await MedicalRecord.findOneAndUpdate(
       { appointmentId },
       { $set: updateFields },
-      { new: true, upsert: true }
+      { new: true }
     ).populate({ path: 'additionalServiceIds', select: 'serviceName price' });
 
-    return record;
+    return updatedRecord;
   }
 
   /**
@@ -210,7 +339,25 @@ class MedicalRecordService {
       throw new Error('Thiếu appointmentId');
     }
 
-    const record = await MedicalRecord.findOneAndUpdate(
+    const appointment = await Appointment.findById(appointmentId).select('status');
+    if (!appointment) {
+      throw new Error('Không tìm thấy lịch hẹn');
+    }
+
+    if (['Completed', 'Finalized'].includes(appointment.status)) {
+      throw new Error('Ca khám đã hoàn thành, không thể duyệt hồ sơ.');
+    }
+
+    const record = await MedicalRecord.findOne({ appointmentId });
+    if (!record) {
+      throw new Error('Không tìm thấy hồ sơ khám bệnh');
+    }
+
+    if (record.status === 'Finalized') {
+      return await MedicalRecord.findOne({ appointmentId }).populate({ path: 'additionalServiceIds', select: 'serviceName price' });
+    }
+
+    const finalizedRecord = await MedicalRecord.findOneAndUpdate(
       { appointmentId },
       { 
         $set: { 
@@ -220,11 +367,7 @@ class MedicalRecordService {
       { new: true }
     ).populate({ path: 'additionalServiceIds', select: 'serviceName price' });
 
-    if (!record) {
-      throw new Error('Không tìm thấy hồ sơ khám bệnh');
-    }
-
-    return record;
+    return finalizedRecord;
   }
 
   /**
