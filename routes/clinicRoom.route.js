@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
-const { createClinicRoom, getAllClinicRooms, viewDetailClinicRoom, updateClinicRoom, deleteClinicRoom, listDoctor, assignDoctor, unssignDoctor } = require('../controllers/clinic.controller');
+const { createClinicRoom, getAllClinicRooms, viewDetailClinicRoom, updateClinicRoom, deleteClinicRoom, listDoctor, assignDoctor, unssignDoctor } = require('../controllers/clinicRoom.controller');
 
 router.post('/clinics', verifyToken, verifyRole('Manager'), createClinicRoom)
 router.get('/clinics',  getAllClinicRooms)

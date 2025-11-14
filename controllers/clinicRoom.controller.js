@@ -1,4 +1,4 @@
-const clinicService = require('../services/clinic.service');
+const clinicService = require('../services/clinicRoom.service');
 
 const createClinicRoom = async (req, res) => {
   try {

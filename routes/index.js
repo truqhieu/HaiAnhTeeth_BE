@@ -4,7 +4,7 @@ const router = express.Router();
 const userRoutes = require('./user.route');
 const adminRoutes = require('./admin.route');
 const serviceRoutes = require('./service.route');
-const clinicRoutes = require('./clinic.route');
+const clinicRoutes = require('./clinicRoom.route');
 const scheduleRoute = require('./schedule.route');
 const tempRegisterRoutes = require('./tempRegister.route');
 

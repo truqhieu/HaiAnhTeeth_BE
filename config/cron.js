@@ -1,21 +1,43 @@
 // cron/jobs.cron.js
 const cron = require('node-cron');
 const Promotion = require('../models/promotion.model');
+const PromotionService = require('../models/promotionService.model')
 const Appointment = require('../models/appointment.model');
 const appointmentService = require('../services/appointment.service');
 const leaveRequestService = require('../services/leaveRequest.service');
 
-// ===== 1️⃣ Cron auto expire promotion =====
+// ===== 1️⃣ Cron auto check date promotion =====
 cron.schedule('*/1 * * * *', async () => {  // test mỗi phút
     try {
         const now = new Date();
-        const result = await Promotion.updateMany(
+        // Expire promotion
+        const expired = await Promotion.updateMany(
             { endDate: { $lt: now }, status: { $ne: 'Expired' } },
             { $set: { status: 'Expired' } }
         );
-        if (result.modifiedCount > 0) {
-            console.log(`✅ Cập nhật ${result.modifiedCount} khuyến mãi hết hạn.`);
-        }
+
+
+        // Active promotion
+        const active = await Promotion.updateMany(
+            {
+            startDate : { $lte : now },
+            endDate : { $gt : now },
+            status :  {$ne : 'Active' }
+            },
+            {$set : { status : 'Active' }}
+        );
+
+        // Upcoming
+        const upcoming = await Promotion.updateMany(
+            {startDate : { $gt : now }, status :  { $ne : 'Upcoming' }},
+            {$set : { status : 'Upcoming' }}
+        )
+
+        // Check
+        if (expired.modifiedCount > 0) console.log(`✅ Cập nhật ${expired.modifiedCount} khuyến mãi hết hạn.`);
+        if (active.modifiedCount > 0) console.log(`✅ Cập nhật ${active.modifiedCount} khuyến mãi đang diễn ra.`);
+        if (upcoming.modifiedCount > 0) console.log(`✅ Cập nhật ${upcoming.modifiedCount} khuyến mãi sắp tới.`);
+
     } catch (error) {
         console.error('❌ Lỗi khi cập nhật khuyến mãi:', error);
     }
