@@ -1673,13 +1673,14 @@ class AvailableSlotService {
     const startTimeObj = new Date(startTime);
     const endTimeObj = new Date(startTimeObj.getTime() + serviceDuration * 60000);
 
-    // 3.1. Không cho đặt thời gian ở quá khứ
+    // ⭐ 3.1. Không cho đặt thời gian ở quá khứ - CHECK TRƯỚC TẤT CẢ CÁC VALIDATION KHÁC
+    // Nếu thời gian ở quá khứ, return ngay, không check conflict hay validation khác
     const nowUtc = new Date();
     if (startTimeObj.getTime() < nowUtc.getTime()) {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
 
-    // ⭐ 3.5. Check conflict cho bệnh nhân
+    // ⭐ 3.5. Check conflict cho bệnh nhân - CHỈ CHECK SAU KHI ĐÃ PASS validation quá khứ
     // Logic phụ thuộc vào appointmentFor và thông tin customer
     if (patientUserId) {
       // Lấy tất cả appointments của user trong khoảng thời gian này

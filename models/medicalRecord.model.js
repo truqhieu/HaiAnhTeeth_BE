@@ -55,8 +55,8 @@ const medicalRecordSchema = new mongoose.Schema(
     diagnosis: { type: String, default: '' },
     conclusion: { type: String, default: '' },
 
-    // Prescription
-    prescription: { type: prescriptionSchema, default: {} },
+    // Prescription - đổi thành array để hỗ trợ nhiều đơn thuốc
+    prescriptions: [{ type: prescriptionSchema }],
 
     // Follow-up
     followUpDate: { type: Date, default: null },

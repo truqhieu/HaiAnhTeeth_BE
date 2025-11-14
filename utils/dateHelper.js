@@ -106,6 +106,26 @@ class DateHelper {
   }
 
   /**
+   * Lấy thời gian hiện tại theo timezone Việt Nam (UTC+7)
+   * @returns {Date} - Date object đại diện cho thời gian hiện tại trong VN timezone (nhưng được lưu dưới dạng UTC)
+   */
+  static getNowVN() {
+    const now = new Date();
+    
+    // ⭐ Sử dụng Intl.DateTimeFormat để lấy các thành phần thời gian chính xác trong VN timezone
+    const vnYear = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric' }).format(now));
+    const vnMonth = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', month: '2-digit' }).format(now));
+    const vnDay = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit' }).format(now));
+    const vnHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', hour12: false }).format(now));
+    const vnMinute = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', minute: '2-digit' }).format(now));
+    const vnSecond = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', second: '2-digit' }).format(now));
+    
+    // Tạo Date object với VN time (local time) và convert sang UTC
+    const vnDate = new Date(vnYear, vnMonth - 1, vnDay, vnHour, vnMinute, vnSecond);
+    return this.vietnamTimeToUTC(vnDate);
+  }
+
+  /**
    * Lấy ngày hôm nay theo timezone Việt Nam (UTC+7)
    * @returns {string} - "YYYY-MM-DD" (ví dụ: "2025-11-06")
    */
@@ -194,6 +214,202 @@ class DateHelper {
       day,
       dateString: todayStr
     };
+  }
+
+  /**
+   * Lấy thứ 2 tuần sau theo timezone Việt Nam (UTC+7)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: "2025-11-17")
+   */
+  static getNextWeekMondayVN() {
+    const todayStr = this.getTodayVN();
+    const [year, month, day] = todayStr.split('-').map(Number);
+    
+    // Tạo Date object từ ngày hiện tại (theo timezone VN)
+    // Lưu ý: month trong Date constructor là 0-based (0 = tháng 1, 11 = tháng 12)
+    const today = new Date(year, month - 1, day);
+    
+    // Lấy thứ trong tuần (0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7)
+    const dayOfWeek = today.getDay();
+    
+    // Tính số ngày cần thêm để đến thứ 2 tuần sau
+    // Nếu hôm nay là thứ 2 (1), thứ 2 tuần sau = +7 ngày
+    // Nếu hôm nay là thứ 3 (2), thứ 2 tuần sau = +6 ngày
+    // Nếu hôm nay là Chủ nhật (0), thứ 2 tuần sau = +8 ngày
+    let daysToAdd;
+    if (dayOfWeek === 0) {
+      // Chủ nhật → thứ 2 tuần sau = +8 ngày
+      daysToAdd = 8;
+    } else {
+      // Các ngày khác → thứ 2 tuần sau = + (8 - dayOfWeek) ngày
+      daysToAdd = 8 - dayOfWeek;
+    }
+    
+    // Thêm số ngày
+    const nextWeekMonday = new Date(today);
+    nextWeekMonday.setDate(today.getDate() + daysToAdd);
+    
+    // Format về YYYY-MM-DD
+    const nextYear = nextWeekMonday.getFullYear();
+    const nextMonth = String(nextWeekMonday.getMonth() + 1).padStart(2, '0');
+    const nextDay = String(nextWeekMonday.getDate()).padStart(2, '0');
+    
+    return `${nextYear}-${nextMonth}-${nextDay}`;
+  }
+
+  /**
+   * Lấy cùng thứ trong tuần sau (tuần sau = +7 ngày từ hôm nay)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: nếu hôm nay là 13-11 thứ 3, thì trả về 20-11 thứ 3)
+   */
+  static getNextWeekSameDayVN() {
+    const todayStr = this.getTodayVN();
+    const [year, month, day] = todayStr.split('-').map(Number);
+    
+    // Tạo Date object từ ngày hiện tại
+    const today = new Date(year, month - 1, day);
+    
+    // Thêm 7 ngày (tuần sau = cùng thứ trong tuần sau)
+    const nextWeekSameDay = new Date(today);
+    nextWeekSameDay.setDate(today.getDate() + 7);
+    
+    // Format về YYYY-MM-DD
+    const nextYear = nextWeekSameDay.getFullYear();
+    const nextMonth = String(nextWeekSameDay.getMonth() + 1).padStart(2, '0');
+    const nextDay = String(nextWeekSameDay.getDate()).padStart(2, '0');
+    
+    return `${nextYear}-${nextMonth}-${nextDay}`;
+  }
+
+  /**
+   * Tính ngày cho thứ X tuần sau (ví dụ: thứ 3 tuần sau)
+   * @param {number} targetDayOfWeek - Thứ trong tuần (0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7)
+   * @returns {string} - "YYYY-MM-DD" (ví dụ: nếu hôm nay là 13-11 thứ 4, và targetDayOfWeek = 2 (thứ 3) → trả về 19-11)
+   */
+  static getNextWeekDayVN(targetDayOfWeek) {
+    // ⭐ QUAN TRỌNG: Lấy ngày hiện tại theo timezone Việt Nam
+    const todayStr = this.getTodayVN();
+    const [year, month, day] = todayStr.split('-').map(Number);
+    
+    // ⭐ Sử dụng Intl.DateTimeFormat để lấy thứ trong tuần theo timezone Việt Nam
+    const now = new Date();
+    const vnDateStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(now);
+    
+    const [vnYear, vnMonth, vnDay] = vnDateStr.split('-').map(Number);
+    
+    // Tạo Date object từ ngày Việt Nam (local time, không phải UTC)
+    const today = new Date(vnYear, vnMonth - 1, vnDay);
+    
+    // ⭐ Lấy thứ trong tuần theo timezone Việt Nam
+    // Sử dụng Intl.DateTimeFormat để lấy weekday theo VN timezone
+    const weekdayFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      weekday: 'short'
+    });
+    const weekdayStr = weekdayFormatter.format(now);
+    
+    // Map weekday string sang số (0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7)
+    const weekdayMap = {
+      'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6
+    };
+    const currentDayOfWeek = weekdayMap[weekdayStr] !== undefined ? weekdayMap[weekdayStr] : today.getDay();
+    
+    console.log(`📅 [getNextWeekDayVN] VN Date: ${vnDateStr}, Weekday: ${weekdayStr} (${currentDayOfWeek}), Target: ${targetDayOfWeek}`);
+    
+    // Tính số ngày cần thêm để đến thứ X tuần sau
+    // Logic: Tìm thứ X đầu tiên trong tuần sau (không phải tuần này)
+    // Ví dụ: Hôm nay là 13-11 (thứ 5, currentDayOfWeek = 5), muốn tìm thứ 3 tuần sau (targetDayOfWeek = 2)
+    // - Thứ 3 tuần này = 11-11 (đã qua, cách hôm nay 2 ngày về trước)
+    // - Thứ 3 tuần sau = 11 + 7 = 18-11
+    // - Từ 13-11 đến 18-11 = 5 ngày
+    // 
+    // Công thức đúng:
+    // - Tìm thứ X tuần này:
+    //   * Nếu targetDayOfWeek >= currentDayOfWeek → thứ X tuần này = today + (targetDayOfWeek - currentDayOfWeek)
+    //   * Nếu targetDayOfWeek < currentDayOfWeek → thứ X tuần này = today - (currentDayOfWeek - targetDayOfWeek) (đã qua)
+    // - Thứ X tuần sau = thứ X tuần này + 7
+    // - daysToAdd = thứ X tuần sau - today
+    let daysToAdd;
+    if (targetDayOfWeek >= currentDayOfWeek) {
+      // Thứ X tuần này chưa đến hoặc đang là hôm nay
+      // Thứ X tuần này = today + (targetDayOfWeek - currentDayOfWeek)
+      // Thứ X tuần sau = today + (targetDayOfWeek - currentDayOfWeek) + 7
+      daysToAdd = (targetDayOfWeek - currentDayOfWeek) + 7;
+    } else {
+      // Thứ X tuần này đã qua
+      // Tính thứ X tuần này (có thể đã qua)
+      // Ví dụ: hôm nay thứ 5 (currentDayOfWeek = 4 vì Thu = 4), muốn thứ 3 (targetDayOfWeek = 2) tuần sau
+      // - Thứ 3 tuần này = 11/11 (đã qua, cách hôm nay 2 ngày về trước)
+      // - Thứ 3 tuần sau = 11 + 7 = 18/11
+      // - Từ 13 đến 18 = 5 ngày
+      
+      // ⭐ Tính trực tiếp bằng số ngày, không dùng setDate() để tránh timezone issues
+      // Số ngày từ thứ X đến hôm nay = currentDayOfWeek - targetDayOfWeek
+      const daysDiff = currentDayOfWeek - targetDayOfWeek; // Ví dụ: 4 - 2 = 2
+      
+      // Thứ X tuần này = today - daysDiff (tính bằng số ngày)
+      // Thứ X tuần sau = thứ X tuần này + 7
+      // daysToAdd = (today - daysDiff + 7) - today = 7 - daysDiff
+      daysToAdd = 7 - daysDiff;
+      
+      // ⭐ DEBUG: Tính toán để verify
+      const thisWeekTargetDayNum = vnDay - daysDiff;
+      const nextWeekTargetDayNum = thisWeekTargetDayNum + 7;
+      
+      // Format để log (xử lý chuyển tháng nếu cần)
+      let thisWeekMonth = vnMonth;
+      let thisWeekYear = vnYear;
+      let thisWeekDay = thisWeekTargetDayNum;
+      if (thisWeekDay < 1) {
+        thisWeekMonth--;
+        if (thisWeekMonth < 1) {
+          thisWeekMonth = 12;
+          thisWeekYear--;
+        }
+        const daysInPrevMonth = new Date(thisWeekYear, thisWeekMonth, 0).getDate();
+        thisWeekDay = daysInPrevMonth + thisWeekDay;
+      }
+      
+      let nextWeekMonth = thisWeekMonth;
+      let nextWeekYear = thisWeekYear;
+      let nextWeekDay = nextWeekTargetDayNum;
+      if (nextWeekDay > new Date(nextWeekYear, nextWeekMonth, 0).getDate()) {
+        nextWeekDay = nextWeekDay - new Date(nextWeekYear, nextWeekMonth, 0).getDate();
+        nextWeekMonth++;
+        if (nextWeekMonth > 12) {
+          nextWeekMonth = 1;
+          nextWeekYear++;
+        }
+      }
+      
+      const thisWeekTargetDayStr = `${thisWeekYear}-${String(thisWeekMonth).padStart(2, '0')}-${String(thisWeekDay).padStart(2, '0')}`;
+      const nextWeekTargetDayStr = `${nextWeekYear}-${String(nextWeekMonth).padStart(2, '0')}-${String(nextWeekDay).padStart(2, '0')}`;
+      
+      console.log(`📅 [getNextWeekDayVN] Debug: today=${vnDateStr}, currentDayOfWeek=${currentDayOfWeek}, targetDayOfWeek=${targetDayOfWeek}, daysDiff=${daysDiff}, thisWeekTargetDay=${thisWeekTargetDayStr}, nextWeekTargetDay=${nextWeekTargetDayStr}, daysToAdd=${daysToAdd}`);
+    }
+    
+    // ⭐ Tính trực tiếp bằng số ngày để tránh timezone issues
+    // Thêm daysToAdd vào ngày hiện tại (theo VN timezone)
+    let nextYear = vnYear;
+    let nextMonth = vnMonth;
+    let nextDay = vnDay + daysToAdd;
+    
+    // Xử lý chuyển tháng/năm nếu cần
+    const daysInMonth = new Date(nextYear, nextMonth, 0).getDate();
+    if (nextDay > daysInMonth) {
+      nextDay = nextDay - daysInMonth;
+      nextMonth++;
+      if (nextMonth > 12) {
+        nextMonth = 1;
+        nextYear++;
+      }
+    }
+    
+    // Format về YYYY-MM-DD
+    return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`;
   }
 }
 
