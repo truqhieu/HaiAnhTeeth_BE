@@ -1126,7 +1126,8 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
       // Tìm appointment
       const appointment = await Appointment.findById(appointmentId)
         .populate('doctorUserId', '_id')
-        .populate('replacedDoctorUserId', '_id');
+        .populate('replacedDoctorUserId', '_id')
+        .populate('timeslotId', 'startTime');
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
       }
@@ -1145,6 +1146,22 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
         if (!['Approved', 'No-Show'].includes(currentStatus)) {
           throw new Error(`Không thể check-in. Ca khám phải ở trạng thái "Approved" hoặc "No-Show" (hiện tại: ${currentStatus})`);
         }
+
+        // ⭐ Kiểm tra: Chỉ cho phép check-in khi đã đến ngày của ca khám
+        if (appointment.timeslotId && appointment.timeslotId.startTime) {
+          const appointmentDate = new Date(appointment.timeslotId.startTime);
+          const appointmentDay = new Date(appointmentDate);
+          appointmentDay.setHours(0, 0, 0, 0);
+
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+
+          // Nếu chưa đến ngày của ca khám, không cho phép check-in
+          if (today.getTime() < appointmentDay.getTime()) {
+            throw new Error('Không thể check-in sớm. Chỉ có thể check-in khi đã đến ngày của ca khám.');
+          }
+        }
+
         // Lưu thời gian check-in (hoặc cập nhật nếu đang chuyển lại từ No-Show)
         if (!appointment.checkedInAt) {
           appointment.checkedInAt = new Date();
@@ -1287,6 +1304,21 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
         }
 
       await appointment.save();
+
+      // ⭐ Nếu appointment đang ở trạng thái PendingPayment, cập nhật payment status thành Cancelled
+      if (appointment.paymentId) {
+        try {
+          const Payment = require('../models/payment.model');
+          const payment = await Payment.findById(appointment.paymentId);
+          if (payment && payment.status === 'Pending') {
+            payment.status = 'Cancelled';
+            await payment.save();
+            console.log(`✅ Payment ${payment._id} đã được cập nhật thành Cancelled do hủy appointment`);
+          }
+        } catch (e) {
+          console.error('⚠️ Không thể cập nhật payment status khi hủy appointment:', e);
+        }
+      }
 
       // ⭐ Release the reserved/booked timeslot so others can book it again
       if (appointment.timeslotId) {

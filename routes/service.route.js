@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { createService, getAllServices, viewDetailService, updateService, deleteService, getDiscountedServiceDetail, getDiscountedServices } = require('../controllers/service.controller')
-const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
+const { verifyToken, verifyRole, optionalAuth } = require('../middleware/auth.middleware');
 
 // ⭐ Manager quản lý dịch vụ (CRUD)
 router.post('/services', verifyToken, verifyRole('Manager'), createService)
-router.get('/services', getAllServices) 
+// ⭐ Public route - cả guest và manager đều có thể xem danh sách dịch vụ
+router.get('/services', optionalAuth, getAllServices) 
 router.get('/services/discounted', getDiscountedServices) 
 router.get('/services/discounted/:id', getDiscountedServiceDetail) 
 router.get('/services/:id', viewDetailService) 

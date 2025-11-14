@@ -399,9 +399,11 @@ class LeaveRequestService {
         const endDate = new Date(handleRequest.endDate);
 
         // 1. Tìm appointments bị ảnh hưởng
+        // ⭐ Chỉ hiển thị vắng mặt cho các ca đang chờ duyệt, đã approved, hoặc đã check-in
+        // KHÔNG hiển thị cho các ca đã hoàn thành (Completed) hoặc đang tiến hành (InProgress)
         const affectedAppointments = await Appointment.find({
           doctorUserId: doctorUserId,
-          status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
+          status: { $in: ['Pending', 'Approved', 'CheckedIn'] },
           timeslotId: { $exists: true }
         })
           .populate({

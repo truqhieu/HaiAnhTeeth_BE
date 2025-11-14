@@ -204,13 +204,25 @@ class MedicalRecordService {
       }
     });
 
+    // ⭐ Hỗ trợ cả prescription (object cũ) và prescriptions (array mới) để backward compatible
     if (Object.prototype.hasOwnProperty.call(updateData, 'prescription')) {
-      const prescription = updateData.prescription || {};
-      updateFields.prescription = {
-        medicine: prescription.medicine || '',
-        dosage: prescription.dosage || '',
-        duration: prescription.duration || ''
-      };
+      const prescription = updateData.prescription;
+      if (Array.isArray(prescription)) {
+        updateFields.prescriptions = prescription.map(p => ({
+          medicine: p?.medicine || '',
+          dosage: p?.dosage || '',
+          duration: p?.duration || ''
+        }));
+      } else if (prescription && typeof prescription === 'object') {
+        // Nếu là object đơn, chuyển thành array với 1 phần tử (backward compatibility)
+        updateFields.prescriptions = [{
+          medicine: prescription?.medicine || '',
+          dosage: prescription?.dosage || '',
+          duration: prescription?.duration || ''
+        }];
+      } else {
+        updateFields.prescriptions = [];
+      }
     }
 
     updateFields.status = 'Draft';
@@ -307,12 +319,25 @@ class MedicalRecordService {
     const updateFields = {};
     if (diagnosis !== undefined) updateFields.diagnosis = diagnosis;
     if (conclusion !== undefined) updateFields.conclusion = conclusion;
+    // ⭐ Hỗ trợ cả prescription (object cũ) và prescriptions (array mới) để backward compatible
     if (prescription !== undefined) {
-      updateFields.prescription = {
-        medicine: prescription?.medicine || '',
-        dosage: prescription?.dosage || '',
-        duration: prescription?.duration || ''
-      };
+      // Nếu là array, lưu vào prescriptions
+      if (Array.isArray(prescription)) {
+        updateFields.prescriptions = prescription.map(p => ({
+          medicine: p?.medicine || '',
+          dosage: p?.dosage || '',
+          duration: p?.duration || ''
+        }));
+      } else if (prescription && typeof prescription === 'object') {
+        // Nếu là object đơn, chuyển thành array với 1 phần tử (backward compatibility)
+        updateFields.prescriptions = [{
+          medicine: prescription?.medicine || '',
+          dosage: prescription?.dosage || '',
+          duration: prescription?.duration || ''
+        }];
+      } else {
+        updateFields.prescriptions = [];
+      }
     }
     if (nurseNote !== undefined) updateFields.nurseNote = nurseNote;
 
@@ -449,7 +474,11 @@ class MedicalRecordService {
         nurseId: record.nurseId,
         diagnosis: record.diagnosis || '',
         conclusion: record.conclusion || '',
-        prescription: record.prescription || {},
+        // ⭐ Hỗ trợ backward compatibility: nếu có prescriptions (array mới) thì dùng, nếu không thì dùng prescription (object cũ)
+        prescription: (record.prescriptions && record.prescriptions.length > 0) 
+          ? record.prescriptions[0] 
+          : (record.prescription || {}),
+        prescriptions: record.prescriptions || (record.prescription ? [record.prescription] : []),
         nurseNote: record.nurseNote || '',
         additionalServiceIds: record.additionalServiceIds || [],
         status: record.status,
@@ -570,8 +599,15 @@ class MedicalRecordService {
         startTime: startTime,
         endTime: endTime,
         hasDiagnosis: !!record.diagnosis,
-        hasPrescription: !!(record.prescription && (record.prescription.medicine || record.prescription.dosage || record.prescription.duration)),
-        prescription: record.prescription || null,
+        // ⭐ Hỗ trợ backward compatibility: kiểm tra cả prescriptions (array mới) và prescription (object cũ)
+        hasPrescription: !!(
+          (record.prescriptions && record.prescriptions.length > 0 && record.prescriptions.some(p => p.medicine || p.dosage || p.duration)) ||
+          (record.prescription && (record.prescription.medicine || record.prescription.dosage || record.prescription.duration))
+        ),
+        prescription: (record.prescriptions && record.prescriptions.length > 0) 
+          ? record.prescriptions[0] 
+          : (record.prescription || null),
+        prescriptions: record.prescriptions || (record.prescription ? [record.prescription] : []),
         diagnosis: record.diagnosis || null,
         conclusion: record.conclusion || null,
         status: record.status,
