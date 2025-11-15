@@ -39,23 +39,18 @@ const generateSlotsByDate = async (req, res) => {
     }
 
     // ⭐⭐⭐ LOGIC:
-    // - appointmentFor === 'self' (hoặc không specify): Pass userId để EXCLUDE slots user đã đặt
-    // - appointmentFor === 'other': Không pass userId để KHÔNG exclude slots (chỉ exclude customer nếu có)
-    const patientUserIdForExclusion = (appointmentForValue === 'self') && userId ? userId : null;
+    // - appointmentFor === 'self': Pass userId để EXCLUDE TẤT CẢ slots user đã đặt (bất kỳ bác sĩ nào)
+    // - appointmentFor === 'other': Pass userId để EXCLUDE CHỈ slots user đã đặt với CÙNG bác sĩ (cho phép đặt cùng thời gian với bác sĩ khác)
+    const patientUserIdForExclusion = userId || null;
     console.log('🔍 [generateSlotsByDate] patientUserIdForExclusion:', patientUserIdForExclusion || 'none (will not exclude slots)');
-    
-    // ⭐ DEBUG: Show detailed info
-    console.log('🔍 [generateSlotsByDate] DETAILED DEBUG:');
-    console.log('   - appointmentForValue:', appointmentForValue);
-    console.log('   - userId:', userId);
-    console.log('   - appointmentForValue === "self":', appointmentForValue === 'self');
-    console.log('   - Decision: patientUserIdForExclusion =', patientUserIdForExclusion === null ? 'null' : patientUserIdForExclusion);
+    console.log('🔍 [generateSlotsByDate] appointmentFor:', appointmentForValue);
 
     const result = await availableSlotService.generateAvailableSlotsByDate({
       serviceId,
       date: searchDate,
       breakAfterMinutes: breakAfterMinutes ? parseInt(breakAfterMinutes) : 10,
-      patientUserId: patientUserIdForExclusion, // ⭐ Chỉ exclude khi appointmentFor === 'self'
+      patientUserId: patientUserIdForExclusion,
+      appointmentFor: appointmentForValue, // ⭐ THÊM: Truyền appointmentFor để service biết cách exclude
       // ⭐ Pass customer info nếu appointmentFor === 'other'
       ...(appointmentForValue === 'other' && {
         customerFullName: customerFullName ? decodeURIComponent(customerFullName) : null,

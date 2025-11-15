@@ -1333,6 +1333,63 @@ const cancelChangeDoctor = async(req,res) =>{
   }
 
 
+// ⭐ Lấy danh sách người thân đã đặt lịch của user
+const getMyRelatives = async (req, res) => {
+  try {
+    const patientUserId = req.user?.userId;
+    
+    if (!patientUserId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Bạn cần đăng nhập để xem danh sách người thân'
+      });
+    }
+
+    const Customer = require('../models/customer.model');
+    
+    // Lấy tất cả customers mà user này đã đặt lịch (appointmentFor = 'other')
+    const customers = await Customer.find({
+      patientUserId: patientUserId
+    })
+    .select('fullName email phoneNumber')
+    .sort({ createdAt: -1 }) // Mới nhất trước
+    .lean();
+
+    // Loại bỏ duplicate dựa trên fullName + email
+    const uniqueCustomers = [];
+    const seen = new Set();
+    
+    for (const customer of customers) {
+      if (customer.fullName && customer.email) {
+        const key = `${customer.fullName.toLowerCase().trim()}_${customer.email.toLowerCase().trim()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueCustomers.push({
+            _id: customer._id,
+            fullName: customer.fullName,
+            email: customer.email,
+            phoneNumber: customer.phoneNumber || null
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: uniqueCustomers,
+      message: 'Lấy danh sách người thân thành công'
+    });
+
+  } catch (error) {
+    console.error('❌ Error in getMyRelatives:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống. Vui lòng thử lại sau.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   createConsultationAppointment,
   reviewAppointment,
@@ -1355,4 +1412,5 @@ module.exports = {
   getVisitTicket,
   managerDashboard,
   getMonthlyRevenue,
+  getMyRelatives,
 };

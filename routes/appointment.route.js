@@ -22,7 +22,8 @@ const {
   getVisitTicket,
   managerDashboard,
   getMonthlyRevenue,
-  getDashboardDetails
+  getDashboardDetails,
+  getMyRelatives
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -49,6 +50,9 @@ router.get('/all', verifyToken, getAllAppointments);
 
 // ⭐ Lấy danh sách ca khám của người dùng hiện tại - Cần đăng nhập
 router.get('/my-appointments', verifyToken, getMyAppointments);
+
+// ⭐ Lấy danh sách người thân đã đặt lịch - Cần đăng nhập
+router.get('/my-relatives', verifyToken, verifyRole('Patient'), getMyRelatives);
 
 // ⭐ Patient lấy danh sách tất cả hồ sơ khám bệnh đã hoàn thành
 router.get('/medical-records', verifyToken, verifyRole('Patient'), getPatientMedicalRecordsList);
