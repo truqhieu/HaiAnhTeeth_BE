@@ -22,6 +22,7 @@ const patientRequestRoutes = require('./patientRequest.route');
 const promotionRoutes = require('./promotion.route');
 const notificaionRoutes = require('./notification.route')
 const chatMessageRoutes = require('./chatMessage.route')
+const consultationInformationRoutes = require('./consultationInformation.route')
 
 
 // --- ROUTES ---
@@ -49,6 +50,8 @@ router.use('/leave-requests', leaveRequestRoutes)
 router.use('/patient-requests', patientRequestRoutes)
 router.use('/notifications', notificaionRoutes)
 router.use('/chat-messages', chatMessageRoutes)
+router.use('/consultation-informations', consultationInformationRoutes)
+
 
 // --- API INFO ENDPOINT ---
 router.get('/', (req, res) => {

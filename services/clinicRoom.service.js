@@ -1,5 +1,6 @@
 const Clinicroom = require('../models/clinicRoom.model');
 const User = require('../models/user.model');
+const ScheduleDoctor = require('../models/doctorSchedule.model')
 
 const STATUS = Clinicroom.schema.path('status').enumValues;
 
@@ -216,10 +217,10 @@ class ClinicService {
    * Xóa phòng khám
    */
   async deleteClinicRoom(id) {
-    const room = await Clinicroom.findByIdAndDelete(id);
-    if (!room) {
-      throw new Error('Không tìm thấy phòng khám để xóa');
-    }
+    const room = await Clinicroom.findByIdAndDelete(id).populate('assignedDoctorId');
+    if(!room) throw new Error('Không tìm thấy phòng khám')
+
+    if(room.assignedDoctorId !== null) throw new Error('Có bác sĩ đang được gán với phòng khám này')
     return true;
   }
 

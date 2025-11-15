@@ -89,6 +89,24 @@ class LeaveRequestService {
     });
 
     await newRequest.save();
+      //Thông báo cho quản lý
+      const listManager = await User.find({role : "Manager"})
+      try {
+       await Promise.all(
+      listManager.map(s =>
+        notificationService.createNotification({
+          userId: s._id,
+          createdByUserId: userId,
+          title: 'Đơn xin nghỉ phép',
+          message: `Có gửi đơn xin nghỉ phép mới`,
+          relatedAppointmentId: null,
+          link: null,
+        })
+      )
+    );
+  } catch (notifError) {
+    console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
+  }  
     return newRequest;
   }
 
@@ -385,6 +403,22 @@ class LeaveRequestService {
           );
           console.log(`✅ Đã restore status của bác sĩ về 'Available' sau khi reject leave request`);
         }
+
+         // ✅ Gửi notification cho bác sĩ khi từ chối đơn nghỉ
+          try {
+            await notificationService.createNotification({
+              userId: managerId,
+              createdByUserId: doctorUserId,
+              title: 'Đơn xin nghỉ của bạn đã bị từ chối',
+              message: `Lý do ${handleRequest.reason}`,
+              relatedAppointmentId: null,
+              link:  null,
+            });
+          } catch (notifError) {
+            console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
+          }    
+
+
       } catch (error) {
         console.error('❌ Lỗi xử lý khi reject leave request:', error);
       }
@@ -435,6 +469,42 @@ class LeaveRequestService {
           { $set: { status: 'On Leave' } }
         );
         console.log(`✅ Đã cập nhật status của bác sĩ ${doctorName} thành 'On Leave'`);
+
+             // ✅ Gửi notification cho bác sĩ khi duyệt đơn nghỉ
+          try {
+            await notificationService.createNotification({
+              userId: doctorUserId,
+              createdByUserId: managerId,
+              title: 'Đơn xin nghỉ của bạn đã được duyệt',
+              message: `Lý do ${handleRequest.reason}`,
+              relatedAppointmentId: null,
+              link:  null,
+            });
+          } catch (notifError) {
+            console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
+          }
+          
+          // Gửi thông báo cho các staff nếu bác sĩ nghỉ có lịch khám
+              const checkApppointment = await Appointment.findOne({doctorUserId : doctorUserId})
+              if(checkApppointment){
+              const listStaff = await User.find({role : "Staff"})
+              try {
+               await Promise.all(
+              listStaff.map(s =>
+                notificationService.createNotification({
+                  userId: s._id,
+                  createdByUserId: patientUserId,
+                  title: 'Lịch khám mới đã được đặt',
+                  message: `Đã có bệnh nhân đặt lịch khám mới`,
+                  relatedAppointmentId: newAppointment._id,
+                  link: null,
+                })
+              )
+            );
+          } catch (notifError) {
+            console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
+          }
+        }
 
       } catch (error) {
         console.error('❌ Lỗi xử lý khi approve leave request:', error);

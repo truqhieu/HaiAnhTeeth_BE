@@ -161,21 +161,21 @@ const updateService = async (req, res) => {
   }
 };
 
-const deleteService = async (req, res) => {
-  try {
-    await serviceService.deleteService(req.params.id);
-        res.status(200).json({
-      status: true,
-      message: 'Xóa dịch vụ thành công.'
-    });
-    } catch (error) {
-        console.error('Lỗi xóa dịch vụ', error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Đã xảy ra lỗi khi xóa dịch vụ'
-    });
-    }
-};
+// const deleteService = async (req, res) => {
+//   try {
+//     await serviceService.deleteService(req.params.id);
+//         res.status(200).json({
+//       status: true,
+//       message: 'Xóa dịch vụ thành công.'
+//     });
+//     } catch (error) {
+//         console.error('Lỗi xóa dịch vụ', error);
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || 'Đã xảy ra lỗi khi xóa dịch vụ'
+//     });
+//     }
+// };
 
 module.exports = {
 createService,
@@ -184,5 +184,5 @@ viewDetailService,
 getDiscountedServiceDetail,
 getDiscountedServices,
 updateService,
-deleteService
+// deleteService
 };

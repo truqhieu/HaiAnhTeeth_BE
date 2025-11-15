@@ -529,13 +529,13 @@ class ServiceService {
   /**
    * Xóa service
    */
-  async deleteService(id) {
-    const service = await Service.findByIdAndDelete(id);
-    if (!service) {
-      throw new Error('Không tìm thấy dịch vụ để xóa');
-    }
-    return true;
-  }
+  // async deleteService(id) {
+  //   const service = await Service.findByIdAndDelete(id);
+  //   if (!service) {
+  //     throw new Error('Không tìm thấy dịch vụ để xóa');
+  //   }
+  //   return true;
+  // }
 }
 
 module.exports = new ServiceService();

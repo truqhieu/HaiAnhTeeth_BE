@@ -1310,6 +1310,28 @@ const cancelChangeDoctor = async(req,res) =>{
     }
   }
 
+  const getMonthlyRevenue = async(req,res) =>{
+    try {
+      const {startDate, endDate} = req.query
+      const result = await appointmentService.getMonthlyRevenue(startDate, endDate);
+      
+      const now = new Date();
+      const year = now.getFullYear(); 
+      return res.status(200).json({
+      success: true,
+      message: `Doanh thu từng tháng trong năm ${year}`,
+      result
+    });      
+    } catch (error) {
+    console.error('❌ Error in getMonthlyRevenue:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });                
+    }
+  }
+
 
 module.exports = {
   createConsultationAppointment,
@@ -1331,5 +1353,6 @@ module.exports = {
   confirmChangeDoctor,
   cancelChangeDoctor,
   getVisitTicket,
-  managerDashboard
+  managerDashboard,
+  getMonthlyRevenue,
 };

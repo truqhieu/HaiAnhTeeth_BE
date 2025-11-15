@@ -20,7 +20,9 @@ const {
   confirmChangeDoctor,
   cancelChangeDoctor,
   getVisitTicket,
-  managerDashboard
+  managerDashboard,
+  getMonthlyRevenue,
+  getDashboardDetails
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -99,5 +101,9 @@ router.get('/:appointmentId/visit-ticket/pdf', verifyToken, verifyRole('Staff'),
 
 // ⭐ Lấy doanh thu
 router.get('/dashboard', verifyToken, verifyRole('Manager'), managerDashboard);
+
+// ⭐ So sánh doanh thu từng tháng theo 1 năm
+router.get('/dashboard/monthly-revenue', verifyToken, verifyRole('Manager'), getMonthlyRevenue);
+
 
 module.exports = router;

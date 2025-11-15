@@ -263,18 +263,18 @@ const message = new ChatMessage({
         
         // Thông tin y tế
         medicalInfo: {
-          symptoms: medicalRecord.symptoms || 'Không có',
           diagnosis: medicalRecord.diagnosis || 'Chưa có chẩn đoán',
           conclusion: medicalRecord.conclusion || 'Không có',
           nurseNote: medicalRecord.nurseNote || 'Không có ghi chú',
         },
         
         // Đơn thuốc
-        prescription: {
-          medicine: medicalRecord.prescription?.medicine || 'Không có',
-          dosage: medicalRecord.prescription?.dosage || 'Không có',
-          duration: medicalRecord.prescription?.duration || 'Không có'
-        },
+        prescription: medicalRecord.prescriptions?.map(p => ({
+          medicineName: p.medicine,
+          dosage: p.dosage,
+          duration : p.duration
+        })) || [],
+
         
         // Dịch vụ bổ sung
         additionalServices: medicalRecord.additionalServiceIds || [],

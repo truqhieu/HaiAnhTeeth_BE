@@ -11,6 +11,6 @@ router.get('/services/discounted', getDiscountedServices)
 router.get('/services/discounted/:id', getDiscountedServiceDetail) 
 router.get('/services/:id', viewDetailService) 
 router.patch('/services/:id', verifyToken, verifyRole('Manager'), updateService)
-router.delete('/services/:id', verifyToken, verifyRole('Manager'), deleteService)
+// router.delete('/services/:id', verifyToken, verifyRole('Manager'), deleteService)
 
 module.exports = router 
