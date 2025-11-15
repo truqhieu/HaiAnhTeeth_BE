@@ -121,33 +121,44 @@ class ScheduleService {
    * Lấy danh sách tất cả bác sĩ với working hours
    */
   async getDoctorsWithWorkingHours() {
-    // Lấy tất cả bác sĩ
+    // Lấy tất cả bác sĩ với workingHours và workingHoursUpdatedAt
     const doctors = await User.find({ role: 'Doctor' })
-      .select('_id fullName email')
+      .select('_id fullName email workingHours workingHoursUpdatedAt')
       .sort({ fullName: 1 });
 
-    // Lấy working hours mặc định từ DoctorSchedule gần nhất của mỗi bác sĩ
+    // Lấy working hours từ User model hoặc từ DoctorSchedule gần nhất
     const doctorsWithWorkingHours = await Promise.all(
       doctors.map(async (doctor) => {
-        // Tìm DoctorSchedule gần nhất của bác sĩ này
-        const latestSchedule = await DoctorSchedule.findOne({
-          doctorUserId: doctor._id
-        })
-          .sort({ createdAt: -1 });
+        // Ưu tiên lấy từ User model (nếu có)
+        let workingHours = doctor.workingHours;
+        let workingHoursUpdatedAt = doctor.workingHoursUpdatedAt;
 
-        // Nếu không có schedule, sử dụng working hours mặc định
-        const defaultWorkingHours = {
-          morningStart: '08:00',
-          morningEnd: '12:00',
-          afternoonStart: '14:00',
-          afternoonEnd: '18:00'
-        };
+        // Nếu User model chưa có workingHours, lấy từ DoctorSchedule gần nhất
+        if (!workingHours || !workingHours.morningStart) {
+          const latestSchedule = await DoctorSchedule.findOne({
+            doctorUserId: doctor._id
+          })
+            .sort({ createdAt: -1 });
+
+          if (latestSchedule?.workingHours) {
+            workingHours = latestSchedule.workingHours;
+          } else {
+            // Sử dụng working hours mặc định
+            workingHours = {
+              morningStart: '08:00',
+              morningEnd: '12:00',
+              afternoonStart: '14:00',
+              afternoonEnd: '18:00'
+            };
+          }
+        }
 
         return {
           _id: doctor._id,
           fullName: doctor.fullName,
           email: doctor.email,
-          workingHours: latestSchedule?.workingHours || defaultWorkingHours
+          workingHours: workingHours,
+          workingHoursUpdatedAt: workingHoursUpdatedAt
         };
       })
     );
@@ -157,6 +168,8 @@ class ScheduleService {
 
   /**
    * Cập nhật working hours cho tất cả DoctorSchedule của một bác sĩ
+   * Nếu bác sĩ chưa có schedule, vẫn cho phép update (schedules sẽ được tạo khi đặt lịch)
+   * Lưu workingHours vào User model để áp dụng từ ngày hôm sau
    */
   async updateDoctorWorkingHours(doctorId, workingHours) {
     if (!workingHours) {
@@ -165,27 +178,39 @@ class ScheduleService {
 
     this._validateWorkingHours(workingHours);
 
+    // Lưu workingHours vào User model với thời gian cập nhật
+    const updateTime = new Date();
+    await User.findByIdAndUpdate(doctorId, {
+      workingHours: workingHours,
+      workingHoursUpdatedAt: updateTime
+    });
+
     // Tìm tất cả DoctorSchedule của bác sĩ
     const schedules = await DoctorSchedule.find({
       doctorUserId: doctorId
     });
 
-    if (schedules.length === 0) {
-      throw new Error('Không tìm thấy lịch làm việc của bác sĩ');
+    let updatedSchedules = 0;
+
+    if (schedules.length > 0) {
+      // Cập nhật workingHours cho tất cả schedules hiện có
+      const updatePromises = schedules.map(schedule => {
+        schedule.workingHours = workingHours;
+        return schedule.save();
+      });
+
+      await Promise.all(updatePromises);
+      updatedSchedules = schedules.length;
     }
-
-    // Cập nhật workingHours cho tất cả schedules
-    const updatePromises = schedules.map(schedule => {
-      schedule.workingHours = workingHours;
-      return schedule.save();
-    });
-
-    await Promise.all(updatePromises);
 
     return {
       doctorId,
-      updatedSchedules: schedules.length,
-      workingHours
+      updatedSchedules: updatedSchedules,
+      workingHours,
+      workingHoursUpdatedAt: updateTime,
+      message: updatedSchedules > 0 
+        ? `Đã cập nhật ${updatedSchedules} lịch làm việc. Lịch làm việc mới sẽ có hiệu lực từ ngày mai.` 
+        : 'Bác sĩ chưa có lịch làm việc. Lịch làm việc mới sẽ sử dụng giờ làm việc này khi được tạo và có hiệu lực từ ngày mai.'
     };
   }
 }

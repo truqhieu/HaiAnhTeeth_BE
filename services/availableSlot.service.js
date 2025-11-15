@@ -1577,7 +1577,11 @@ class AvailableSlotService {
     const morningSchedules = schedules.filter(s => s.shift === 'Morning');
     const afternoonSchedules = schedules.filter(s => s.shift === 'Afternoon');
 
-    // ⭐ Lấy workingHours từ schedule có sẵn (ưu tiên morning, sau đó afternoon, cuối cùng là mặc định)
+    // ⭐ Logic: Lấy workingHours dựa trên thời gian cập nhật
+    // - Nếu cập nhật vào ngày 15/11, thì từ ngày 16/11 trở đi mới áp dụng workingHours mới
+    // - Nếu searchDate <= workingHoursUpdatedAt (tính theo ngày), dùng workingHours cũ từ schedule
+    // - Nếu searchDate > workingHoursUpdatedAt (tính theo ngày), dùng workingHours mới từ User model
+    
     const defaultWorkingHours = {
       morningStart: '08:00',
       morningEnd: '12:00',
@@ -1585,11 +1589,36 @@ class AvailableSlotService {
       afternoonEnd: '18:00'
     };
     
+    // Lấy workingHours từ User model (nếu có)
+    const userWorkingHours = doctor.workingHours;
+    const workingHoursUpdatedAt = doctor.workingHoursUpdatedAt;
+    
+    // So sánh ngày (không tính giờ)
+    let useNewWorkingHours = false;
+    if (workingHoursUpdatedAt) {
+      const updateDate = new Date(workingHoursUpdatedAt);
+      updateDate.setUTCHours(0, 0, 0, 0);
+      const searchDateOnly = new Date(searchDate);
+      searchDateOnly.setUTCHours(0, 0, 0, 0);
+      
+      // Nếu searchDate > updateDate (tức là từ ngày hôm sau), dùng workingHours mới
+      useNewWorkingHours = searchDateOnly > updateDate;
+    }
+    
     let workingHours = defaultWorkingHours;
-    if (morningSchedules.length > 0 && morningSchedules[0].workingHours) {
-      workingHours = morningSchedules[0].workingHours;
-    } else if (afternoonSchedules.length > 0 && afternoonSchedules[0].workingHours) {
-      workingHours = afternoonSchedules[0].workingHours;
+    
+    if (useNewWorkingHours && userWorkingHours && userWorkingHours.morningStart) {
+      // Dùng workingHours mới từ User model (áp dụng từ ngày hôm sau)
+      workingHours = userWorkingHours;
+      console.log(`📅 [getDoctorScheduleRange] Using NEW workingHours from User model (updated at ${workingHoursUpdatedAt?.toISOString()}) for date ${searchDate.toISOString().split('T')[0]}`);
+    } else {
+      // Dùng workingHours cũ từ schedule
+      if (morningSchedules.length > 0 && morningSchedules[0].workingHours) {
+        workingHours = morningSchedules[0].workingHours;
+      } else if (afternoonSchedules.length > 0 && afternoonSchedules[0].workingHours) {
+        workingHours = afternoonSchedules[0].workingHours;
+      }
+      console.log(`📅 [getDoctorScheduleRange] Using OLD workingHours from schedule for date ${searchDate.toISOString().split('T')[0]}`);
     }
 
     const scheduleRanges = [];

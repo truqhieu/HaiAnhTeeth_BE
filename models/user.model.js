@@ -51,6 +51,28 @@ const userSchema = new mongoose.Schema({
   resetPasswordExpire: {
     type: Date,
     default: null
+  },
+  workingHours: {
+    morningStart: {
+      type: String,
+      default: '08:00'
+    },
+    morningEnd: {
+      type: String,
+      default: '12:00'
+    },
+    afternoonStart: {
+      type: String,
+      default: '14:00'
+    },
+    afternoonEnd: {
+      type: String,
+      default: '18:00'
+    }
+  },
+  workingHoursUpdatedAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true
