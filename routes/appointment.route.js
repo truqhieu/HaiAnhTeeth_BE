@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { 
   createConsultationAppointment, 
+  createWalkInAppointment,
   reviewAppointment,
   getPendingAppointments,
   getAllAppointments,
@@ -34,6 +35,9 @@ router.post('/ai-create', verifyToken, verifyRole('Patient'), createAppointmentB
 
 // ⭐ Patient đặt lịch tư vấn/khám - Cần đăng nhập
 router.post('/consultation/create', verifyToken, verifyRole('Patient'), createConsultationAppointment);
+
+// ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
+router.post('/walk-in/create', verifyToken, verifyRole(['Staff', 'Manager']), createWalkInAppointment);
 
 // Bao gồm cả lịch tư vấn và lịch khám
 router.post('/create-by-staff', verifyToken, verifyRole(['Staff', 'Manager']), createConsultationAppointment);

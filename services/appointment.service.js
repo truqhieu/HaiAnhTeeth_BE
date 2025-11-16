@@ -473,6 +473,18 @@ class AppointmentService {
       discountAmount: promotionData.discountAmount
     });
 
+    // ⭐ Cập nhật số điện thoại vào hồ sơ cá nhân khi đặt cho bản thân
+    try {
+      if ((appointmentFor === 'self' || !appointmentFor) && phoneNumber) {
+        const currentPhone = patient.phoneNumber;
+        if (!currentPhone || String(currentPhone) !== String(phoneNumber)) {
+          await User.findByIdAndUpdate(patientUserId, { phoneNumber: phoneNumber });
+          console.log('✅ Đã cập nhật phoneNumber cho user:', patientUserId, phoneNumber);
+        }
+      }
+    } catch (phoneErr) {
+      console.warn('⚠️ Không thể cập nhật phoneNumber cho user:', phoneErr?.message);
+    }
     console.log('✅ Appointment đã được tạo:', {
       id: newAppointment._id,
       patientUserId: newAppointment.patientUserId,
@@ -583,6 +595,158 @@ class AppointmentService {
     }
 
     return responsePayload;
+  }
+
+  /**
+   * Tạo lịch hẹn khám trực tiếp (walk-in) bởi Staff/Manager
+   * - Bỏ qua thanh toán trước (nếu có), luôn đặt Timeslot 'Booked' và Appointment 'Approved'
+   * - Mode luôn 'Offline'
+   * - Luôn coi là đặt cho 'other' với thông tin khách vãng lai (fullName, email, phoneNumber)
+   */
+  async createWalkInAppointment(appointmentData) {
+    const {
+      staffUserId,
+      doctorUserId,
+      serviceId,
+      doctorScheduleId,
+      selectedSlot, // { startTime, endTime }
+      notes,
+      fullName,
+      email,
+      phoneNumber
+    } = appointmentData;
+
+    // Validate cơ bản
+    if (!staffUserId) throw new Error('Thiếu thông tin người tạo (staffUserId)');
+    if (!doctorUserId || !serviceId || !doctorScheduleId || !selectedSlot) {
+      throw new Error('Vui lòng cung cấp đủ: dịch vụ, bác sĩ, lịch làm việc và khung giờ');
+    }
+    if (!selectedSlot.startTime || !selectedSlot.endTime) {
+      throw new Error('Khung giờ không hợp lệ');
+    }
+    if (!fullName || !email || !phoneNumber) {
+      throw new Error('Vui lòng nhập đầy đủ họ tên, email và số điện thoại của bệnh nhân');
+    }
+
+    // Kiểm tra service
+    const service = await Service.findById(serviceId);
+    if (!service) throw new Error('Dịch vụ không tồn tại');
+    if (service.status !== 'Active') throw new Error('Dịch vụ hiện không khả dụng');
+
+    // Mode luôn Offline (walk-in)
+    const appointmentMode = 'Offline';
+    // Type dựa vào category (mặc định Examination nếu không rõ)
+    const appointmentType = service.category === 'Consultation' ? 'Consultation' : 'Examination';
+
+    // Validate doctor schedule
+    const schedule = await DoctorSchedule.findById(doctorScheduleId);
+    if (!schedule) throw new Error('Lịch làm việc của bác sĩ không tồn tại');
+
+    // Validate doctor
+    const doctor = await User.findById(doctorUserId);
+    if (!doctor || doctor.role !== 'Doctor') throw new Error('Bác sĩ không hợp lệ');
+    if (doctor.status !== 'Active') throw new Error('Bác sĩ hiện không khả dụng');
+
+    // Validate not in the past
+    const slotStartTime = new Date(selectedSlot.startTime);
+    const slotEndTime = new Date(selectedSlot.endTime);
+    if (slotStartTime.getTime() < Date.now()) {
+      throw new Error('Không thể đặt thời gian ở quá khứ');
+    }
+
+    // Check conflict timeslot (KHÔNG cộng buffer)
+    const conflictingTimeslots = await Timeslot.find({
+      doctorUserId,
+      startTime: { $lt: slotEndTime },
+      endTime: { $gt: slotStartTime },
+      status: { $in: ['Reserved', 'Booked'] }
+    });
+    if (conflictingTimeslots.length > 0) {
+      throw new Error('Khung giờ đã được đặt. Vui lòng chọn thời gian khác.');
+    }
+
+    // Validate duration khớp service
+    const slotDurationMinutes = (slotEndTime - slotStartTime) / 60000;
+    if (slotDurationMinutes !== service.durationMinutes) {
+      throw new Error(`Khung giờ không hợp lệ. Dịch vụ cần ${service.durationMinutes} phút, bạn chọn ${slotDurationMinutes} phút.`);
+    }
+
+    // Tạo Customer (khách vãng lai) gắn với staff (bookedBy)
+    const newCustomer = await Customer.create({
+      patientUserId: staffUserId,
+      fullName,
+      email,
+      phoneNumber,
+      hasAccount: false,
+      linkedUserId: null
+    });
+
+    // Tạo Timeslot (trực tiếp → Booked luôn)
+    const newTimeslot = await Timeslot.create({
+      doctorScheduleId: schedule._id,
+      doctorUserId,
+      serviceId,
+      startTime: slotStartTime,
+      endTime: slotEndTime,
+      breakAfterMinutes: 0,
+      status: 'Booked',
+      appointmentId: null
+    });
+
+    // Giá với promotion (nếu có) chỉ để lưu price info, không cần payment hold
+    const promotionData = await calculateServicePrice(serviceId, service.price);
+    const finalPrice = promotionData.finalPrice;
+    const originalPrice = promotionData.originalPrice;
+
+    // Tạo appointment: trạng thái Approved (bệnh nhân đã đến quầy), mode Offline
+    const newAppointment = await Appointment.create({
+      patientUserId: staffUserId,       // Người tạo (staff)
+      customerId: newCustomer._id,      // Bệnh nhân vãng lai
+      doctorUserId,
+      serviceId,
+      timeslotId: newTimeslot._id,
+      status: 'Approved',
+      type: appointmentType,
+      mode: appointmentMode,
+      notes: notes || null,
+      bookedByUserId: staffUserId,
+      appointmentFor: 'other',
+      promotionId: promotionData.promotionInfo?.promotionId || null,
+      originalPrice,
+      finalPrice,
+      discountAmount: promotionData.discountAmount
+    });
+
+    // Link timeslot -> appointment
+    await Timeslot.findByIdAndUpdate(newTimeslot._id, {
+      appointmentId: newAppointment._id,
+      status: 'Booked'
+    });
+
+    // Populate trả về
+    const populated = await Appointment.findById(newAppointment._id)
+      .populate('doctorUserId', 'fullName email')
+      .populate('serviceId', 'serviceName price durationMinutes category')
+      .populate('timeslotId', 'startTime endTime')
+      .populate('customerId', 'fullName email phoneNumber')
+      .populate('patientUserId', 'fullName email');
+
+    return {
+      success: true,
+      message: 'Tạo lịch hẹn trực tiếp thành công',
+      data: {
+        appointmentId: String(populated._id),
+        status: populated.status,
+        type: populated.type,
+        mode: populated.mode,
+        doctor: populated.doctorUserId?.fullName,
+        service: populated.serviceId?.serviceName,
+        startTime: populated.timeslotId?.startTime,
+        endTime: populated.timeslotId?.endTime,
+        patientName: populated.customerId?.fullName,
+        requirePayment: false
+      }
+    };
   }
 
   async reviewAppointment(appointmentId, staffUserId, action, cancelReason = null) {
@@ -1003,7 +1167,33 @@ class AppointmentService {
   async getUserAppointments(userId, options = {}) {
     try {
       // Build query
-      const query = { patientUserId: userId };
+      const query = {};
+
+      // ⭐ Bao phủ cả 2 trường hợp:
+      // 1) Ca do chính user đặt → match theo patientUserId
+      // 2) Ca Walk-in do staff tạo trước khi user đăng ký, nhưng email trùng → match theo customerId có cùng email
+      const User = require('../models/user.model');
+      const Customer = require('../models/customer.model');
+
+      const user = await User.findById(userId).select('email').lean();
+      const userEmail = user?.email || null;
+
+      let emailCustomerIds = [];
+      if (userEmail) {
+        const customers = await Customer.find({ email: userEmail })
+          .select('_id')
+          .lean();
+        emailCustomerIds = customers.map(c => c._id);
+      }
+
+      if (emailCustomerIds.length > 0) {
+        query.$or = [
+          { patientUserId: userId },
+          { customerId: { $in: emailCustomerIds } },
+        ];
+      } else {
+        query.patientUserId = userId;
+      }
 
       console.log('🔍 [getUserAppointments] Query với userId:', userId);
 

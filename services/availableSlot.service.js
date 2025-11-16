@@ -1536,6 +1536,12 @@ class AvailableSlotService {
     const searchDateStr = searchDate.toISOString().split('T')[0]; // yyyy-mm-dd
     const isToday = todayDateStr === searchDateStr;
     
+    // Helper function: Kiểm tra xem shift đã qua thời gian làm việc chưa (chỉ cho ngày hôm nay)
+    const isShiftPassed = (shiftStart, shiftEnd) => {
+      if (!isToday) return false; // Chỉ check cho ngày hôm nay
+      return now.getTime() > shiftEnd.getTime();
+    };
+    
     // Helper function: Filter và adjust gaps theo thời gian thực + service duration (KHÔNG cộng buffer time)
     const filterRealTimeGaps = (gaps) => {
       // Không cộng buffer time nữa - chỉ cần thời gian cho service
@@ -1633,22 +1639,54 @@ class AvailableSlotService {
     morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
     
     if (morningSchedules.length > 0) {
-      // Có schedule buổi sáng - tính available gaps
-      const rawGaps = calculateAvailableGaps(morningStart, morningEnd, bookedSlots);
-      const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
-      
-      scheduleRanges.push({
-        shift: 'Morning',
-        shiftDisplay: 'Buổi sáng',
-        startTime: morningStart.toISOString(),
-        endTime: morningEnd.toISOString(),
-        availableGaps: availableGaps.map(gap => ({
-          start: gap.start.toISOString(),
-          end: gap.end.toISOString(),
-          display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
-        })),
-        displayRange: availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ') || 'Đã hết chỗ'
-      });
+      // ⭐ QUAN TRỌNG: Check "Đã qua thời gian làm việc" TRƯỚC khi tính gaps
+      // Nếu đã qua thời gian làm việc, không cần tính gaps nữa
+      if (isShiftPassed(morningStart, morningEnd)) {
+        // Đã qua thời gian làm việc
+        scheduleRanges.push({
+          shift: 'Morning',
+          shiftDisplay: 'Buổi sáng',
+          startTime: morningStart.toISOString(),
+          endTime: morningEnd.toISOString(),
+          availableGaps: [],
+          displayRange: 'Đã qua thời gian làm việc'
+        });
+      } else {
+        // Chưa qua thời gian - tính available gaps
+        const rawGaps = calculateAvailableGaps(morningStart, morningEnd, bookedSlots);
+        const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
+        
+        // ⭐ Phân biệt "Đã hết chỗ" và còn slots
+        let displayMessage = '';
+        if (availableGaps.length === 0) {
+          // Có schedule nhưng hết chỗ (đã book hết hoặc không có gaps)
+          // Kiểm tra xem có phải do đã book hết không
+          if (rawGaps.length === 0) {
+            // Không có gaps ban đầu - có thể là đã book hết
+            displayMessage = 'Đã hết chỗ';
+          } else {
+            // Có gaps ban đầu nhưng bị filter hết - có thể do thời gian thực
+            // Nhưng vì đã check isShiftPassed ở trên, nên đây là do đã book hết
+            displayMessage = 'Đã hết chỗ';
+          }
+        } else {
+          // Còn slots khả dụng
+          displayMessage = availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ');
+        }
+        
+        scheduleRanges.push({
+          shift: 'Morning',
+          shiftDisplay: 'Buổi sáng',
+          startTime: morningStart.toISOString(),
+          endTime: morningEnd.toISOString(),
+          availableGaps: availableGaps.map(gap => ({
+            start: gap.start.toISOString(),
+            end: gap.end.toISOString(),
+            display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
+          })),
+          displayRange: displayMessage
+        });
+      }
     } else {
       // Không có schedule buổi sáng - trả về "Đã hết chỗ"
       scheduleRanges.push({
@@ -1671,22 +1709,54 @@ class AvailableSlotService {
     afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
     
     if (afternoonSchedules.length > 0) {
-      // Có schedule buổi chiều - tính available gaps
-      const rawGaps = calculateAvailableGaps(afternoonStart, afternoonEnd, bookedSlots);
-      const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
-      
-      scheduleRanges.push({
-        shift: 'Afternoon',
-        shiftDisplay: 'Buổi chiều',
-        startTime: afternoonStart.toISOString(),
-        endTime: afternoonEnd.toISOString(),
-        availableGaps: availableGaps.map(gap => ({
-          start: gap.start.toISOString(),
-          end: gap.end.toISOString(),
-          display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
-        })),
-        displayRange: availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ') || 'Đã hết chỗ'
-      });
+      // ⭐ QUAN TRỌNG: Check "Đã qua thời gian làm việc" TRƯỚC khi tính gaps
+      // Nếu đã qua thời gian làm việc, không cần tính gaps nữa
+      if (isShiftPassed(afternoonStart, afternoonEnd)) {
+        // Đã qua thời gian làm việc
+        scheduleRanges.push({
+          shift: 'Afternoon',
+          shiftDisplay: 'Buổi chiều',
+          startTime: afternoonStart.toISOString(),
+          endTime: afternoonEnd.toISOString(),
+          availableGaps: [],
+          displayRange: 'Đã qua thời gian làm việc'
+        });
+      } else {
+        // Chưa qua thời gian - tính available gaps
+        const rawGaps = calculateAvailableGaps(afternoonStart, afternoonEnd, bookedSlots);
+        const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
+        
+        // ⭐ Phân biệt "Đã hết chỗ" và còn slots
+        let displayMessage = '';
+        if (availableGaps.length === 0) {
+          // Có schedule nhưng hết chỗ (đã book hết hoặc không có gaps)
+          // Kiểm tra xem có phải do đã book hết không
+          if (rawGaps.length === 0) {
+            // Không có gaps ban đầu - có thể là đã book hết
+            displayMessage = 'Đã hết chỗ';
+          } else {
+            // Có gaps ban đầu nhưng bị filter hết - có thể do thời gian thực
+            // Nhưng vì đã check isShiftPassed ở trên, nên đây là do đã book hết
+            displayMessage = 'Đã hết chỗ';
+          }
+        } else {
+          // Còn slots khả dụng
+          displayMessage = availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ');
+        }
+        
+        scheduleRanges.push({
+          shift: 'Afternoon',
+          shiftDisplay: 'Buổi chiều',
+          startTime: afternoonStart.toISOString(),
+          endTime: afternoonEnd.toISOString(),
+          availableGaps: availableGaps.map(gap => ({
+            start: gap.start.toISOString(),
+            end: gap.end.toISOString(),
+            display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
+          })),
+          displayRange: displayMessage
+        });
+      }
     } else {
       // Không có schedule buổi chiều - trả về "Đã hết chỗ"
       scheduleRanges.push({

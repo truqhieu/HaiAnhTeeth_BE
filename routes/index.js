@@ -28,6 +28,8 @@ const consultationInformationRoutes = require('./consultationInformation.route')
 // --- ROUTES ---
 router.use('/auth', userRoutes);
 router.use('/admin', adminRoutes);
+// Mount service routes for both public (/services) and manager (/manager/services)
+router.use('/', serviceRoutes);
 router.use('/manager', serviceRoutes);
 router.use('/manager', clinicRoutes);
 router.use('/manager', scheduleRoute);

@@ -2,6 +2,7 @@ const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
 const Patient = require('../models/patient.model');
 const MedicalRecord = require('../models/medicalRecord.model');
+const Customer = require('../models/customer.model');
 const leaveRequestService = require('./leaveRequest.service');
 
 class DoctorService {
@@ -150,24 +151,25 @@ class DoctorService {
     // Format response thành array dạng bảng
     return appointments.map(appointment => {
       const timeslot = appointment.timeslotId;
-      const patient = appointment.patientUserId || appointment.customerId;
+      // Ưu tiên customerId (bệnh nhân vãng lai do staff tạo) rồi mới tới patientUserId
+      const patient = appointment.customerId || appointment.patientUserId;
       const medicalRecordStatus = medicalRecordStatusMap[appointment._id.toString()] || null;
 
       return {
         appointmentId: appointment._id,
-        serviceName: appointment.serviceId?.serviceName || 'N/A',
-        patientName: patient?.fullName || 'N/A',
-        appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'N/A',
+        serviceName: appointment.serviceId?.serviceName || 'Chưa có thông tin',
+        patientName: patient?.fullName || 'Chưa có thông tin',
+        appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'Chưa có thông tin',
         startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {
           hour: '2-digit',
           minute: '2-digit',
           timeZone: 'Asia/Ho_Chi_Minh'
-        }) : 'N/A',
+        }) : 'Chưa có thông tin',
         endTime: timeslot?.endTime ? new Date(timeslot.endTime).toLocaleTimeString('vi-VN', {
           hour: '2-digit',
           minute: '2-digit',
           timeZone: 'Asia/Ho_Chi_Minh'
-        }) : 'N/A',
+        }) : 'Chưa có thông tin',
         type: appointment.type,
         status: appointment.status,
         mode: appointment.mode,
@@ -216,31 +218,31 @@ class DoctorService {
       throw new Error('Bạn không có quyền xem lịch hẹn này');
     }
 
-    // Lấy thông tin bệnh nhân (từ Patient hoặc Customer)
-    const patientInfo = appointment.patientUserId || appointment.customerId;
+    // Lấy thông tin bệnh nhân: ưu tiên Customer nếu đặt cho người thân khác
+    const patientInfo = appointment.customerId || appointment.patientUserId;
     const timeslot = appointment.timeslotId;
 
     return {
       appointmentId: appointment._id,
-      patientId: patientInfo?._id || 'N/A',
-      patientName: patientInfo?.fullName || 'N/A',
-      patientEmail: patientInfo?.email || 'N/A',
-      serviceName: appointment.serviceId?.serviceName || 'N/A',
+      patientId: patientInfo?._id || 'Chưa có thông tin',
+      patientName: patientInfo?.fullName || 'Chưa có thông tin',
+      patientEmail: patientInfo?.email || 'Chưa có thông tin',
+      serviceName: appointment.serviceId?.serviceName || 'Chưa có thông tin',
       serviceDescription: appointment.serviceId?.description || '',
       type: appointment.type,
       status: appointment.status,
       mode: appointment.mode,
-      appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'N/A',
+      appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'Chưa có thông tin',
       startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
-      }) : 'N/A',
+      }) : 'Chưa có thông tin',
       endTime: timeslot?.endTime ? new Date(timeslot.endTime).toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
-      }) : 'N/A'
+      }) : 'Chưa có thông tin'
     };
   }
 
@@ -248,20 +250,34 @@ class DoctorService {
    * Lấy chi tiết thông tin bệnh nhân
    */
   async getPatientDetail(patientId) {
-    // Lấy thông tin từ User model (patientId là userId)
+    // 1) Thử coi đây là Customer (đặt cho người thân khác)
+    const customer = await Customer.findById(patientId)
+      .select('fullName email phoneNumber dob gender address')
+      .lean();
+    if (customer) {
+      return {
+        patientId: customer._id,
+        fullName: customer.fullName,
+        email: customer.email || 'Trống',
+        phoneNumber: customer.phoneNumber || 'Trống',
+        dateOfBirth: customer.dob || 'Trống',
+        gender: customer.gender || 'Trống',
+        address: customer.address || 'Trống',
+        status: 'N/A',
+        emergencyContact: 'Trống'
+      };
+    }
+
+    // 2) Nếu không phải Customer, coi là User (đặt cho bản thân)
     const user = await User.findById(patientId)
       .select('fullName email phoneNumber dob gender address status')
       .lean();
-
     if (!user) {
       throw new Error('Không tìm thấy bệnh nhân');
     }
-
-    // Lấy thông tin từ Patient model nếu có
     const patientRecord = await Patient.findOne({ patientUserId: patientId })
       .select('emergencyContact lastVisitDate')
       .lean();
-
     return {
       patientId: user._id,
       fullName: user.fullName,

@@ -188,6 +188,57 @@ const createConsultationAppointment = async (req, res) => {
   }
 };
 
+// ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
+const createWalkInAppointment = async (req, res) => {
+  try {
+    const {
+      fullName,
+      email,
+      phoneNumber,
+      serviceId,
+      doctorUserId,
+      doctorScheduleId,
+      selectedSlot,
+      notes
+    } = req.body;
+
+    // Yêu cầu đăng nhập (Staff/Manager)
+    const staffUserId = req.user?.userId;
+    if (!staffUserId) {
+      return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
+    }
+
+    // Validate
+    if (!fullName || !email || !phoneNumber) {
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập họ tên, email, số điện thoại' });
+    }
+    if (!serviceId || !doctorUserId || !doctorScheduleId || !selectedSlot?.startTime || !selectedSlot?.endTime) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin dịch vụ/bác sĩ/lịch làm việc/khung giờ' });
+    }
+
+    const result = await appointmentService.createWalkInAppointment({
+      staffUserId,
+      fullName,
+      email,
+      phoneNumber,
+      serviceId,
+      doctorUserId,
+      doctorScheduleId,
+      selectedSlot,
+      notes
+    });
+
+    return res.status(201).json(result);
+  } catch (error) {
+    console.error('❌ Error in createWalkInAppointment:', error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Lỗi khi tạo lịch hẹn trực tiếp',
+      error: error.message
+    });
+  }
+};
+
 const reviewAppointment = async (req, res) => {
   try {
     const { appointmentId, action, cancelReason } = req.body;
@@ -1392,6 +1443,7 @@ const getMyRelatives = async (req, res) => {
 
 module.exports = {
   createConsultationAppointment,
+  createWalkInAppointment,
   reviewAppointment,
   getPendingAppointments,
   getAllAppointments,

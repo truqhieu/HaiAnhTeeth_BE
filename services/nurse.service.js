@@ -1,6 +1,7 @@
 const Appointment = require('../models/appointment.model');
 const User = require('../models/user.model');
 const Patient = require('../models/patient.model');
+const Customer = require('../models/customer.model');
 const MedicalRecord = require('../models/medicalRecord.model');
 const Doctor = require('../models/doctor.model');
 
@@ -113,7 +114,7 @@ class NurseService {
     // Format response thành array dạng bảng
     return appointments.map(appointment => {
       const timeslot = appointment.timeslotId;
-      const patient = appointment.patientUserId || appointment.customerId;
+      const patient = appointment.customerId || appointment.patientUserId;
       
       // ⭐ Lấy doctorUserId và doctorStatus
       let doctorUserId = null;
@@ -173,8 +174,8 @@ class NurseService {
       throw new Error('Không tìm thấy lịch hẹn');
     }
 
-    // Lấy thông tin bệnh nhân (từ Patient hoặc Customer)
-    const patientInfo = appointment.patientUserId || appointment.customerId;
+    // Lấy thông tin bệnh nhân: ưu tiên Customer nếu đặt cho người thân khác
+    const patientInfo = appointment.customerId || appointment.patientUserId;
     const timeslot = appointment.timeslotId;
 
     return {
@@ -197,20 +198,34 @@ class NurseService {
    * Lấy chi tiết thông tin bệnh nhân
    */
   async getPatientDetail(patientId) {
-    // Lấy thông tin từ User model (patientId là userId)
+    // 1) Thử coi đây là Customer (đặt cho người thân khác)
+    const customer = await Customer.findById(patientId)
+      .select('fullName email phoneNumber dob gender address')
+      .lean();
+    if (customer) {
+      return {
+        fullName: customer.fullName,
+        email: customer.email || 'N/A',
+        phoneNumber: customer.phoneNumber || 'N/A',
+        dateOfBirth: customer.dob || 'N/A',
+        gender: customer.gender || 'N/A',
+        address: customer.address || 'N/A',
+        status: 'N/A',
+        emergencyContact: 'N/A',
+        lastVisitDate: 'N/A'
+      };
+    }
+
+    // 2) Nếu không phải Customer, coi là User (đặt cho bản thân)
     const user = await User.findById(patientId)
       .select('fullName email phoneNumber dob gender address status')
       .lean();
-
     if (!user) {
       throw new Error('Không tìm thấy bệnh nhân');
     }
-
-    // Lấy thông tin từ Patient model nếu có
     const patientRecord = await Patient.findOne({ patientUserId: patientId })
       .select('emergencyContact lastVisitDate')
       .lean();
-
     return {
       fullName: user.fullName,
       email: user.email,

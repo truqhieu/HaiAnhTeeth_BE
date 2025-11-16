@@ -1,6 +1,7 @@
 const MedicalRecord = require('../models/medicalRecord.model');
 const Appointment = require('../models/appointment.model');
 const Service = require('../models/service.model');
+const { calculateServicesPrices } = require('../utils/promotionHelper');
 
 class MedicalRecordService {
 
@@ -80,7 +81,8 @@ class MedicalRecordService {
         .populate({ path: 'additionalServiceIds', select: 'serviceName price' });
     }
 
-    const patient = appointment.patientUserId || appointment.customerId || null;
+    // Ưu tiên thông tin người thân (customer) nếu lịch hẹn đặt cho "người thân khác"
+    const patient = appointment.customerId || appointment.patientUserId || null;
     const patientName = patient?.fullName || 'N/A';
     const patientAge = record.patientAge ?? this._calcAge(patient?.dob);
     const address = record.address || patient?.address || '';
@@ -95,13 +97,22 @@ class MedicalRecordService {
     let additionalServices = [];
     
     if (record?.additionalServiceIds && Array.isArray(record.additionalServiceIds)) {
-      additionalServices = record.additionalServiceIds
-        .filter(s => s && s._id) // Filter out null/undefined/invalid entries
-        .map((s) => ({
-          _id: s._id.toString(),
-          serviceName: s.serviceName || '',
-          price: s.price || 0,
-        }));
+      const mapped = record.additionalServiceIds
+        .filter(s => s && s._id)
+        .map((s) => ({ _id: s._id.toString(), serviceName: s.serviceName || '', price: s.price || 0 }));
+      // Tính khuyến mãi cho các dịch vụ đã chọn (nếu có)
+      const enriched = await calculateServicesPrices(mapped.map(m => ({ _id: m._id, price: m.price })));
+      // Merge lại để giữ serviceName
+      additionalServices = mapped.map(m => {
+        const promo = enriched.find(e => e._id?.toString?.() === m._id);
+        return {
+          _id: m._id,
+          serviceName: m.serviceName,
+          price: m.price,
+          finalPrice: promo?.finalPrice ?? m.price,
+          discountAmount: promo?.discountAmount ?? 0,
+        };
+      });
     }
     
     console.log('🔍 [getOrCreateMedicalRecord] Appointment serviceId:', appointment.serviceId);
@@ -124,7 +135,7 @@ class MedicalRecordService {
       doctorLockReason = nurseLockReason;
     } else if (isRecordFinalized) {
       nurseLockReason = 'Hồ sơ đã được bác sĩ duyệt, điều dưỡng không thể chỉnh sửa.';
-      doctorLockReason = 'Hồ sơ đã được duyệt. Nếu cần chỉnh sửa, vui lòng liên hệ quản trị.';
+      doctorLockReason = 'Hồ sơ đã được duyệt.';
     }
 
     return {
@@ -241,11 +252,29 @@ class MedicalRecordService {
    * Get active services for doctor
    */
   async getActiveServicesForDoctor() {
+    // Lấy danh sách dịch vụ Active
     const services = await Service.find({ status: 'Active' })
       .select('_id serviceName price category isPrepaid durationMinutes')
-      .sort({ serviceName: 1 });
+      .sort({ serviceName: 1 })
+      .lean();
 
-    return services;
+    // Tính giá sau khuyến mãi (nếu có), đồng bộ cách hiển thị như ở phần đặt lịch
+    const servicesWithPromotion = await calculateServicesPrices(services);
+
+    // Chuẩn hóa response giữ nguyên các trường cũ và thêm thông tin giảm giá
+    return servicesWithPromotion.map(s => ({
+      _id: s._id,
+      serviceName: s.serviceName,
+      price: s.price,                  // giá gốc
+      category: s.category,
+      isPrepaid: s.isPrepaid,
+      durationMinutes: s.durationMinutes,
+      // Thêm metadata khuyến mãi
+      finalPrice: s.finalPrice,        // giá sau giảm
+      discountAmount: s.discountAmount || 0,
+      hasPromotion: !!s.hasPromotion,
+      promotionInfo: s.promotionInfo || null,
+    }));
   }
 
   /**
@@ -420,8 +449,18 @@ class MedicalRecordService {
     // Kiểm tra quyền: Patient chỉ có thể xem medical record của chính mình
     const isPatientOwner = appointment.patientUserId?._id?.toString() === patientUserId.toString();
     const isCustomerOwner = appointment.customerId?._id?.toString() === patientUserId.toString();
-    
+
+    // ⭐ Bao phủ trường hợp ca Walk-in trước khi user đăng ký: so khớp theo email
+    let isEmailOwner = false;
     if (!isPatientOwner && !isCustomerOwner) {
+      const User = require('../models/user.model');
+      const user = await User.findById(patientUserId).select('email').lean();
+      if (user?.email && appointment.customerId?.email) {
+        isEmailOwner = user.email.toLowerCase() === appointment.customerId.email.toLowerCase();
+      }
+    }
+    
+    if (!isPatientOwner && !isCustomerOwner && !isEmailOwner) {
       throw new Error('Bạn không có quyền xem hồ sơ khám bệnh này');
     }
 
@@ -443,7 +482,8 @@ class MedicalRecordService {
       throw new Error('Hồ sơ khám bệnh chưa được bác sĩ duyệt');
     }
 
-    const patient = appointment.patientUserId || appointment.customerId || null;
+    // Ưu tiên customerId (bệnh nhân vãng lai / walk-in) rồi mới tới patientUserId
+    const patient = appointment.customerId || appointment.patientUserId || null;
     const patientName = patient?.fullName || 'N/A';
     const patientAge = record.patientAge ?? this._calcAge(patient?.dob);
     const address = record.address || patient?.address || '';
@@ -511,12 +551,32 @@ class MedicalRecordService {
     console.log(`📋 [getPatientMedicalRecordsList] Lấy danh sách hồ sơ cho patient: ${patientUserId}`);
 
     // Tìm tất cả medical records của patient (có thể là patientUserId hoặc customerId)
+    // Bao phủ cả case Walk-in trước khi user đăng ký: match theo email của Customer
+    const User = require('../models/user.model');
+    const Customer = require('../models/customer.model');
+
+    const user = await User.findById(patientUserId).select('email').lean();
+    const userEmail = user?.email || null;
+
+    let emailCustomerIds = [];
+    if (userEmail) {
+      const customers = await Customer.find({ email: userEmail })
+        .select('_id')
+        .lean();
+      emailCustomerIds = customers.map(c => c._id);
+    }
+
+    const baseOr = [
+      { patientUserId: patientUserId },
+      { customerId: patientUserId }
+    ];
+    if (emailCustomerIds.length > 0) {
+      baseOr.push({ customerId: { $in: emailCustomerIds } });
+    }
+
     // Chỉ lấy các records đã được doctor duyệt (status = "Finalized")
     const records = await MedicalRecord.find({
-      $or: [
-        { patientUserId: patientUserId },
-        { customerId: patientUserId }
-      ],
+      $or: baseOr,
       // Chỉ lấy các records đã được doctor duyệt
       status: 'Finalized'
     })

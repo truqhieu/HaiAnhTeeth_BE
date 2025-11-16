@@ -118,11 +118,11 @@ class ScheduleService {
   }
 
   /**
-   * Lấy danh sách tất cả bác sĩ với working hours
+   * Lấy danh sách tất cả bác sĩ với working hours (chỉ lấy bác sĩ Active)
    */
   async getDoctorsWithWorkingHours() {
-    // Lấy tất cả bác sĩ với workingHours và workingHoursUpdatedAt
-    const doctors = await User.find({ role: 'Doctor' })
+    // Lấy tất cả bác sĩ Active với workingHours và workingHoursUpdatedAt
+    const doctors = await User.find({ role: 'Doctor', status: 'Active' })
       .select('_id fullName email workingHours workingHoursUpdatedAt')
       .sort({ fullName: 1 });
 

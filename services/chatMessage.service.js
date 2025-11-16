@@ -9,8 +9,22 @@ class ChatMessageService {
   async getDoctorsForPatient(patientId) {
     try {
       // Tìm tất cả appointments của patient có status Completed hoặc Finalized
+      // Bao phủ cả case Walk-in: match theo email giữa User và Customer
+      const user = await User.findById(patientId).select('email').lean();
+      const Customer = require('../models/customer.model');
+      let emailCustomerIds = [];
+      if (user?.email) {
+        const customers = await Customer.find({ email: user.email }).select('_id').lean();
+        emailCustomerIds = customers.map(c => c._id);
+      }
+
+      const orConds = [{ patientUserId: patientId }];
+      if (emailCustomerIds.length > 0) {
+        orConds.push({ customerId: { $in: emailCustomerIds } });
+      }
+
       const appointments = await Appointment.find({
-        patientUserId: patientId,
+        $or: orConds,
         status: { $in: ['Completed', 'Finalized'] }
       })
 .populate('doctorUserId', '_id fullName email specialization')
@@ -65,7 +79,10 @@ class ChatMessageService {
       }
 
       // Validate appointment thuộc về patient và doctor
-      const appointment = await Appointment.findById(appointmentId);
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('customerId', 'email')
+        .populate('patientUserId', '_id')
+        .populate('doctorUserId', '_id');
       if (!appointment) {
         throw new Error('Không tìm thấy ca khám');
       }
@@ -81,10 +98,30 @@ class ChatMessageService {
         throw new Error('Bác sĩ không thuộc ca khám này');
       }
 
+      // Xác định patient User (bao phủ Walk-in)
+      const sender = await User.findById(senderId).select('role email').lean();
+      let patientUserIdForMessage = appointment.patientUserId;
+
+      if (sender?.role === 'Patient') {
+        // Kiểm tra quyền sở hữu: là patient của appointment hoặc trùng email với customerId
+        const isPatientOwner = appointment.patientUserId?._id?.toString() === senderId.toString();
+        let isEmailOwner = false;
+        if (appointment.customerId && sender?.email) {
+          const customerEmail = appointment.customerId.email || null;
+          if (customerEmail) {
+            isEmailOwner = customerEmail.toLowerCase() === sender.email.toLowerCase();
+          }
+        }
+        if (!isPatientOwner && !isEmailOwner) {
+          throw new Error('Bạn không có quyền gửi tin nhắn cho ca khám này');
+        }
+        patientUserIdForMessage = senderId; // luôn gắn theo user hiện tại
+      }
+
       // Tạo message
 const message = new ChatMessage({
   appointmentId,
-  patientUserId: appointment.patientUserId, 
+  patientUserId: patientUserIdForMessage, 
   doctorUserId: appointment.replacedDoctorUserId || appointment.doctorUserId, 
   senderId,
   receiverId,
@@ -115,8 +152,12 @@ const message = new ChatMessage({
 
       if (role === 'Patient') {
         // Lấy tất cả conversations của patient, group theo appointment và doctor
+        // Tin nhắn có thể được gửi bởi patient (senderId=userId) hoặc doctor nhưng thuộc patientUserId=userId
         const messages = await ChatMessage.find({
-          senderId: userId
+          $or: [
+            { senderId: userId },
+            { patientUserId: userId }
+          ]
         })
           .populate('receiverId', 'fullName email')
           .populate('appointmentId', 'appointmentDate status')
@@ -196,7 +237,8 @@ const message = new ChatMessage({
   try {
     // Validate user có quyền xem messages của appointment này
     const appointment = await Appointment.findById(appointmentId)
-      .populate('patientUserId', 'fullName email phone')
+      .populate('patientUserId', 'fullName email phone address')
+      .populate('customerId', 'fullName email phoneNumber address')
       .populate('doctorUserId', 'fullName email specialization');
     
     if (!appointment) {
@@ -205,7 +247,13 @@ const message = new ChatMessage({
 
     // Kiểm tra quyền truy cập
     if (role === 'Patient') {
-      if (appointment.patientUserId._id.toString() !== userId.toString()) {
+      const user = await User.findById(userId).select('email').lean();
+      const isPatientOwner = appointment.patientUserId?._id?.toString() === userId.toString();
+      let isEmailOwner = false;
+      if (appointment.customerId && appointment.customerId.email && user?.email) {
+        isEmailOwner = appointment.customerId.email.toLowerCase() === user.email.toLowerCase();
+      }
+      if (!isPatientOwner && !isEmailOwner) {
         throw new Error('Bạn không có quyền xem tin nhắn này');
       }
     } else if (role === 'Doctor') {
@@ -238,14 +286,19 @@ const message = new ChatMessage({
         appointmentId: medicalRecord.appointmentId,
         
         // Thông tin bệnh nhân
-        patient: {
-          _id: appointment.patientUserId._id,
-          fullName: appointment.patientUserId.fullName,
-          email: appointment.patientUserId.email,
-          phone: appointment.patientUserId.phone,
-          age: medicalRecord.patientAge,
-          address: medicalRecord.address
-        },
+        patient: (() => {
+          // Ưu tiên thông tin từ medicalRecord/display nếu có; fallback appointment
+          // Với Walk-in, appointment.customerId sẽ là nguồn chính
+          const patientFromApt = appointment.customerId || appointment.patientUserId || {};
+          return {
+            _id: patientFromApt._id,
+            fullName: patientFromApt.fullName,
+            email: patientFromApt.email,
+            phone: patientFromApt.phone || patientFromApt.phoneNumber,
+            age: medicalRecord.patientAge,
+            address: medicalRecord.address
+          };
+        })(),
         
         // Thông tin bác sĩ
         doctor: {
