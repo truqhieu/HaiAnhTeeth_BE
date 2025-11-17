@@ -17,6 +17,15 @@ cron.schedule('*/1 * * * *', async () => {  // test mỗi phút
         );
 
 
+        const expiredList = await Promotion.find({ endDate: { $lt: now } });
+        const expiredIds = expiredList.map(p => p._id);
+        // Xóa tất cả promotionService của các promotion hết hạn
+        const deleteExpiredService = await PromotionService.deleteMany({
+        promotionId: { $in: expiredIds }
+        });
+
+
+
         // Active promotion
         const active = await Promotion.updateMany(
             {

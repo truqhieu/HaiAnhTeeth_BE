@@ -83,9 +83,9 @@ class AdminService {
       age--;
     }
 
-    if (age < 18) {
-      throw new Error('Người dùng phải đủ 18 tuổi trở lên');
-    }
+    // if (age < 18) {
+    //   throw new Error('Người dùng phải đủ 18 tuổi trở lên');
+    // }
 
     // Validate role
     if (!role || !ROLE_ACCOUNT.includes(role)) {
@@ -128,6 +128,9 @@ class AdminService {
 
     // Tạo User account
     const newAccount = new User({ fullName, email, passwordHash, dob, address, role, phoneNumber, status: 'Active' });
+    if(newAccount.role === 'Doctor' && age <= 27) throw new Error('Bác sĩ phải đủ 27 tuổi')
+    if(newAccount.role === 'Nurse' && age <= 22) throw new Error('Điều dưỡng phải đủ 22 tuổi')
+    if(newAccount.role === 'Staff' && age <= 18) throw new Error('Lễ tân phải đủ 18 tuổi')
     await newAccount.save();
 
     // Nếu role là Doctor, tạo record trong Doctor collection

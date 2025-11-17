@@ -326,6 +326,47 @@ class UserService {
     const updatedUser = await User.findById(user._id);
     return updatedUser;
   }
+
+async changePassword(userId, data) {
+  const { oldPassword, newPassword, reNewPassword } = data;
+
+  // 1. Kiểm tra user tồn tại
+  const user = await User.findById(userId);
+  if (!user) throw new Error("Vui lòng đăng nhập");
+
+  // 2. So sánh mật khẩu cũ
+  const isMatch = await bcrypt.compare(oldPassword, user.passwordHash);
+  if (!isMatch) throw new Error("Mật khẩu hiện tại không đúng, vui lòng nhập lại");
+
+  // 3. Kiểm tra mật khẩu mới trùng xác nhận
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length === 0) {
+      throw new Error('Mật khẩu mới không được để trống');
+    }
+
+    const cleanPassword = newPassword.trim();
+
+    if (!/^(?=.*[A-Z])(?=(?:.*\d){2,})(?=.*[!@#$%^&*()_+{}\[\]:;"'<>,.?/~`-]).+$/.test(cleanPassword)) {
+      throw new Error('Mật khẩu phải chứa ít nhất 1 chữ hoa, 2 chữ số và 1 kí tự đặc biệt');
+    }
+
+    if (cleanPassword.length < 4) {
+      throw new Error('Độ dài mật khẩu không hợp lệ (tối thiểu 4 ký tự)');
+    }
+      if (newPassword !== reNewPassword)throw new Error("Mật khẩu mới không trùng nhau");
+
+  // 4. Hash mật khẩu mới
+  const newHashedPassword = await bcrypt.hash(newPassword, 12);
+
+  // 5. Cập nhật vào DB
+  const updatePassword = await User.findByIdAndUpdate(
+    userId,
+    { passwordHash: newHashedPassword },
+    { new: true }
+  );
+
+  return updatePassword;
+}
+
 }
 
 module.exports = new UserService();

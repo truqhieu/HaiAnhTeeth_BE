@@ -310,7 +310,7 @@ const message = new ChatMessage({
         
         // Thông tin ca khám
         appointment: {
-          date: appointment.appointmentDate,
+          date: appointment.updatedAt,
           status: appointment.status
         },
         
@@ -318,7 +318,7 @@ const message = new ChatMessage({
         medicalInfo: {
           diagnosis: medicalRecord.diagnosis || 'Chưa có chẩn đoán',
           conclusion: medicalRecord.conclusion || 'Không có',
-          nurseNote: medicalRecord.nurseNote || 'Không có ghi chú',
+          // nurseNote: medicalRecord.nurseNote || 'Không có ghi chú',
         },
         
         // Đơn thuốc
@@ -330,7 +330,7 @@ const message = new ChatMessage({
 
         
         // Dịch vụ bổ sung
-        additionalServices: medicalRecord.additionalServiceIds || [],
+        // additionalServices: medicalRecord.additionalServiceIds || [],
         
         // Theo dõi sau
         followUp: {

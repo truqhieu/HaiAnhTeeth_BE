@@ -95,21 +95,21 @@ const updateDevice = async (req, res) => {
   }
 };
 
-const deleteDevice = async (req, res) => {
-  try {
-    await deviceService.deleteDevice(req.params.id);
+// const deleteDevice = async (req, res) => {
+//   try {
+//     await deviceService.deleteDevice(req.params.id);
 
-    res.status(200).json({
-      success: true,
-      message: 'Xóa thiết bị khỏi phòng khám thành công'
-    });
-  } catch (error) {
-    console.log('Lỗi khi xóa thiết bị', error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Đã có lỗi khi xóa thiết bị khỏi phòng khám'
-    });
-  }
-};
+//     res.status(200).json({
+//       success: true,
+//       message: 'Xóa thiết bị khỏi phòng khám thành công'
+//     });
+//   } catch (error) {
+//     console.log('Lỗi khi xóa thiết bị', error);
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || 'Đã có lỗi khi xóa thiết bị khỏi phòng khám'
+//     });
+//   }
+// };
 
-module.exports = { createDevice, getAllDevices, viewDetailDevice, updateDevice, deleteDevice };
+module.exports = { createDevice, getAllDevices, viewDetailDevice, updateDevice };

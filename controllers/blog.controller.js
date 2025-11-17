@@ -113,21 +113,21 @@ const updateBlog = async (req, res) => {
     }
 };
 
-const deleteBlog = async (req, res) => {
-  try {
-    await blogService.deleteBlog(req.params.id);
+// const deleteBlog = async (req, res) => {
+//   try {
+//     await blogService.deleteBlog(req.params.id);
 
-    res.status(200).json({
-      success: true,
-      message: 'Xóa blog thành công'
-    });
-  } catch (error) {
-    console.error('Lỗi khi xóa blog:', error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || 'Đã xảy ra lỗi khi xóa blog'
-    });
-  }
-};
+//     res.status(200).json({
+//       success: true,
+//       message: 'Xóa blog thành công'
+//     });
+//   } catch (error) {
+//     console.error('Lỗi khi xóa blog:', error);
+//     return res.status(500).json({
+//       success: false,
+//       message: error.message || 'Đã xảy ra lỗi khi xóa blog'
+//     });
+//   }
+// };
 
-module.exports = { createBlog, getAllBlogs, viewDetailBlogs, updateBlog, deleteBlog };
+module.exports = { createBlog, getAllBlogs, viewDetailBlogs, updateBlog};

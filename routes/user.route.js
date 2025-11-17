@@ -9,7 +9,8 @@ const {
   forgotPassword,
   resetPassword,
   verifyResetPasswordToken,
-  authenticateToken
+  authenticateToken,
+  changePassword
 } = require('../controllers/user.controller');
 
 // Routes công khai (không cần authentication)
@@ -23,4 +24,5 @@ router.post('/reset-password', resetPassword);
 // Routes cần authentication
 router.get('/profile', authenticateToken, getProfile);
 router.patch('/profile', authenticateToken, updateProfile);
+router.patch('/change-password', authenticateToken, changePassword)
 module.exports = router;

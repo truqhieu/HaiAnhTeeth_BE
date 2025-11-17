@@ -1925,6 +1925,9 @@ async getVisitTicketPDF(appointmentId, res) {
     if (!appointment) throw new Error('Không tìm thấy ca khám');
     if (appointment.status !== 'Completed') throw new Error('Ca khám chưa hoàn thành');
 
+    //Lấy thông tin người khác 
+    const customerIn4 = await Customer.findById(appointment.customerId);
+
     // === Lấy hồ sơ khám ===
     const record = await MedicalRecord
       .findOne({ appointmentId })
@@ -2040,7 +2043,7 @@ async getVisitTicketPDF(appointmentId, res) {
       serviceTableBody.push([
         { text: (index + 1).toString(), alignment: 'center' },
         { text: service.serviceName },
-        { text: appointment.doctorUserId?.fullName?.split(' ').pop() || '—' },
+        { text: appointment.doctorUserId?.fullName || '—' },
         { text: formatPrice(service.price), alignment: 'right' },
         { text: formatPrice(service.discount), alignment: 'right' },
         { text: formatPrice(service.total), alignment: 'right', bold: true }
@@ -2059,6 +2062,153 @@ async getVisitTicketPDF(appointmentId, res) {
       : [{ text: 'Không có toa thuốc', italics: true, color: '#888' }];
 
     const docDefinition = {
+      pageSize: 'A4',
+      pageOrientation: 'portrait',
+      pageMargins: [25, 40, 25, 50],
+      defaultStyle: {
+        font: 'Roboto',
+        fontSize: 10,
+        lineHeight: 1.3
+      },
+
+      // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
+      header: {
+        margin: [25, 15, 25, 0],
+        columns: [
+          {
+            text: 'NHA KHOA HẢI ANH',
+            style: 'clinicName',
+            alignment: 'left'
+          },
+          {
+            text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+            fontSize: 8,
+            alignment: 'right',
+            color: '#555'
+          }
+        ]
+      },
+
+      content: [
+        // === TIÊU ĐỀ ===
+        {
+          text: 'PHIẾU KHÁM BỆNH',
+          style: 'header',
+          alignment: 'center',
+          margin: [0, 10, 0, 12]
+        },
+
+        // === MÃ + NGÀY ===
+        {
+          columns: [
+            { text: `Ngày khám: ${new Date(visitTicketData.date).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'left' }
+          ],
+          fontSize: 9,
+          color: '#555',
+          margin: [0, 0, 0, 12]
+        },
+
+        // === THÔNG TIN BỆNH NHÂN ===
+        { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
+        {
+          style: 'infoTable',
+          table: {
+            widths: ['27%', '71%'],
+            body: [
+              ['Họ tên', customerIn4 ? customerIn4.fullName : '-'],
+              ['Giới tính', '-'],
+              ['Tuổi','-'],
+              ['Điện thoại', customerIn4 ? customerIn4.phoneNumber : '—'],
+              ['Địa chỉ', '—']
+            ]
+          },
+          layout: 'lightHorizontalLines'
+        },
+
+        '\n',
+
+        // === BẢNG DỊCH VỤ + GIÁ ===
+        {
+          table: {
+            headerRows: 1,
+            widths: ['5%', '23%', '12%', '19%', '19%', '20%'],
+            body: serviceTableBody
+          },
+          layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: () => 0.5,
+            hLineColor: () => '#aaa',
+            vLineColor: () => '#aaa'
+          }
+        },
+
+        // === TỔNG TIỀN ===
+        {
+          columns: [
+            {},
+            {
+              width: '50%',
+              table: {
+                widths: ['50%', '45%'],
+                body: [
+                  [{ text: 'Tổng tiền : ', bold: true }, { text: formatPrice(visitTicketData.totalAmount || 0), alignment: 'right', bold: true }]
+                ]
+              },
+              layout: 'noBorders',
+              margin: [0, 8, 0, 0]
+            }
+          ]
+        },
+
+        '\n',
+
+        // === KẾT LUẬN ===
+        { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
+        { text: visitTicketData.diagnosis || '—', margin: [0, 0, 0, 10] },
+
+        // === TOA THUỐC ===
+        { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
+        {
+          stack: prescriptionContent,
+          margin: [0, 0, 0, 10]
+        },
+
+        // === CHỮ KÝ ===
+        {
+          columns: [
+            {
+              width: '40%',
+              stack: [
+                { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                '\n\n\n',
+              ]
+            },
+            {
+              width: '60%',
+              stack: [
+                { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                '\n\n\n',
+              ]
+            }
+          ]
+        }
+      ],
+
+      styles: {
+        clinicName: {
+          fontSize: 13,
+          bold: true,
+          color: '#d32f2f'
+        },
+        header: { fontSize: 18, bold: true, color: '#1a5eaa' },
+        subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
+        tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
+      }
+    };
+
+    const docDefinition1 = {
       pageSize: 'A4',
       pageOrientation: 'portrait',
       pageMargins: [25, 40, 25, 50],
@@ -2205,7 +2355,9 @@ async getVisitTicketPDF(appointmentId, res) {
       }
     };
 
-    const pdfDoc = printer.createPdfKitDocument(docDefinition);
+    
+  
+    const pdfDoc = customerIn4 ? printer.createPdfKitDocument(docDefinition) : printer.createPdfKitDocument(docDefinition1);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename=visit-ticket.pdf');

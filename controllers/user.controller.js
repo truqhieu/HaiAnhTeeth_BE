@@ -626,6 +626,31 @@ const authenticateToken = async (req, res, next) => {
 };
 
 
+const changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword, reNewPassword } = req.body;
+
+    const result = await userService.changePassword(
+      req.user.userId,
+      { oldPassword, newPassword, reNewPassword }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Thay đổi mật khẩu thành công",
+      result,
+    });
+  } catch (error) {
+    console.error("Lỗi cập nhật đổi mật khẩu:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Lỗi server. Vui lòng thử lại sau",
+    });
+  }
+};
+
+
+
 
 module.exports = {
   register,
@@ -637,4 +662,5 @@ module.exports = {
   resetPassword,
   verifyResetPasswordToken,
   authenticateToken,
+  changePassword,
 };

@@ -177,12 +177,12 @@ const getMessages = async (req, res) => {
     }
 
     // Chỉ Patient và Doctor mới có thể xem messages
-    if (!['Patient', 'Doctor'].includes(role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Chỉ bệnh nhân và bác sĩ mới có thể xem tin nhắn'
-      });
-    }
+    // if (!['Patient', 'Doctor'].includes(role)) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Chỉ bệnh nhân và bác sĩ mới có thể xem tin nhắn'
+    //   });
+    // }
 
     const messages = await chatMessageService.getMessagesByAppointment(appointmentId, userId, role);
 
