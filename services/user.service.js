@@ -338,6 +338,8 @@ async changePassword(userId, data) {
   const isMatch = await bcrypt.compare(oldPassword, user.passwordHash);
   if (!isMatch) throw new Error("Mật khẩu hiện tại không đúng, vui lòng nhập lại");
 
+  if(oldPassword === newPassword) throw new Error('Mật khẩu mới phải khác mật khẩu hiện tại')
+
   // 3. Kiểm tra mật khẩu mới trùng xác nhận
     if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length === 0) {
       throw new Error('Mật khẩu mới không được để trống');

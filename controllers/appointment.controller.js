@@ -6,6 +6,8 @@ const Timeslot = require('../models/timeslot.model');
 const PatientRequest = require('../models/patientRequest.model')
 const availableSlotService = require('../services/availableSlot.service');
 const { getActiveServicesForDoctor } = require('../services/medicalRecord.service');
+const User = require('../models/user.model');
+const Doctor = require('../models/doctor.model');
 
 // Helper function to calculate available time range for morning/afternoon shifts
 function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
@@ -1033,7 +1035,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     // Tìm appointment để lấy thông tin dịch vụ
     const appointment = await Appointment.findById(appointmentId)
       .populate('serviceId', 'serviceName durationMinutes')
-      .populate('doctorUserId', 'fullName');
+      .populate('doctorUserId', '_id fullName');
 
     if (!appointment) {
       return res.status(404).json({
@@ -1049,12 +1051,11 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     console.log(`🔍 Looking for doctors available from ${startDateTime.toISOString()} to ${endDateTime.toISOString()}`);
 
     // Lấy tất cả bác sĩ ACTIVE
-    const User = require('../models/user.model');
-    const Doctor = require('../models/doctor.model');
 
     const doctors = await User.find({
       role: 'Doctor',
-      status: 'Active'
+      status: 'Active',
+      _id : {$ne : appointment.doctorUserId._id}
     }).select('_id fullName email');
 
     // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"

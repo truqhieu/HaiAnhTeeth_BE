@@ -111,7 +111,7 @@ class ComplaintService {
           select: 'fullName'
         })
         .select('-__v')
-        .sort({ startDate: sortOrder })
+        .sort({ createdAt: sortOrder })
         .skip(skip)
         .limit(limitNum)
         .lean()

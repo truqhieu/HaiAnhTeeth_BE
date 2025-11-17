@@ -1900,7 +1900,6 @@ async cancelChangeDoctor(appointmentId) {
       //Cập nhật lịch khám của bệnh nhân
       const update = await Appointment.findByIdAndUpdate(
         appointmentId,
-        {status : 'Cancelled'},
         {replacedDoctorUserId : null},
         {new : true},
       )
