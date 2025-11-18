@@ -1190,7 +1190,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       const startHour = startDateTime.getUTCHours() + 7; // Convert to VN time
       const endHour = endDateTime.getUTCHours() + 7;
 
-      const isInMorningShift = startHour >= 8 && endHour <= 12;
+      const isInMorningShift = startHour >= 7 && endHour <= 12;
       const isInAfternoonShift = startHour >= 14 && endHour <= 18;
 
       if (!isInMorningShift && !isInAfternoonShift) {

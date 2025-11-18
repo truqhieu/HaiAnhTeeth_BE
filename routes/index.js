@@ -23,6 +23,7 @@ const promotionRoutes = require('./promotion.route');
 const notificaionRoutes = require('./notification.route')
 const chatMessageRoutes = require('./chatMessage.route')
 const consultationInformationRoutes = require('./consultationInformation.route')
+const introductionRoutes = require('./introduction.route')
 
 
 // --- ROUTES ---
@@ -36,6 +37,7 @@ router.use('/manager', scheduleRoute);
 router.use('/manager', deviceRoutes);
 router.use('/manager', blogRoutes);
 router.use('/manager', promotionRoutes);
+router.use('/manager', introductionRoutes);
 
 router.use('/doctor', doctorRoutes);
 router.use('/nurse', nurseRoutes);

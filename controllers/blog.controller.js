@@ -66,6 +66,41 @@ const getAllBlogs = async (req, res) => {
   }
 };
 
+const getPromotionBlogs = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort = 'desc'
+    } = req.query;
+
+    const result = await blogService.getPromotionBlogs({
+      page,
+      limit,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort
+    }, req.user?.role);
+
+    return res.status(200).json({
+      status: true,
+      ...result
+    });
+  } catch (error) {
+    console.log('Lỗi khi lấy danh sách blog News', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Đã xảy ra lỗi khi lấy danh sách blog News'
+    });
+  }
+};
+
 const viewDetailBlogs = async (req, res) => {
   try {
     const blog = await blogService.getBlogById(req.params.id);
@@ -130,4 +165,4 @@ const updateBlog = async (req, res) => {
 //   }
 // };
 
-module.exports = { createBlog, getAllBlogs, viewDetailBlogs, updateBlog};
+module.exports = { createBlog, getAllBlogs, getPromotionBlogs, viewDetailBlogs, updateBlog };

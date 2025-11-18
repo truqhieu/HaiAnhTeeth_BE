@@ -49,8 +49,8 @@ class BlogService {
       }
 
       const cleanSummary = summary.trim();
-      if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanSummary)) {
-        throw new Error('Mô tả blog không chứa kí tự đặc biệt');
+      if (/[<>]/.test(cleanSummary)) {
+      throw new Error('Mô tả blog không được chứa ký tự < hoặc > để tránh lỗi bảo mật.');
       }
 
       if (cleanSummary.length < 10) {
@@ -106,6 +106,71 @@ class BlogService {
     }
     if (category && CATEGORY.includes(category)) filter.category = category;
     if (status && STATUS.includes(status)) filter.status = status;
+
+    if (search && String(search).trim().length > 0) {
+      const searchKey = String(search).trim();
+      const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(safe, 'i');
+      filter.$or = [
+        { title: { $regex: regex } },
+        { summary: { $regex: regex } },
+      ];
+    }
+
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filter.createdAt.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 9999);
+        filter.createdAt.$lte = end;
+      }
+    }
+
+    const sortOrder = sort === 'asc' ? 1 : -1;
+
+    const [total, blogs] = await Promise.all([
+      Blog.countDocuments(filter),
+      Blog.find(filter)
+        .sort({ createdAt: sortOrder })
+        .skip(skip)
+        .limit(limitNum)
+        .lean()
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      total,
+      totalPages,
+      page: pageNum,
+      limit: limitNum,
+      data: blogs
+    };
+  }
+
+  /**
+   * Lấy danh sách blogs theo thể loại Promotions
+   */
+   async getPromotionBlogs(filters = {}, userRole = null) {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      startDate,
+      endDate,
+      sort = 'desc'
+    } = filters;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { category: 'Promotions', status: 'Published' };
 
     if (search && String(search).trim().length > 0) {
       const searchKey = String(search).trim();
@@ -273,4 +338,3 @@ class BlogService {
 }
 
 module.exports = new BlogService();
-
