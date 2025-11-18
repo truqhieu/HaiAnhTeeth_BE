@@ -8,6 +8,7 @@ const availableSlotService = require('../services/availableSlot.service');
 const { getActiveServicesForDoctor } = require('../services/medicalRecord.service');
 const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
+const leaveRequestService = require('../services/leaveRequest.service');
 
 // Helper function to calculate available time range for morning/afternoon shifts
 function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
@@ -1058,7 +1059,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       _id : {$ne : appointment.doctorUserId._id}
     }).select('_id fullName email');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive"
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
     }).select('doctorUserId status');
@@ -1069,17 +1070,17 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
     });
 
-    // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+    // Filter bỏ các bác sĩ có status "Inactive" (KHÔNG filter "On Leave" ở đây, sẽ check theo ngày cụ thể)
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
-      // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
-      return doctorStatus === 'Available' || doctorStatus === 'Busy';
+      // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
+      return doctorStatus === 'Available' || doctorStatus === 'Busy' || doctorStatus === 'On Leave';
     });
 
     console.log(`🔍 Found ${doctors.length} active doctors`);
-    console.log(`🔍 After filtering (removing On Leave/Inactive): ${availableDoctorsUser.length} doctors`);
+    console.log(`🔍 After filtering (removing Inactive): ${availableDoctorsUser.length} doctors`);
 
     const availableDoctors = [];
 
@@ -1096,6 +1097,16 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       // Chuẩn bị ngày tìm kiếm (normalize về 00:00:00)
       const searchDate = new Date(startDateTime);
       searchDate.setUTCHours(0, 0, 0, 0);
+
+      // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
+      const checkLeaveDate = new Date(searchDate);
+      checkLeaveDate.setUTCHours(12, 0, 0, 0);
+      const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
+      
+      if (isOnLeave) {
+        console.log(`   ⚠️  SKIP: Doctor ${doctor.fullName} is on leave on ${searchDate.toISOString().split('T')[0]}`);
+        continue; // Bác sĩ đang nghỉ phép vào ngày này
+      }
       
       // ⭐ Đảm bảo bác sĩ có schedule cho ngày này (tạo nếu chưa có)
       let doctorSchedule = await DoctorSchedule.findOne({

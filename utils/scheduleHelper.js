@@ -1,5 +1,4 @@
 const DoctorSchedule = require('../models/doctorSchedule.model');
-const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 
 class ScheduleHelper {
@@ -289,12 +288,28 @@ class ScheduleHelper {
   }
 
   /**
-   * ⭐ HELPER: Lấy workingHours từ DoctorSchedule của bác sĩ
-   * Ưu tiên lấy từ schedule gần nhất, nếu không có thì dùng default
+   * ⭐ HELPER: Lấy workingHours từ Doctor hoặc DoctorSchedule của bác sĩ
+   * Ưu tiên lấy từ hồ sơ Doctor, sau đó đến schedule gần nhất, nếu không có thì dùng default
    * @static
    */
   static async getDoctorWorkingHours(doctorUserId) {
+    const defaultWorkingHours = {
+      morningStart: '08:00',
+      morningEnd: '12:00',
+      afternoonStart: '14:00',
+      afternoonEnd: '18:00'
+    };
+
     try {
+      const doctorProfile = await Doctor.findOne({ doctorUserId })
+        .select('workingHours')
+        .lean();
+
+      if (doctorProfile?.workingHours?.morningStart) {
+        console.log(`✅ Lấy workingHours từ hồ sơ bác sĩ ${doctorUserId}`);
+        return doctorProfile.workingHours;
+      }
+
       // Tìm schedule gần nhất của bác sĩ này (bất kỳ ngày nào)
       const existingSchedule = await DoctorSchedule.findOne({
         doctorUserId: doctorUserId
@@ -305,23 +320,11 @@ class ScheduleHelper {
         return existingSchedule.workingHours;
       }
 
-      // Nếu không có schedule, dùng default
-      console.log(`⚠️  Bác sĩ ${doctorUserId} chưa có schedule, dùng workingHours mặc định`);
-      return {
-        morningStart: '08:00',
-        morningEnd: '12:00',
-        afternoonStart: '14:00',
-        afternoonEnd: '18:00'
-      };
+      console.log(`⚠️  Bác sĩ ${doctorUserId} chưa có workingHours, dùng mặc định`);
+      return defaultWorkingHours;
     } catch (error) {
       console.error(`❌ Lỗi lấy workingHours cho bác sĩ ${doctorUserId}:`, error.message);
-      // Trả về default nếu có lỗi
-      return {
-        morningStart: '08:00',
-        morningEnd: '12:00',
-        afternoonStart: '14:00',
-        afternoonEnd: '18:00'
-      };
+      return defaultWorkingHours;
     }
   }
 

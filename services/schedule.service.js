@@ -1,5 +1,5 @@
 const DoctorSchedule = require('../models/doctorSchedule.model');
-const User = require('../models/user.model');
+const Doctor = require('../models/doctor.model');
 
 class ScheduleService {
 
@@ -121,49 +121,30 @@ class ScheduleService {
    * Lấy danh sách tất cả bác sĩ với working hours (chỉ lấy bác sĩ Active)
    */
   async getDoctorsWithWorkingHours() {
-    // Lấy tất cả bác sĩ Active với workingHours và workingHoursUpdatedAt
-    const doctors = await User.find({ role: 'Doctor', status: 'Active' })
-      .select('_id fullName email workingHours workingHoursUpdatedAt')
-      .sort({ fullName: 1 });
+    const defaultWorkingHours = {
+      morningStart: '08:00',
+      morningEnd: '12:00',
+      afternoonStart: '14:00',
+      afternoonEnd: '18:00'
+    };
 
-    // Lấy working hours từ User model hoặc từ DoctorSchedule gần nhất
-    const doctorsWithWorkingHours = await Promise.all(
-      doctors.map(async (doctor) => {
-        // Ưu tiên lấy từ User model (nếu có)
-        let workingHours = doctor.workingHours;
-        let workingHoursUpdatedAt = doctor.workingHoursUpdatedAt;
-
-        // Nếu User model chưa có workingHours, lấy từ DoctorSchedule gần nhất
-        if (!workingHours || !workingHours.morningStart) {
-          const latestSchedule = await DoctorSchedule.findOne({
-            doctorUserId: doctor._id
-          })
-            .sort({ createdAt: -1 });
-
-          if (latestSchedule?.workingHours) {
-            workingHours = latestSchedule.workingHours;
-          } else {
-            // Sử dụng working hours mặc định
-            workingHours = {
-              morningStart: '08:00',
-              morningEnd: '12:00',
-              afternoonStart: '14:00',
-              afternoonEnd: '18:00'
-            };
-          }
-        }
-
-        return {
-          _id: doctor._id,
-          fullName: doctor.fullName,
-          email: doctor.email,
-          workingHours: workingHours,
-          workingHoursUpdatedAt: workingHoursUpdatedAt
-        };
+    const doctors = await Doctor.find()
+      .populate({
+        path: 'doctorUserId',
+        select: 'fullName email status role'
       })
-    );
+      .lean();
 
-    return doctorsWithWorkingHours;
+    return doctors
+      .filter(doc => doc.doctorUserId && doc.doctorUserId.role === 'Doctor' && doc.doctorUserId.status === 'Active')
+      .map(doc => ({
+        _id: doc.doctorUserId._id,
+        fullName: doc.doctorUserId.fullName,
+        email: doc.doctorUserId.email,
+        workingHours: doc.workingHours || defaultWorkingHours,
+        workingHoursUpdatedAt: doc.workingHoursUpdatedAt || null
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   /**
@@ -178,12 +159,20 @@ class ScheduleService {
 
     this._validateWorkingHours(workingHours);
 
-    // Lưu workingHours vào User model với thời gian cập nhật
     const updateTime = new Date();
-    await User.findByIdAndUpdate(doctorId, {
-      workingHours: workingHours,
-      workingHoursUpdatedAt: updateTime
-    });
+
+    const doctorProfile = await Doctor.findOneAndUpdate(
+      { doctorUserId: doctorId },
+      {
+        workingHours: workingHours,
+        workingHoursUpdatedAt: updateTime
+      },
+      { new: true }
+    );
+
+    if (!doctorProfile) {
+      throw new Error('Không tìm thấy hồ sơ bác sĩ để cập nhật giờ làm việc');
+    }
 
     // Tìm tất cả DoctorSchedule của bác sĩ
     const schedules = await DoctorSchedule.find({

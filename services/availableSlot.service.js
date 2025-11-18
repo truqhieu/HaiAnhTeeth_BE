@@ -4,6 +4,7 @@ const Service = require('../models/service.model');
 const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 const ScheduleHelper = require('../utils/scheduleHelper');
+const leaveRequestService = require('./leaveRequest.service');
 
 class AvailableSlotService {
 
@@ -373,7 +374,7 @@ class AvailableSlotService {
       status: 'Active'
     }).select('_id fullName email phoneNumber');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive"
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
     }).select('doctorUserId status');
@@ -384,18 +385,18 @@ class AvailableSlotService {
       doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
     });
 
-    // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+    // Filter bỏ các bác sĩ có status "Inactive" (KHÔNG filter "On Leave" ở đây, sẽ check theo ngày cụ thể)
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
-      // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
-      return doctorStatus === 'Available' || doctorStatus === 'Busy';
+      // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
+      return doctorStatus === 'Available' || doctorStatus === 'Busy' || doctorStatus === 'On Leave';
     });
 
     console.log('🔍 Doctor Status Filter:');
     console.log(`   - Tổng bác sĩ ACTIVE: ${doctors.length}`);
-    console.log(`   - Sau khi filter (loại bỏ On Leave/Inactive): ${availableDoctorsUser.length}`);
+    console.log(`   - Sau khi filter (loại bỏ Inactive): ${availableDoctorsUser.length}`);
 
     // 4. Chuẩn bị ngày tìm kiếm
     const searchDate = new Date(date);
@@ -412,6 +413,17 @@ class AvailableSlotService {
 
     for (const doctor of availableDoctorsUser) {
       try {
+        // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
+        // Tạo một Date object với giờ 12:00 để kiểm tra nghỉ phép (isDoctorOnLeave cần startTime)
+        const checkLeaveDate = new Date(searchDate);
+        checkLeaveDate.setUTCHours(12, 0, 0, 0);
+        const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
+        
+        if (isOnLeave) {
+          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) đang nghỉ phép vào ngày ${searchDate.toISOString().split('T')[0]}, skip...`);
+          continue; // Bác sĩ đang nghỉ phép vào ngày này
+        }
+
         // ⭐ THÊM: Đảm bảo bác sĩ này có schedule cho ngày này (tạo nếu chưa có)
         let schedules = await DoctorSchedule.find({
           doctorUserId: doctor._id,
@@ -624,7 +636,7 @@ class AvailableSlotService {
       status: 'Active'
     }).select('_id fullName email phoneNumber');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive"
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
     }).select('doctorUserId status');
@@ -635,18 +647,18 @@ class AvailableSlotService {
       doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
     });
 
-    // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+    // Filter bỏ các bác sĩ có status "Inactive" (KHÔNG filter "On Leave" ở đây, sẽ check theo ngày cụ thể)
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
-      // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
-      return doctorStatus === 'Available' || doctorStatus === 'Busy';
+      // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
+      return doctorStatus === 'Available' || doctorStatus === 'Busy' || doctorStatus === 'On Leave';
     });
 
     console.log('🔍 Doctor Status Filter (getAvailableDoctorsForTimeSlot):');
     console.log(`   - Tổng bác sĩ ACTIVE: ${doctors.length}`);
-    console.log(`   - Sau khi filter (loại bỏ On Leave/Inactive): ${availableDoctorsUser.length}`);
+    console.log(`   - Sau khi filter (loại bỏ Inactive): ${availableDoctorsUser.length}`);
 
     if (availableDoctorsUser.length === 0) {
       return {
@@ -676,6 +688,18 @@ class AvailableSlotService {
 
     for (const doctor of availableDoctorsUser) {
       try {
+        // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
+        // Tạo một Date object với giờ 12:00 để kiểm tra nghỉ phép (isDoctorOnLeave cần startTime)
+        const checkLeaveDate = new Date(searchDate);
+        checkLeaveDate.setUTCHours(12, 0, 0, 0);
+        const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
+        
+        if (isOnLeave) {
+          console.log(`\n👨‍⚕️ Checking doctor: ${doctor.fullName} (${doctor._id})`);
+          console.log(`   ⚠️  SKIP: Bác sĩ đang nghỉ phép vào ngày ${searchDate.toISOString().split('T')[0]}`);
+          continue; // Bác sĩ đang nghỉ phép vào ngày này
+        }
+
         // Kiểm tra xem bác sĩ có schedule vào ngày đó không
         let schedule = await DoctorSchedule.findOne({
           doctorUserId: doctor._id,
@@ -1312,6 +1336,10 @@ class AvailableSlotService {
     const searchDate = new Date(date);
     searchDate.setUTCHours(0, 0, 0, 0);
 
+    const doctorProfile = await Doctor.findOne({ doctorUserId })
+      .select('workingHours workingHoursUpdatedAt status')
+      .lean();
+
     const schedules = await DoctorSchedule.find({
       doctorUserId,
       date: searchDate,
@@ -1596,8 +1624,8 @@ class AvailableSlotService {
     };
     
     // Lấy workingHours từ User model (nếu có)
-    const userWorkingHours = doctor.workingHours;
-    const workingHoursUpdatedAt = doctor.workingHoursUpdatedAt;
+    const userWorkingHours = doctorProfile?.workingHours;
+    const workingHoursUpdatedAt = doctorProfile?.workingHoursUpdatedAt;
     
     // So sánh ngày (không tính giờ)
     let useNewWorkingHours = false;
