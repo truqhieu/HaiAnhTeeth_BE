@@ -8,7 +8,7 @@ router.post('/blogs', verifyToken, verifyRole('Manager'),upload.single('thumbnai
 router.get('/blogs', getAllBlogs)
 router.get('/blogs/promotions', getPromotionBlogs)
 router.get('/blogs/:id',viewDetailBlogs)
-router.patch('/blogs/:id', verifyToken, verifyRole('Manager'),upload.single('thumbnailUrl'),updateBlog)
+router.patch('/blogs/:id', verifyToken, verifyRole('Manager'), upload.single('thumbnailUrl'),updateBlog)
 // router.delete('/blogs/:id', verifyToken, verifyRole('Manager'),deleteBlog)
 
 module.exports = router

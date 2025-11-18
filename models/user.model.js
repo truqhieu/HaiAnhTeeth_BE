@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['Male', 'Female', 'Other']
   },
+  avatar : {
+    type : String,
+    default : 'https://res.cloudinary.com/dglnkljzx/image/upload/v1763481608/introductions/fsqmwqvxihuw2hhodcnb.png'
+  },
   role: {
     type: String,
     enum: ['Patient', 'Doctor', 'Staff', 'Admin',"Manager","Nurse"],
