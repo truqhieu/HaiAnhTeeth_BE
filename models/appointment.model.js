@@ -138,6 +138,14 @@ const appointmentSchema = new mongoose.Schema({
   discountAmount: {
     type: Number,
     default: 0
+  },
+  noTreatment: {
+    type: Boolean,
+    default: false
+  },
+  noTreatmentMarkedAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true 

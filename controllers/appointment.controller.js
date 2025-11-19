@@ -292,6 +292,36 @@ const reviewAppointment = async (req, res) => {
   }
 };
 
+const markAppointmentNoTreatment = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    const actorUserId = req.user?.userId;
+    const actorRole = req.user?.role || 'Doctor';
+
+    if (!actorUserId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Vui lòng đăng nhập'
+      });
+    }
+
+    const result = await appointmentService.markAppointmentNoTreatment(appointmentId, actorUserId, actorRole);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Đã đánh dấu ca khám là "Không cần khám"',
+      data: result
+    });
+  } catch (error) {
+    console.error('❌ Error in markAppointmentNoTreatment:', error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Không thể xử lý yêu cầu',
+      error: error.message
+    });
+  }
+};
+
 const reserveTimeslot = async (req, res) => {
   try {
     const patientUserId = req.user?.userId;
@@ -1592,6 +1622,7 @@ module.exports = {
   managerDashboard,
   getMonthlyRevenue,
   getMyRelatives,
+  markAppointmentNoTreatment,
   reserveTimeslot,
   releaseReservedTimeslot
 };

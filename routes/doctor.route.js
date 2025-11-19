@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDoctorAppointmentsSchedule, getAppointmentDetail, getPatientDetail, getPatientAppointmentsForDoctor } = require('../controllers/doctor.controller');
+const { markAppointmentNoTreatment } = require('../controllers/appointment.controller');
 const { getOrCreateMedicalRecord, getActiveServicesForDoctor, updateAdditionalServicesForDoctor, updateMedicalRecordForDoctor, approveMedicalRecordByDoctor } = require('../controllers/medicalRecord.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
@@ -15,6 +16,8 @@ router.get('/patients/:patientId', verifyToken, verifyRole('Doctor'), getPatient
 
 // ⭐ Doctor lấy danh sách lịch hẹn của một bệnh nhân (chỉ của bác sĩ hiện tại)
 router.get('/patients/:patientId/appointments', verifyToken, verifyRole('Doctor'), getPatientAppointmentsForDoctor);
+
+router.post('/appointments/:appointmentId/no-treatment', verifyToken, verifyRole('Doctor'), markAppointmentNoTreatment);
 
 // ⭐ Doctor - Medical Record
 router.get('/medical-records/:appointmentId', verifyToken, verifyRole('Doctor'), getOrCreateMedicalRecord);
