@@ -9,6 +9,8 @@ const { getActiveServicesForDoctor } = require('../services/medicalRecord.servic
 const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 const leaveRequestService = require('../services/leaveRequest.service');
+const DoctorSchedule = require('../models/doctorSchedule.model');
+const ScheduleHelper = require('../utils/scheduleHelper');
 
 // Helper function to calculate available time range for morning/afternoon shifts
 function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
@@ -1110,7 +1112,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     // Validation
     if (!startTime || !endTime) {
       return res.status(400).json({
-      success: false,
+        success: false,
         message: 'Vui lòng cung cấp thời gian bắt đầu và kết thúc'
       });
     }
@@ -1133,15 +1135,14 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
 
     console.log(`🔍 Looking for doctors available from ${startDateTime.toISOString()} to ${endDateTime.toISOString()}`);
 
-    // Lấy tất cả bác sĩ ACTIVE
-
+    // Lấy tất cả bác sĩ ACTIVE (trừ bác sĩ hiện tại)
     const doctors = await User.find({
       role: 'Doctor',
       status: 'Active',
-      _id : {$ne : appointment.doctorUserId._id}
+      _id: { $ne: appointment.doctorUserId._id }
     }).select('_id fullName email');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive" và chưa có workingHours
+    // Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive" và chưa có workingHours
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
     }).select('doctorUserId status workingHours workingHoursEffectiveDate');
@@ -1156,17 +1157,15 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       doctorWorkingHoursEffectiveMap.set(doc.doctorUserId.toString(), doc.workingHoursEffectiveDate);
     });
 
-    // Filter bỏ các bác sĩ:
-    // 1. Có status "Inactive"
-    // 2. Chưa có workingHours (chưa được manager tạo lịch làm việc)
     const normalizedRequestDate = new Date(startDateTime);
     normalizedRequestDate.setUTCHours(0, 0, 0, 0);
 
+    // Filter bỏ các bác sĩ: Inactive, chưa có workingHours, hoặc chưa bắt đầu làm việc
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
       const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
       
-      // ⭐ Kiểm tra xem bác sĩ đã có workingHours chưa
+      // Kiểm tra xem bác sĩ đã có workingHours chưa
       const hasWorkingHours = workingHours && 
         workingHours.morningStart && 
         workingHours.morningEnd && 
@@ -1175,9 +1174,10 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       
       if (!hasWorkingHours) {
         console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có workingHours, skip...`);
-        return false; // Bỏ qua bác sĩ chưa có workingHours
+        return false;
       }
 
+      // Kiểm tra effective date
       const effectiveDateRaw = doctorWorkingHoursEffectiveMap.get(doctor._id.toString());
       if (effectiveDateRaw) {
         const effectiveDate = new Date(effectiveDateRaw);
@@ -1190,72 +1190,41 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
-      // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
+      // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave"
       return doctorStatus === 'Available' || doctorStatus === 'Busy' || doctorStatus === 'On Leave';
     });
 
     console.log(`🔍 Found ${doctors.length} active doctors`);
-    console.log(`🔍 After filtering (removing Inactive and doctors without workingHours): ${availableDoctorsUser.length} doctors`);
+    console.log(`🔍 After filtering: ${availableDoctorsUser.length} doctors`);
 
     const availableDoctors = [];
+    const searchDate = new Date(startDateTime);
+    searchDate.setUTCHours(0, 0, 0, 0);
 
     for (const doctor of availableDoctorsUser) {
-      // Bỏ qua bác sĩ hiện tại
-      if (doctor._id.toString() === appointment.doctorUserId._id.toString()) {
-        continue;
-      }
-
-      // Kiểm tra xem bác sĩ có lịch làm việc trong thời gian này không
-      const DoctorSchedule = require('../models/doctorSchedule.model');
-      const ScheduleHelper = require('../utils/scheduleHelper');
-      
-      // Chuẩn bị ngày tìm kiếm (normalize về 00:00:00)
-      const searchDate = new Date(startDateTime);
-      searchDate.setUTCHours(0, 0, 0, 0);
-
-      // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
+      // Kiểm tra xem bác sĩ có leave request approved trong ngày này không
       const checkLeaveDate = new Date(searchDate);
       checkLeaveDate.setUTCHours(12, 0, 0, 0);
       const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
       
       if (isOnLeave) {
         console.log(`   ⚠️  SKIP: Doctor ${doctor.fullName} is on leave on ${searchDate.toISOString().split('T')[0]}`);
-        continue; // Bác sĩ đang nghỉ phép vào ngày này
+        continue;
       }
       
-      // ⭐ Đảm bảo bác sĩ có schedule cho ngày này (tạo nếu chưa có)
-      let doctorSchedule = await DoctorSchedule.findOne({
+      // Kiểm tra xem bác sĩ có schedule available cho ngày này không
+      const doctorSchedule = await DoctorSchedule.findOne({
         doctorUserId: doctor._id,
         date: searchDate,
         status: 'Available'
       });
-
-      // Nếu không có schedule Available → kiểm tra xem có schedule nào không
-      if (!doctorSchedule) {
-        const anySchedule = await DoctorSchedule.findOne({
-          doctorUserId: doctor._id,
-          date: searchDate
-        });
-
-        // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
-        if (!anySchedule) {
-          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có schedule, tự động tạo...`);
-          await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
-          // Tìm lại schedule sau khi tạo
-          doctorSchedule = await DoctorSchedule.findOne({
-            doctorUserId: doctor._id,
-            date: searchDate,
-            status: 'Available'
-          });
-        }
-      }
 
       if (!doctorSchedule) {
         console.log(`   ❌ Doctor ${doctor.fullName} has no Available schedule for this date`);
         continue;
       }
 
-      // Kiểm tra xem bác sĩ có rảnh trong khoảng thời gian này không (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
+      // Kiểm tra xem bác sĩ có conflicts trong khoảng thời gian này không
       const conflictingTimeslots = await Timeslot.find({
         doctorUserId: doctor._id,
         startTime: { $lt: endDateTime },
@@ -1268,45 +1237,43 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
         continue;
       }
 
-      // Kiểm tra xem bác sĩ có appointments trong khoảng thời gian này không (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
+      // Kiểm tra xem bác sĩ có appointments trong khoảng thời gian này không
       const conflictingAppointments = await Appointment.find({
         doctorUserId: doctor._id,
         'timeslotId.startTime': { $lt: endDateTime },
         'timeslotId.endTime': { $gt: startDateTime },
         status: { $in: ['Approved', 'CheckedIn', 'Completed'] }
-      }).populate('timeslotId');
+      });
 
       if (conflictingAppointments.length > 0) {
         console.log(`   ❌ Doctor ${doctor.fullName} has ${conflictingAppointments.length} conflicting appointments`);
         continue;
       }
 
-      // Kiểm tra xem có timeslot đã bị reserved chưa
-      const reservedTimeslot = await Timeslot.findOne({
-        doctorUserId: doctor._id,
-        startTime: startDateTime,
-        endTime: endDateTime,
-        status: { $in: ['Reserved', 'Booked'] }
-      });
-
-      if (reservedTimeslot) {
-        console.log(`   ❌ Doctor ${doctor.fullName} - time slot already reserved or booked`);
-        continue;
-      }
-
       // Kiểm tra working hours
-      const workingHours = doctorSchedule.workingHours || {
-        morningStart: '08:00',
-        morningEnd: '12:00',
-        afternoonStart: '14:00',
-        afternoonEnd: '18:00'
-      };
+      const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
 
       const startHour = startDateTime.getUTCHours() + 7; // Convert to VN time
+      const startMin = startDateTime.getUTCMinutes();
       const endHour = endDateTime.getUTCHours() + 7;
+      const endMin = endDateTime.getUTCMinutes();
 
-      const isInMorningShift = startHour >= 7 && endHour <= 12;
-      const isInAfternoonShift = startHour >= 14 && endHour <= 18;
+      // Parse working hours
+      const [morningStartHour, morningStartMin] = workingHours.morningStart.split(':').map(Number);
+      const [morningEndHour, morningEndMin] = workingHours.morningEnd.split(':').map(Number);
+      const [afternoonStartHour, afternoonStartMin] = workingHours.afternoonStart.split(':').map(Number);
+      const [afternoonEndHour, afternoonEndMin] = workingHours.afternoonEnd.split(':').map(Number);
+
+      // Convert to minutes for accurate comparison
+      const startTotalMin = startHour * 60 + startMin;
+      const endTotalMin = endHour * 60 + endMin;
+      const morningStartTotalMin = morningStartHour * 60 + morningStartMin;
+      const morningEndTotalMin = morningEndHour * 60 + morningEndMin;
+      const afternoonStartTotalMin = afternoonStartHour * 60 + afternoonStartMin;
+      const afternoonEndTotalMin = afternoonEndHour * 60 + afternoonEndMin;
+
+      const isInMorningShift = startTotalMin >= morningStartTotalMin && endTotalMin <= morningEndTotalMin;
+      const isInAfternoonShift = startTotalMin >= afternoonStartTotalMin && endTotalMin <= afternoonEndTotalMin;
 
       if (!isInMorningShift && !isInAfternoonShift) {
         console.log(`   ❌ Doctor ${doctor.fullName} - time slot outside working hours`);
