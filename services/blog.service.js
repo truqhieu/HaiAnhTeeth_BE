@@ -1,6 +1,7 @@
 const Blog = require('../models/blog.model');
 const { cloudinary, deleteOldImage } = require('../config/cloudinary');
 const fs = require('fs');
+const { content } = require('googleapis/build/src/apis/content');
 
 const CATEGORY = Blog.schema.path('category').enumValues;
 const STATUS = Blog.schema.path('status').enumValues;
@@ -26,7 +27,7 @@ class BlogService {
    * Tạo blog mới
    */
   async createBlog(data, file, authorUserId) {
-    const { title, category, summary, status } = data;
+    const { title, category, content, status } = data;
 
     if (title) {
       if (typeof title !== 'string' || title.trim().length === 0) {
@@ -43,18 +44,18 @@ class BlogService {
       }
     }
 
-    if (summary) {
-      if (typeof summary !== 'string' || summary.trim().length === 0) {
-        throw new Error('Mô tả blog không được để trống');
+    if (content) {
+      if (typeof content !== 'string' || content.trim().length === 0) {
+        throw new Error('Nội dung blog không được để trống');
       }
 
-      const cleanSummary = summary.trim();
-      if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanSummary)) {
-        throw new Error('Mô tả blog không chứa kí tự đặc biệt');
+      const cleanContent = content.trim();
+      if (/[<>]/.test(cleanContent)) {
+      throw new Error('Nội dung blog không được chứa ký tự < hoặc > để tránh lỗi bảo mật.');
       }
 
-      if (cleanSummary.length < 10) {
-        throw new Error('Mô tả blog phải có ít nhất 10 ký tự');
+      if (cleanContent.length < 10) {
+        throw new Error('Nội dung blog phải có ít nhất 10 ký tự');
       }
     }
 
@@ -70,7 +71,7 @@ class BlogService {
     const blog = new Blog({
       title,
       category,
-      summary,
+      content,
       authorUserId,
       thumbnailUrl: imageUrl,
       thumbnailId: imageId,
@@ -113,7 +114,72 @@ class BlogService {
       const regex = new RegExp(safe, 'i');
       filter.$or = [
         { title: { $regex: regex } },
-        { summary: { $regex: regex } },
+        { content: { $regex: regex } },
+      ];
+    }
+
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filter.createdAt.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 9999);
+        filter.createdAt.$lte = end;
+      }
+    }
+
+    const sortOrder = sort === 'asc' ? 1 : -1;
+
+    const [total, blogs] = await Promise.all([
+      Blog.countDocuments(filter),
+      Blog.find(filter)
+        .sort({ createdAt: sortOrder })
+        .skip(skip)
+        .limit(limitNum)
+        .lean()
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      total,
+      totalPages,
+      page: pageNum,
+      limit: limitNum,
+      data: blogs
+    };
+  }
+
+  /**
+   * Lấy danh sách blogs theo thể loại Promotions
+   */
+   async getPromotionBlogs(filters = {}, userRole = null) {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      startDate,
+      endDate,
+      sort = 'desc'
+    } = filters;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { category: 'Promotions', status: 'Published' };
+
+    if (search && String(search).trim().length > 0) {
+      const searchKey = String(search).trim();
+      const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(safe, 'i');
+      filter.$or = [
+        { title: { $regex: regex } },
+        { content: { $regex: regex } },
       ];
     }
 
@@ -180,7 +246,7 @@ class BlogService {
       if (typeof value !== 'string' || value.trim().length === 0) {
         const fieldNames = {
           title: 'Tiêu đề',
-          summary: 'Mô tả',
+          content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'
         };
@@ -192,7 +258,7 @@ class BlogService {
       if (!/^[a-zA-ZÀ-ỹ0-9\s]+$/.test(cleanValue)) {
         const fieldNames = {
           title: 'Tiêu đề',
-          summary: 'Mô tả',
+          content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'
         };
@@ -206,7 +272,7 @@ class BlogService {
       if (cleanValue.length < minLength) {
         const fieldNames = {
           title: 'Tiêu đề',
-          summary: 'Mô tả',
+          content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'
         };
@@ -273,4 +339,3 @@ class BlogService {
 }
 
 module.exports = new BlogService();
-

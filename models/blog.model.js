@@ -16,17 +16,17 @@ const blogSchema = new mongoose.Schema({
             "Patient Stories",   
             "Recruitment" 
         ],
-        required: [true, 'Vui điền thể loại của blog'],
+        required: [true, 'Vui chọn thể loại của blog'],
         trim : true,
     },
-    summary : {
+    content : {
         type : String,
-        required : [true, 'Vui lòng điền tóm tắt blog'],
+        required : [true, 'Vui lòng điền nội dung blog'],
         trim : true,
     },
     thumbnailUrl : {
         type : String,
-        required : [true, 'Vui lòng điền ảnh của blog'],
+        required : [true, 'Vui lòng thêm ảnh của blog'],
         trim : true,
     },
     authorUserId : {

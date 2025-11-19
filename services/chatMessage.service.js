@@ -276,7 +276,8 @@ const message = new ChatMessage({
     // Lấy medical record
     const medicalRecord = await MedicalRecord.findOne({ 
       appointmentId: appointmentId 
-    }).lean();
+    }).populate('additionalServiceIds', 'serviceName')
+    .lean();
 
     // Format medical record
     let formattedMedicalRecord = null;
@@ -313,7 +314,12 @@ const message = new ChatMessage({
           date: appointment.updatedAt,
           status: appointment.status
         },
-        
+
+        // Các dịch vụ sử dụng
+
+        service : medicalRecord.additionalServiceIds?.map(p =>({
+          name : p.serviceName
+        })),    
         // Thông tin y tế
         medicalInfo: {
           diagnosis: medicalRecord.diagnosis || 'Chưa có chẩn đoán',

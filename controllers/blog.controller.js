@@ -5,12 +5,12 @@ const createBlog = async (req, res) => {
         const {
             title,
             category,
-            summary,
+            content,
             status,
         } = req.body;
         
     const blog = await blogService.createBlog(
-      { title, category, summary, status },
+      { title, category, content, status },
       req.file,
       req.user.userId
     );
@@ -66,11 +66,46 @@ const getAllBlogs = async (req, res) => {
   }
 };
 
+const getPromotionBlogs = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort = 'desc'
+    } = req.query;
+
+    const result = await blogService.getPromotionBlogs({
+      page,
+      limit,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort
+    }, req.user?.role);
+
+    return res.status(200).json({
+      status: true,
+      ...result
+    });
+  } catch (error) {
+    console.log('Lỗi khi lấy danh sách blog News', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Đã xảy ra lỗi khi lấy danh sách blog News'
+    });
+  }
+};
+
 const viewDetailBlogs = async (req, res) => {
   try {
     const blog = await blogService.getBlogById(req.params.id);
 
-        res.status(200).json({
+      res.status(200).json({
       success: true,
       message: 'Chi tiết blog',
       data: blog
@@ -88,7 +123,7 @@ const updateBlog = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = {};
-        const allowedFields = ['title', 'summary', 'category', 'status'];
+        const allowedFields = ['title', 'content', 'category', 'status'];
 
     // Lấy các fields được gửi lên
         for (const field of allowedFields) {
@@ -130,4 +165,4 @@ const updateBlog = async (req, res) => {
 //   }
 // };
 
-module.exports = { createBlog, getAllBlogs, viewDetailBlogs, updateBlog};
+module.exports = { createBlog, getAllBlogs, getPromotionBlogs, viewDetailBlogs, updateBlog };

@@ -4,11 +4,25 @@ const Patient = require('../models/patient.model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { cloudinary, deleteOldImage } = require('../config/cloudinary');
+const fs = require('fs');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-here';
 const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
 
 class UserService {
+
+  async uploadImage(filePath) {
+    const result = await cloudinary.uploader.upload(filePath, {
+      folder: "users",
+      resource_type: "image",
+      transformation: [
+        { width: 300, height: 300, crop: "fill", gravity: "face" },
+        { quality: "auto" },
+      ],
+    });
+    return result;
+  }  
 
   async registerUser(userData) {
     const { fullName, email, password, gender, dateOfBirth } = userData;
@@ -326,6 +340,199 @@ class UserService {
     const updatedUser = await User.findById(user._id);
     return updatedUser;
   }
+
+async updateProfile(userId, data, file) {
+  try {
+    const allowedFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'emergencyContact'];
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('Không tìm thấy thông tin người dùng');
+    }
+
+    const updates = {};
+    let emergencyContactUpdate = null;
+
+    for (const key of Object.keys(data)) {
+      if (!allowedFields.includes(key)) continue;
+      const value = data[key];
+
+      // === Validate fullName ===
+      if (key === 'fullName') {
+        const cleanFullName = value.trim();
+        if (cleanFullName.length === 0) {
+          throw new Error('Họ tên không được để trống');
+        }
+        if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(cleanFullName)) {
+          throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
+        }
+        if (cleanFullName.length < 2) {
+          throw new Error('Độ dài họ và tên không hợp lệ (tối thiểu 2 ký tự)');
+        }
+        updates.fullName = cleanFullName;
+      }
+
+      // === Validate phone ===
+      if (key === 'phoneNumber') {
+        const cleanPhone = value.trim();
+        if (cleanPhone.length === 0) {
+          updates.phoneNumber = null;
+        } else {
+          if (!/^[0-9]{10}$/.test(cleanPhone) || !cleanPhone.startsWith('0')) {
+            throw new Error('Số điện thoại phải bắt đầu bằng 0 và có đúng 10 chữ số');
+          }
+          updates.phoneNumber = cleanPhone;
+        }
+      }
+
+      // === Validate address ===
+      if (key === 'address') {
+        const cleanAddress = value.trim();
+        if (cleanAddress.length === 0) {
+          updates.address = null;
+        } else {
+          if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanAddress)) {
+            throw new Error('Địa chỉ không hợp lệ');
+          }
+          if (cleanAddress.length < 2) {
+            throw new Error('Độ dài địa chỉ không hợp lệ (tối thiểu 2 ký tự)');
+          }
+          updates.address = cleanAddress;
+        }
+      }
+
+      // === Validate dob ===
+      if (key === 'dob') {
+        const birthDate = new Date(value);
+        if (isNaN(birthDate.getTime())) {
+          throw new Error('Ngày sinh không hợp lệ');
+        }
+        const now = new Date();
+        let age = now.getFullYear() - birthDate.getFullYear();
+        const m = now.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && now.getDate() < birthDate.getDate())) age--;
+
+        if (age < 18) {
+          throw new Error('Người dùng phải đủ 18 tuổi trở lên');
+        }
+        updates.dob = value;
+      }
+
+      // === Validate gender ===
+      if (key === 'gender') {
+        updates.gender = value;
+      }
+
+      // === Validate emergencyContact (chỉ cho Patient) ===
+      if (key === 'emergencyContact') {
+        const ec = value;
+
+        if (ec) {
+          if (!ec.name || ec.name.trim().length === 0) {
+            throw new Error('emergencyContact.name không được để trống');
+          }
+          if (!ec.phone || ec.phone.trim().length === 0) {
+            throw new Error('emergencyContact.phone không được để trống');
+          }
+
+          const phoneRegex = /^[0-9]{10,11}$/;
+          if (!phoneRegex.test(ec.phone.replace(/\D/g, ''))) {
+            throw new Error('emergencyContact.phone phải là 10-11 số');
+          }
+
+          const validRelationships = ['Father', 'Mother', 'Brother', 'Sister', 'Spouse', 'Friend', 'Other'];
+          if (!validRelationships.includes(ec.relationship)) {
+            throw new Error(`emergencyContact.relationship phải là một trong: ${validRelationships.join(', ')}`);
+          }
+
+          emergencyContactUpdate = {
+            name: ec.name.trim(),
+            phone: ec.phone.trim(),
+            relationship: ec.relationship
+          };
+        }
+      }
+    }
+
+    if (file) {
+      const result = await this.uploadImage(file.path);
+
+      const user = await User.findById(userId);
+      if (user && user.avatar) {
+        await deleteOldImage(user.avatarId);
+      }
+
+      updates.avatar = result.secure_url;
+      updates.avatarId = result.public_id;
+
+      fs.unlinkSync(file.path);
+    }
+
+    // Không có gì để cập nhật
+    if (Object.keys(updates).length === 0 && !emergencyContactUpdate) {
+      throw new Error('Không có trường hợp lệ để cập nhật');
+    }
+
+    // Update User
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select('-passwordHash -__v');
+
+    if (!updatedUser) {
+      throw new Error('Không tìm thấy người dùng');
+    }
+
+    // Update emergency contact trong Patient
+    let emergencyContactResponse = null;
+
+    if (updatedUser.role === 'Patient') {
+      const Patient = require('../models/patient.model');
+      let patient = await Patient.findOne({ patientUserId: updatedUser._id });
+
+      if (!patient) {
+        patient = new Patient({
+          patientUserId: updatedUser._id,
+          emergencyContact: emergencyContactUpdate
+        });
+        await patient.save();
+      } else if (emergencyContactUpdate) {
+        patient.emergencyContact = emergencyContactUpdate;
+        await patient.save();
+      }
+
+      emergencyContactResponse = patient?.emergencyContact || null;
+    }
+
+    return {
+      success: true,
+      message: 'Cập nhật thông tin cá nhân thành công',
+      data: {
+        user: {
+          id: updatedUser._id,
+          fullName: updatedUser.fullName,
+          email: updatedUser.email,
+          role: updatedUser.role,
+          status: updatedUser.status,
+          phone: updatedUser.phoneNumber,
+          address: updatedUser.address,
+          dateOfBirth: updatedUser.dob,
+          gender: updatedUser.gender,
+          avatar: updatedUser.avatar,
+          emergencyContact: emergencyContactResponse,
+          createdAt: updatedUser.createdAt,
+          updatedAt: updatedUser.updatedAt
+        }
+      }
+    };
+
+  } catch (error) {
+    console.error("Lỗi cập nhật profile:", error);
+    throw new Error(error.message || "Lỗi server. Vui lòng thử lại sau");
+  }
+}
+
 
 async changePassword(userId, data) {
   const { oldPassword, newPassword, reNewPassword } = data;

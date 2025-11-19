@@ -12,6 +12,7 @@ const {
   authenticateToken,
   changePassword
 } = require('../controllers/user.controller');
+const upload = require('../config/multer');
 
 // Routes công khai (không cần authentication)
 router.post('/register', register);
@@ -23,6 +24,6 @@ router.post('/reset-password', resetPassword);
 
 // Routes cần authentication
 router.get('/profile', authenticateToken, getProfile);
-router.patch('/profile', authenticateToken, updateProfile);
+router.patch('/profile', authenticateToken, upload.single('avatar'),updateProfile);
 router.patch('/change-password', authenticateToken, changePassword)
 module.exports = router;
