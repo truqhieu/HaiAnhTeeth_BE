@@ -43,6 +43,14 @@ class MedicalRecordService {
       throw new Error('Không tìm thấy lịch hẹn');
     }
 
+    if (appointment.noTreatment) {
+      throw new Error('Ca khám này đã được đánh dấu "Không cần khám" nên không có hồ sơ khám bệnh.');
+    }
+
+    if (appointment.noTreatment) {
+      throw new Error('Ca khám này đã được đánh dấu "Không cần khám", không có hồ sơ khám bệnh.');
+    }
+
     let record = await MedicalRecord.findOne({ appointmentId })
       .populate({ path: 'additionalServiceIds', select: 'serviceName price' });
 

@@ -8,6 +8,7 @@ const {
   getActiveServicesForNurse,
   updateAdditionalServicesForNurse,
 } = require('../controllers/medicalRecord.controller');
+const { markAppointmentNoTreatment } = require('../controllers/appointment.controller');
 const { verifyToken, verifyRole } = require('../middleware/auth.middleware');
 
 // ⭐ Nurse xem danh sách lịch hẹn của tất cả bác sĩ (tuần hiện tại + tuần tiếp theo)
@@ -25,6 +26,8 @@ router.patch('/medical-records/:appointmentId', verifyToken, verifyRole('Nurse')
 router.patch('/medical-records/:appointmentId/nurse-note', verifyToken, verifyRole('Nurse'), updateNurseNote);
 router.patch('/medical-records/:appointmentId/additional-services', verifyToken, verifyRole('Nurse'), updateAdditionalServicesForNurse);
 router.get('/services', verifyToken, verifyRole('Nurse'), getActiveServicesForNurse);
+
+router.post('/appointments/:appointmentId/no-treatment', verifyToken, verifyRole('Nurse'), markAppointmentNoTreatment);
 
 // ⭐ Lấy danh sách tất cả bác sĩ (cho filter)
 router.get('/doctors', verifyToken, verifyRole('Nurse'), getAllDoctors);

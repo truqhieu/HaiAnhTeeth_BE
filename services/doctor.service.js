@@ -173,7 +173,8 @@ class DoctorService {
         type: appointment.type,
         status: appointment.status,
         mode: appointment.mode,
-        medicalRecordStatus: medicalRecordStatus // 'Draft', 'Finalized', hoặc null (chưa có)
+        medicalRecordStatus: appointment.noTreatment ? null : medicalRecordStatus,
+        noTreatment: !!appointment.noTreatment
       };
     });
   }

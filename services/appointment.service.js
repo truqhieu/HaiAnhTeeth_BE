@@ -1616,7 +1616,8 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
   specialization: apt.replacedDoctorUserId.specialization
 } : null,
         confirmDeadline: apt.confirmDeadline || null,
-        doctorStatus: apt.doctorStatus || null // ⭐ Thêm doctorStatus
+        doctorStatus: apt.doctorStatus || null, // ⭐ Thêm doctorStatus
+        noTreatment: !!apt.noTreatment
       }));
     } catch (error) {
       console.error('❌ Lỗi lấy ca khám của user:', error);
@@ -2669,6 +2670,44 @@ async getVisitTicketPDF(appointmentId, res) {
 }
 
 
+
+  async markAppointmentNoTreatment(appointmentId, actorUserId, actorRole = 'Doctor') {
+    if (!appointmentId || !actorUserId) {
+      throw new Error('Thiếu thông tin cần thiết');
+    }
+
+    const appointment = await Appointment.findById(appointmentId).select(
+      'doctorUserId status noTreatment noTreatmentMarkedAt noTreatmentReason'
+    );
+
+    if (!appointment) {
+      throw new Error('Không tìm thấy lịch hẹn');
+    }
+
+    if (actorRole === 'Doctor' && appointment.doctorUserId?.toString() !== actorUserId.toString()) {
+      throw new Error('Bạn không có quyền thao tác trên ca khám này');
+    }
+
+    if (appointment.noTreatment) {
+      return appointment;
+    }
+
+    const allowedStatuses = ['Pending', 'Approved', 'CheckedIn', 'InProgress'];
+    if (!allowedStatuses.includes(appointment.status)) {
+      throw new Error('Không thể đánh dấu "Không cần khám" ở trạng thái hiện tại');
+    }
+
+    await MedicalRecord.deleteOne({ appointmentId });
+
+    appointment.noTreatment = true;
+    appointment.noTreatmentReason = null;
+    appointment.noTreatmentMarkedAt = new Date();
+    appointment.status = 'Completed';
+
+    await appointment.save();
+
+    return appointment;
+  }
 
 async managerDashboard(startDate, endDate) {
   try {
