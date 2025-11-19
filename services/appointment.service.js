@@ -16,6 +16,10 @@ const Promotion = require('../models/promotion.model');
 const PdfPrinter = require('pdfmake')
 const path = require('path')
 const VisitTicket = require('../models/visitTicket.model')
+const availableSlotService = require('./availableSlot.service');
+
+const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
+const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1 minute drift for "past" validation
 
 const fonts = {
   Roboto: {
@@ -41,7 +45,8 @@ class AppointmentService {
       fullName,
       email,
       phoneNumber,
-      appointmentFor
+      appointmentFor,
+      reservedTimeslotId = null
     } = appointmentData;
 
     // Validate required fields
@@ -233,17 +238,46 @@ class AppointmentService {
     
     // ⭐ Không cho đặt thời gian ở quá khứ
     const nowUtc = new Date();
-    if (slotStartTime.getTime() < nowUtc.getTime()) {
+    const nowRounded = new Date(nowUtc);
+    nowRounded.setSeconds(0, 0);
+    if (slotStartTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
     
     // Kiểm tra conflict với timeslots đã có (KHÔNG cộng buffer time)
-    const conflictingTimeslots = await Timeslot.find({
+    const conflictingTimeslotsRaw = await Timeslot.find({
       doctorUserId: doctorUserId,
       startTime: { $lt: slotEndTime },
       endTime: { $gt: slotStartTime },
       status: { $in: ['Reserved', 'Booked'] }
     });
+
+    const nowForConflict = new Date();
+    const conflictingTimeslots = [];
+
+    for (const ts of conflictingTimeslotsRaw) {
+      if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
+        await Timeslot.updateOne(
+          { _id: ts._id },
+          {
+            $set: {
+              status: 'Available',
+              reservedUntil: null,
+              reservedByUserId: null,
+              appointmentId: null
+            }
+          }
+        );
+        continue;
+      }
+
+      // Bỏ qua chính timeslot mà bệnh nhân đang giữ chỗ
+      if (reservedTimeslotId && ts._id.toString() === reservedTimeslotId.toString()) {
+        continue;
+      }
+
+      conflictingTimeslots.push(ts);
+    }
 
     if (conflictingTimeslots.length > 0) {
       console.log('❌ Khung giờ bị conflict với timeslots đã có:', conflictingTimeslots.length);
@@ -405,21 +439,68 @@ class AppointmentService {
       console.log('   - SĐT:', phoneNumber);
     }
 
-    // Tạo Timeslot mới từ slot được chọn
-    const newTimeslot = await Timeslot.create({
-      doctorScheduleId: schedule._id,
-      doctorUserId,
-      serviceId,
-      startTime: new Date(selectedSlot.startTime),
-      endTime: new Date(selectedSlot.endTime),
-      breakAfterMinutes: 0, // ⭐ Đặt = 0 vì đã bỏ logic nghỉ 10 phút - cho phép đặt liên tiếp
-      // ⭐ FIXED: Nếu dịch vụ cần thanh toán trước, slot là "Reserved" (chưa xác nhận)
-      // Khi thanh toán xong mới thành "Booked"
-      status: service.isPrepaid ? 'Reserved' : 'Booked',
-      appointmentId: null // Sẽ update sau khi tạo appointment
-    });
+    let timeslotRecord = null;
 
-    console.log('✅ Đã tạo Timeslot:', newTimeslot._id);
+    if (reservedTimeslotId) {
+      timeslotRecord = await Timeslot.findById(reservedTimeslotId);
+
+      if (!timeslotRecord) {
+        throw new Error('Giữ chỗ của bạn đã hết hạn. Vui lòng chọn lại thời gian.');
+      }
+
+      if (timeslotRecord.status !== 'Reserved') {
+        throw new Error('Khung giờ này không còn khả dụng. Vui lòng chọn thời gian khác.');
+      }
+
+      if (timeslotRecord.reservedUntil && timeslotRecord.reservedUntil.getTime() < Date.now()) {
+        throw new Error('Giữ chỗ của bạn đã hết hạn. Vui lòng chọn lại thời gian.');
+      }
+
+      if (timeslotRecord.reservedByUserId && timeslotRecord.reservedByUserId.toString() !== patientUserId.toString()) {
+        throw new Error('Khung giờ này đã được người khác giữ chỗ. Vui lòng chọn thời gian khác.');
+      }
+
+      if (timeslotRecord.doctorUserId.toString() !== doctorUserId.toString()) {
+        throw new Error('Giữ chỗ không hợp lệ cho bác sĩ này. Vui lòng thử lại.');
+      }
+
+      if (timeslotRecord.startTime.getTime() !== slotStartTime.getTime() || timeslotRecord.endTime.getTime() !== slotEndTime.getTime()) {
+        throw new Error('Giữ chỗ không khớp với thời gian bạn chọn. Vui lòng chọn lại.');
+      }
+
+      if (timeslotRecord.doctorScheduleId && timeslotRecord.doctorScheduleId.toString() !== schedule._id.toString()) {
+        console.warn(`⚠️ Timeslot ${timeslotRecord._id} có schedule khác. Override với schedule hiện tại.`);
+      }
+
+      timeslotRecord.doctorScheduleId = schedule._id;
+      timeslotRecord.serviceId = serviceId;
+      timeslotRecord.breakAfterMinutes = 0;
+      timeslotRecord.reservedByUserId = patientUserId;
+      timeslotRecord.reservedUntil = null; // Sau khi confirm booking thì không còn giữ chỗ tạm
+      timeslotRecord.appointmentId = null;
+      timeslotRecord.status = service.isPrepaid ? 'Reserved' : 'Booked';
+
+      await timeslotRecord.save();
+      console.log('✅ Sử dụng timeslot đã giữ chỗ:', timeslotRecord._id);
+    } else {
+      // Tạo Timeslot mới từ slot được chọn
+      timeslotRecord = await Timeslot.create({
+        doctorScheduleId: schedule._id,
+        doctorUserId,
+        serviceId,
+        startTime: new Date(selectedSlot.startTime),
+        endTime: new Date(selectedSlot.endTime),
+        breakAfterMinutes: 0, // ⭐ Đặt = 0 vì đã bỏ logic nghỉ 10 phút - cho phép đặt liên tiếp
+        // ⭐ FIXED: Nếu dịch vụ cần thanh toán trước, slot là "Reserved" (chưa xác nhận)
+        // Khi thanh toán xong mới thành "Booked"
+        status: service.isPrepaid ? 'Reserved' : 'Booked',
+        appointmentId: null, // Sẽ update sau khi tạo appointment
+        reservedByUserId: patientUserId,
+        reservedUntil: null
+      });
+
+      console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
+    }
 
     // Xác định type dựa vào category
     let appointmentType;
@@ -458,7 +539,7 @@ class AppointmentService {
       customerId, // null nếu đặt cho bản thân, có giá trị nếu đặt cho người khác
       doctorUserId,
       serviceId,
-      timeslotId: newTimeslot._id,
+      timeslotId: timeslotRecord._id,
       status: appointmentStatus, // 'PendingPayment' nếu isPrepaid, 'Pending' nếu không
       type: appointmentType, // Dựa vào service.category
       mode: appointmentMode, // Consultation=Online, Examination=Offline
@@ -495,7 +576,7 @@ class AppointmentService {
 
     // Update timeslot với appointmentId
     // ⭐ FIXED: Update status thành "Reserved" nếu cần thanh toán
-    await Timeslot.findByIdAndUpdate(newTimeslot._id, {
+    await Timeslot.findByIdAndUpdate(timeslotRecord._id, {
       appointmentId: newAppointment._id,
       status: service.isPrepaid ? 'Reserved' : 'Booked'
     });
@@ -595,6 +676,149 @@ class AppointmentService {
     }
 
     return responsePayload;
+  }
+
+  async reserveTimeslot({
+    patientUserId,
+    doctorUserId,
+    serviceId,
+    doctorScheduleId,
+    date,
+    startTime,
+    appointmentFor = 'self'
+  }) {
+    if (!patientUserId) {
+      throw new Error('Vui lòng đăng nhập để giữ chỗ.');
+    }
+
+    if (!doctorUserId || !serviceId || !date || !startTime) {
+      throw new Error('Thiếu thông tin để giữ chỗ. Vui lòng chọn lại bác sĩ, dịch vụ, ngày và thời gian.');
+    }
+
+    const searchDate = new Date(date);
+    if (isNaN(searchDate.getTime())) {
+      throw new Error('Ngày không hợp lệ.');
+    }
+
+    const slotStart = new Date(startTime);
+    if (isNaN(slotStart.getTime())) {
+      throw new Error('Thời gian không hợp lệ.');
+    }
+
+    // Xác thực thời gian thông qua availableSlotService để tái sử dụng toàn bộ validation
+    const validationResult = await availableSlotService.validateAppointmentTime({
+      doctorUserId,
+      serviceId,
+      date: searchDate,
+      startTime: slotStart,
+      patientUserId
+    });
+
+    const validatedStart = new Date(validationResult.startTime);
+    const validatedEnd = new Date(validationResult.endTime);
+
+    let resolvedDoctorScheduleId = doctorScheduleId;
+    if (!resolvedDoctorScheduleId) {
+      const schedule = await DoctorSchedule.findOne({
+        doctorUserId,
+        date: searchDate
+      }).select('_id');
+
+      resolvedDoctorScheduleId = schedule?._id || null;
+    }
+
+    const holdUntil = new Date(Date.now() + RESERVATION_HOLD_MS);
+
+    let timeslot = await Timeslot.findOne({
+      doctorUserId,
+      startTime: validatedStart,
+      endTime: validatedEnd
+    });
+
+    if (timeslot) {
+      if (timeslot.status === 'Booked') {
+        throw new Error('Khung giờ này đã được đặt. Vui lòng chọn thời gian khác.');
+      }
+
+      if (
+        timeslot.status === 'Reserved' &&
+        timeslot.reservedByUserId &&
+        timeslot.reservedByUserId.toString() !== patientUserId.toString() &&
+        timeslot.reservedUntil &&
+        timeslot.reservedUntil > new Date()
+      ) {
+        throw new Error('Khung giờ này đang được người khác giữ chỗ. Vui lòng chọn thời gian khác.');
+      }
+    } else {
+      timeslot = new Timeslot({
+        doctorScheduleId: resolvedDoctorScheduleId,
+        doctorUserId,
+        serviceId,
+        startTime: validatedStart,
+        endTime: validatedEnd,
+        breakAfterMinutes: 0
+      });
+    }
+
+    timeslot.status = 'Reserved';
+    timeslot.reservedByUserId = patientUserId;
+    timeslot.reservedUntil = holdUntil;
+    timeslot.appointmentId = null;
+    if (resolvedDoctorScheduleId) {
+      timeslot.doctorScheduleId = resolvedDoctorScheduleId;
+    }
+    timeslot.serviceId = serviceId;
+
+    await timeslot.save();
+
+    return {
+      timeslotId: timeslot._id,
+      doctorScheduleId: timeslot.doctorScheduleId,
+      startTime: timeslot.startTime,
+      endTime: timeslot.endTime,
+      expiresAt: holdUntil
+    };
+  }
+
+  async releaseReservedTimeslot({ patientUserId, timeslotId }) {
+    if (!patientUserId || !timeslotId) {
+      throw new Error('Thiếu thông tin để hủy giữ chỗ.');
+    }
+
+    const timeslot = await Timeslot.findById(timeslotId);
+    if (!timeslot) {
+      return { released: false };
+    }
+
+    if (timeslot.status !== 'Reserved') {
+      return { released: false };
+    }
+
+    if (timeslot.appointmentId) {
+      // Timeslot đã gắn với appointment → không được hủy
+      return { released: false };
+    }
+
+    if (
+      timeslot.reservedByUserId &&
+      timeslot.reservedByUserId.toString() !== patientUserId.toString()
+    ) {
+      throw new Error('Bạn không thể hủy giữ chỗ của người khác.');
+    }
+
+    await Timeslot.updateOne(
+      { _id: timeslotId },
+      {
+        $set: {
+          status: 'Available',
+          reservedByUserId: null,
+          reservedUntil: null,
+          appointmentId: null
+        }
+      }
+    );
+
+    return { released: true };
   }
 
   /**
@@ -1116,8 +1340,9 @@ class AppointmentService {
         .sort({ createdAt: -1 })
         .lean();
 
-      // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+      // ⭐ Thêm doctor status vào mỗi appointment - kiểm tra leave request theo ngày của appointment
       const Doctor = require('../models/doctor.model');
+      const LeaveRequest = require('../models/leaveRequest.model');
       
       // Lấy tất cả doctorUserIds từ appointments
       const doctorUserIds = updatedAppointments
@@ -1135,12 +1360,48 @@ class AppointmentService {
         doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
       });
       
-      // Thêm doctorStatus vào mỗi appointment
+      // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
+      const approvedLeaves = await LeaveRequest.find({
+        status: 'Approved',
+        userId: { $in: doctorUserIds }
+      }).select('userId startDate endDate').lean();
+      
+      // Thêm doctorStatus vào mỗi appointment - kiểm tra leave theo ngày appointment
       const appointmentsWithDoctorStatus = updatedAppointments.map((apt) => {
         if (apt.doctorUserId && apt.doctorUserId._id) {
-          const doctorStatus = doctorStatusMap.get(apt.doctorUserId._id.toString());
-          if (doctorStatus) {
-            apt.doctorStatus = doctorStatus;
+          const doctorUserId = apt.doctorUserId._id.toString();
+          const globalStatus = doctorStatusMap.get(doctorUserId);
+          
+          // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
+          let isOnLeaveForThisDate = false;
+          if (apt.timeslotId && apt.timeslotId.startTime) {
+            const appointmentDate = new Date(apt.timeslotId.startTime);
+            appointmentDate.setUTCHours(0, 0, 0, 0);
+            
+            // Kiểm tra trong danh sách approved leaves
+            for (const leave of approvedLeaves) {
+              if (leave.userId && leave.userId.toString() === doctorUserId) {
+                const leaveStart = new Date(leave.startDate);
+                const leaveEnd = new Date(leave.endDate);
+                leaveStart.setUTCHours(0, 0, 0, 0);
+                leaveEnd.setUTCHours(23, 59, 59, 999);
+                
+                // Nếu appointment nằm trong khoảng nghỉ phép
+                if (appointmentDate >= leaveStart && appointmentDate <= leaveEnd) {
+                  isOnLeaveForThisDate = true;
+                  break;
+                }
+              }
+            }
+          }
+          
+          // ⭐ Chỉ set doctorStatus = 'On Leave' nếu appointment thực sự nằm trong khoảng nghỉ phép
+          // Không dùng status global vì nó có thể áp dụng cho tất cả appointments
+          if (isOnLeaveForThisDate) {
+            apt.doctorStatus = 'On Leave';
+          } else {
+            // Nếu không có leave cho ngày này, dùng status global (Available, Busy, Inactive)
+            apt.doctorStatus = globalStatus || null;
           }
         }
         return apt;
@@ -1226,8 +1487,9 @@ class AppointmentService {
         .sort({ createdAt: -1 })
         .lean(); // Sắp xếp theo thời gian tạo mới nhất
 
-      // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+      // ⭐ Thêm doctor status vào mỗi appointment - kiểm tra leave request theo ngày của appointment
       const Doctor = require('../models/doctor.model');
+      const LeaveRequest = require('../models/leaveRequest.model');
       
       // Lấy tất cả doctorUserIds từ appointments
       const doctorUserIds = appointments
@@ -1245,12 +1507,48 @@ class AppointmentService {
         doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
       });
       
-      // Thêm doctorStatus vào mỗi appointment
+      // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
+      const approvedLeaves = await LeaveRequest.find({
+        status: 'Approved',
+        userId: { $in: doctorUserIds }
+      }).select('userId startDate endDate').lean();
+      
+      // Thêm doctorStatus vào mỗi appointment - kiểm tra leave theo ngày appointment
       const appointmentsWithDoctorStatus = appointments.map((apt) => {
         if (apt.doctorUserId && apt.doctorUserId._id) {
-          const doctorStatus = doctorStatusMap.get(apt.doctorUserId._id.toString());
-          if (doctorStatus) {
-            apt.doctorStatus = doctorStatus;
+          const doctorUserId = apt.doctorUserId._id.toString();
+          const globalStatus = doctorStatusMap.get(doctorUserId);
+          
+          // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
+          let isOnLeaveForThisDate = false;
+          if (apt.timeslotId && apt.timeslotId.startTime) {
+            const appointmentDate = new Date(apt.timeslotId.startTime);
+            appointmentDate.setUTCHours(0, 0, 0, 0);
+            
+            // Kiểm tra trong danh sách approved leaves
+            for (const leave of approvedLeaves) {
+              if (leave.userId && leave.userId.toString() === doctorUserId) {
+                const leaveStart = new Date(leave.startDate);
+                const leaveEnd = new Date(leave.endDate);
+                leaveStart.setUTCHours(0, 0, 0, 0);
+                leaveEnd.setUTCHours(23, 59, 59, 999);
+                
+                // Nếu appointment nằm trong khoảng nghỉ phép
+                if (appointmentDate >= leaveStart && appointmentDate <= leaveEnd) {
+                  isOnLeaveForThisDate = true;
+                  break;
+                }
+              }
+            }
+          }
+          
+          // ⭐ Chỉ set doctorStatus = 'On Leave' nếu appointment thực sự nằm trong khoảng nghỉ phép
+          // Không dùng status global vì nó có thể áp dụng cho tất cả appointments
+          if (isOnLeaveForThisDate) {
+            apt.doctorStatus = 'On Leave';
+          } else {
+            // Nếu không có leave cho ngày này, dùng status global (Available, Busy, Inactive)
+            apt.doctorStatus = globalStatus || null;
           }
         }
         return apt;

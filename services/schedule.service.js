@@ -118,16 +118,9 @@ class ScheduleService {
   }
 
   /**
-   * Lấy danh sách tất cả bác sĩ với working hours (chỉ lấy bác sĩ Active)
+   * ⭐ Lấy danh sách bác sĩ chưa có workingHours (chưa được manager tạo lịch làm việc)
    */
-  async getDoctorsWithWorkingHours() {
-    const defaultWorkingHours = {
-      morningStart: '08:00',
-      morningEnd: '12:00',
-      afternoonStart: '14:00',
-      afternoonEnd: '18:00'
-    };
-
+  async getDoctorsWithoutWorkingHours() {
     const doctors = await Doctor.find()
       .populate({
         path: 'doctorUserId',
@@ -135,16 +128,170 @@ class ScheduleService {
       })
       .lean();
 
+    // ⭐ Chỉ trả về bác sĩ Active chưa có workingHours
     return doctors
-      .filter(doc => doc.doctorUserId && doc.doctorUserId.role === 'Doctor' && doc.doctorUserId.status === 'Active')
+      .filter(doc => {
+        // Filter bác sĩ Active
+        if (!doc.doctorUserId || doc.doctorUserId.role !== 'Doctor' || doc.doctorUserId.status !== 'Active') {
+          return false;
+        }
+        
+        // ⭐ Chỉ trả về bác sĩ chưa có workingHours (chưa được manager tạo)
+        const hasWorkingHours = doc.workingHours && 
+          doc.workingHours.morningStart && 
+          doc.workingHours.morningEnd && 
+          doc.workingHours.afternoonStart && 
+          doc.workingHours.afternoonEnd;
+        
+        return !hasWorkingHours; // Trả về bác sĩ chưa có workingHours
+      })
+      .map(doc => ({
+        _id: doc.doctorUserId._id,
+        fullName: doc.doctorUserId.fullName,
+        email: doc.doctorUserId.email
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
+
+  /**
+   * Lấy danh sách tất cả bác sĩ với working hours (chỉ lấy bác sĩ Active)
+   */
+  async getDoctorsWithWorkingHours() {
+    const doctors = await Doctor.find()
+      .populate({
+        path: 'doctorUserId',
+        select: 'fullName email status role'
+      })
+      .lean();
+
+    // ⭐ Chỉ trả về bác sĩ đã có workingHours (đã được manager tạo lịch làm việc)
+    return doctors
+      .filter(doc => {
+        // Filter bác sĩ Active
+        if (!doc.doctorUserId || doc.doctorUserId.role !== 'Doctor' || doc.doctorUserId.status !== 'Active') {
+          return false;
+        }
+        
+        // ⭐ Chỉ trả về bác sĩ đã có workingHours (đã được manager tạo)
+        const hasWorkingHours = doc.workingHours && 
+          doc.workingHours.morningStart && 
+          doc.workingHours.morningEnd && 
+          doc.workingHours.afternoonStart && 
+          doc.workingHours.afternoonEnd;
+        
+        return hasWorkingHours;
+      })
       .map(doc => ({
         _id: doc.doctorUserId._id,
         fullName: doc.doctorUserId.fullName,
         email: doc.doctorUserId.email,
-        workingHours: doc.workingHours || defaultWorkingHours,
+        workingHours: doc.workingHours, // ⭐ Chỉ trả về nếu đã có workingHours
         workingHoursUpdatedAt: doc.workingHoursUpdatedAt || null
       }))
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
+
+  /**
+   * ⭐ Tạo lịch làm việc mới cho bác sĩ (tự động tạo cả ca sáng và ca chiều)
+   * @param {string} doctorId - ID của bác sĩ
+   * @param {string} date - Ngày (YYYY-MM-DD)
+   * @param {object} workingHours - { morningStart, morningEnd, afternoonStart, afternoonEnd }
+   * @param {string} roomId - ID phòng khám (optional)
+   */
+  async createSchedule(doctorId, date, workingHours, roomId = null) {
+    if (!doctorId || !date || !workingHours) {
+      throw new Error('Vui lòng cung cấp đầy đủ doctorId, date và workingHours');
+    }
+
+    this._validateWorkingHours(workingHours);
+
+    // Chuẩn bị ngày
+    const scheduleDate = new Date(date);
+    scheduleDate.setUTCHours(12, 0, 0, 0); // Set giữa ngày để tránh timezone issues
+
+    // Kiểm tra xem đã có schedule chưa
+    const existingSchedules = await DoctorSchedule.find({
+      doctorUserId: doctorId,
+      date: scheduleDate
+    });
+
+    if (existingSchedules.length > 0) {
+      throw new Error('Bác sĩ đã có lịch làm việc cho ngày này');
+    }
+
+    const now = new Date();
+    
+    // Tính toán thời gian cho Morning và Afternoon
+    const morningStart = new Date(scheduleDate);
+    const [morningStartHour, morningStartMinute] = workingHours.morningStart.split(':').map(Number);
+    morningStart.setUTCHours(morningStartHour - 7, morningStartMinute, 0, 0);
+    
+    const morningEnd = new Date(scheduleDate);
+    const [morningEndHour, morningEndMinute] = workingHours.morningEnd.split(':').map(Number);
+    morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
+    
+    const afternoonStart = new Date(scheduleDate);
+    const [afternoonStartHour, afternoonStartMinute] = workingHours.afternoonStart.split(':').map(Number);
+    afternoonStart.setUTCHours(afternoonStartHour - 7, afternoonStartMinute, 0, 0);
+    
+    const afternoonEnd = new Date(scheduleDate);
+    const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
+    afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
+    
+    // Check status dựa vào thời gian thực
+    const morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
+    const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+
+    // ⭐ Tạo cả ca sáng và ca chiều
+    const schedulesToCreate = [
+      {
+        doctorUserId: doctorId,
+        date: scheduleDate,
+        shift: 'Morning',
+        status: morningStatus,
+        maxSlots: 4, // Default maxSlots
+        roomId: roomId || null,
+        workingHours: workingHours
+      },
+      {
+        doctorUserId: doctorId,
+        date: scheduleDate,
+        shift: 'Afternoon',
+        status: afternoonStatus,
+        maxSlots: 4, // Default maxSlots
+        roomId: roomId || null,
+        workingHours: workingHours
+      }
+    ];
+
+    const createdSchedules = await DoctorSchedule.insertMany(schedulesToCreate);
+
+    // ⭐ Cập nhật workingHours và ngày hiệu lực vào Doctor model
+    const doctorProfile = await Doctor.findOne({ doctorUserId: doctorId });
+    if (doctorProfile) {
+      let shouldSave = false;
+
+      if (!doctorProfile.workingHours || !doctorProfile.workingHours.morningStart) {
+        doctorProfile.workingHours = workingHours;
+        doctorProfile.workingHoursUpdatedAt = new Date();
+        shouldSave = true;
+      }
+
+      if (!doctorProfile.workingHoursEffectiveDate || scheduleDate < doctorProfile.workingHoursEffectiveDate) {
+        doctorProfile.workingHoursEffectiveDate = scheduleDate;
+        shouldSave = true;
+      }
+
+      if (shouldSave) {
+        await doctorProfile.save();
+      }
+    }
+
+    return {
+      status: true,
+      message: 'Tạo lịch làm việc thành công',
+      data: createdSchedules[0] // Trả về schedule đầu tiên (Morning) để tương thích với interface
+    };
   }
 
   /**

@@ -6,6 +6,8 @@ const Doctor = require('../models/doctor.model');
 const ScheduleHelper = require('../utils/scheduleHelper');
 const leaveRequestService = require('./leaveRequest.service');
 
+const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1-minute drift between UI display and actual time
+
 class AvailableSlotService {
 
   /**
@@ -368,26 +370,60 @@ class AvailableSlotService {
 
     const serviceDuration = service.durationMinutes;
 
-    // 3. Lấy tất cả bác sĩ ACTIVE
+    // 3. Chuẩn bị ngày tìm kiếm
+    const searchDate = new Date(date);
+    searchDate.setUTCHours(0, 0, 0, 0);
+
+    // 4. Lấy tất cả bác sĩ ACTIVE
     const doctors = await User.find({
       role: 'Doctor',
       status: 'Active'
     }).select('_id fullName email phoneNumber');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive"
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive" và chưa có workingHours
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
-    }).select('doctorUserId status');
+    }).select('doctorUserId status workingHours workingHoursEffectiveDate');
 
     // Tạo Map để lookup nhanh
     const doctorStatusMap = new Map();
+    const doctorWorkingHoursMap = new Map();
+    const doctorWorkingHoursEffectiveMap = new Map();
     doctorStatuses.forEach(doc => {
       doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+      doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
+      doctorWorkingHoursEffectiveMap.set(doc.doctorUserId.toString(), doc.workingHoursEffectiveDate);
     });
 
-    // Filter bỏ các bác sĩ có status "Inactive" (KHÔNG filter "On Leave" ở đây, sẽ check theo ngày cụ thể)
+    // Filter bỏ các bác sĩ:
+    // 1. Có status "Inactive"
+    // 2. Chưa có workingHours (chưa được manager tạo lịch làm việc)
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+      const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
+      
+      // ⭐ Kiểm tra xem bác sĩ đã có workingHours chưa
+      const hasWorkingHours = workingHours && 
+        workingHours.morningStart && 
+        workingHours.morningEnd && 
+        workingHours.afternoonStart && 
+        workingHours.afternoonEnd;
+      
+      if (!hasWorkingHours) {
+        console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có workingHours, skip...`);
+        return false; // Bỏ qua bác sĩ chưa có workingHours
+      }
+
+      const effectiveDateRaw = doctorWorkingHoursEffectiveMap.get(doctor._id.toString());
+      if (effectiveDateRaw) {
+        const effectiveDate = new Date(effectiveDateRaw);
+        effectiveDate.setUTCHours(0, 0, 0, 0);
+        if (searchDate < effectiveDate) {
+          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa bắt đầu làm việc cho đến ${effectiveDate.toISOString().split('T')[0]}, skip...`);
+          return false;
+        }
+      }
+      
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
       // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
@@ -396,11 +432,7 @@ class AvailableSlotService {
 
     console.log('🔍 Doctor Status Filter:');
     console.log(`   - Tổng bác sĩ ACTIVE: ${doctors.length}`);
-    console.log(`   - Sau khi filter (loại bỏ Inactive): ${availableDoctorsUser.length}`);
-
-    // 4. Chuẩn bị ngày tìm kiếm
-    const searchDate = new Date(date);
-    searchDate.setUTCHours(0, 0, 0, 0);
+    console.log(`   - Sau khi filter (loại bỏ Inactive và chưa có workingHours): ${availableDoctorsUser.length}`);
 
     console.log('🔍 Search date:', searchDate.toISOString());
     console.log('📅 Searching for doctors with schedule on:', searchDate.toISOString().split('T')[0]);
@@ -1379,6 +1411,30 @@ class AvailableSlotService {
 
     console.log(`🔍 [getDoctorScheduleRange] Found ${allTimeslots.length} timeslots (Reserved/Booked) for doctor ${doctorUserId} on ${searchDate.toISOString().split('T')[0]}`);
 
+    const nowForReservation = new Date();
+    const activeTimeslots = [];
+
+    for (const slot of allTimeslots) {
+      if (slot.status === 'Reserved') {
+        if (!slot.reservedUntil || slot.reservedUntil <= nowForReservation) {
+          // Reservation expired -> release slot
+          await Timeslot.updateOne(
+            { _id: slot._id },
+            {
+              $set: {
+                status: 'Available',
+                reservedUntil: null,
+                reservedByUserId: null,
+                appointmentId: null,
+              },
+            },
+          );
+          continue;
+        }
+      }
+      activeTimeslots.push(slot);
+    }
+
     // Filter appointments vào ngày đang xét
     const bookedSlotsFromAppointments = bookedAppointments
       .filter(apt => {
@@ -1394,7 +1450,7 @@ class AvailableSlotService {
 
     // ⭐ FIX: Chỉ lấy timeslots có appointmentId VÀ appointment đó vẫn còn reference đến timeslot này
     // (Tránh lấy timeslot cũ sau khi reschedule - đã được set về 'Available' nhưng có thể có delay)
-    const validTimeslots = allTimeslots.filter(timeslot => {
+    const validTimeslots = activeTimeslots.filter(timeslot => {
       // Nếu timeslot không có appointmentId, vẫn tính (có thể là Reserved chưa có appointment)
       if (!timeslot.appointmentId) {
         return true;
@@ -1666,11 +1722,10 @@ class AvailableSlotService {
     const [morningEndHour, morningEndMinute] = workingHours.morningEnd.split(':').map(Number);
     morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
     
+    const morningShiftPassed = isShiftPassed(morningStart, morningEnd);
+
     if (morningSchedules.length > 0) {
-      // ⭐ QUAN TRỌNG: Check "Đã qua thời gian làm việc" TRƯỚC khi tính gaps
-      // Nếu đã qua thời gian làm việc, không cần tính gaps nữa
-      if (isShiftPassed(morningStart, morningEnd)) {
-        // Đã qua thời gian làm việc
+      if (morningShiftPassed) {
         scheduleRanges.push({
           shift: 'Morning',
           shiftDisplay: 'Buổi sáng',
@@ -1680,34 +1735,24 @@ class AvailableSlotService {
           displayRange: 'Đã qua thời gian làm việc'
         });
       } else {
-        // Chưa qua thời gian - tính available gaps
         const rawGaps = calculateAvailableGaps(morningStart, morningEnd, bookedSlots);
-        const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
-        
-        // ⭐ Phân biệt "Đã hết chỗ" và còn slots
+        const availableGaps = filterRealTimeGaps(rawGaps);
+
         let displayMessage = '';
         if (availableGaps.length === 0) {
-          // Có schedule nhưng hết chỗ (đã book hết hoặc không có gaps)
-          // Kiểm tra xem có phải do đã book hết không
-          if (rawGaps.length === 0) {
-            // Không có gaps ban đầu - có thể là đã book hết
-            displayMessage = 'Đã hết chỗ';
-          } else {
-            // Có gaps ban đầu nhưng bị filter hết - có thể do thời gian thực
-            // Nhưng vì đã check isShiftPassed ở trên, nên đây là do đã book hết
-            displayMessage = 'Đã hết chỗ';
-          }
+          displayMessage = 'Đã hết chỗ';
         } else {
-          // Còn slots khả dụng
-          displayMessage = availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ');
+          displayMessage = availableGaps
+            .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
+            .join(', ');
         }
-        
+
         scheduleRanges.push({
           shift: 'Morning',
           shiftDisplay: 'Buổi sáng',
           startTime: morningStart.toISOString(),
           endTime: morningEnd.toISOString(),
-          availableGaps: availableGaps.map(gap => ({
+          availableGaps: availableGaps.map((gap) => ({
             start: gap.start.toISOString(),
             end: gap.end.toISOString(),
             display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
@@ -1716,14 +1761,13 @@ class AvailableSlotService {
         });
       }
     } else {
-      // Không có schedule buổi sáng - trả về "Đã hết chỗ"
       scheduleRanges.push({
         shift: 'Morning',
         shiftDisplay: 'Buổi sáng',
         startTime: morningStart.toISOString(),
         endTime: morningEnd.toISOString(),
         availableGaps: [],
-        displayRange: 'Đã hết chỗ'
+        displayRange: morningShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
       });
     }
     
@@ -1736,11 +1780,10 @@ class AvailableSlotService {
     const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
     afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
     
+    const afternoonShiftPassed = isShiftPassed(afternoonStart, afternoonEnd);
+
     if (afternoonSchedules.length > 0) {
-      // ⭐ QUAN TRỌNG: Check "Đã qua thời gian làm việc" TRƯỚC khi tính gaps
-      // Nếu đã qua thời gian làm việc, không cần tính gaps nữa
-      if (isShiftPassed(afternoonStart, afternoonEnd)) {
-        // Đã qua thời gian làm việc
+      if (afternoonShiftPassed) {
         scheduleRanges.push({
           shift: 'Afternoon',
           shiftDisplay: 'Buổi chiều',
@@ -1750,34 +1793,24 @@ class AvailableSlotService {
           displayRange: 'Đã qua thời gian làm việc'
         });
       } else {
-        // Chưa qua thời gian - tính available gaps
         const rawGaps = calculateAvailableGaps(afternoonStart, afternoonEnd, bookedSlots);
-        const availableGaps = filterRealTimeGaps(rawGaps); // ⭐ Filter theo thời gian thực
-        
-        // ⭐ Phân biệt "Đã hết chỗ" và còn slots
+        const availableGaps = filterRealTimeGaps(rawGaps);
+
         let displayMessage = '';
         if (availableGaps.length === 0) {
-          // Có schedule nhưng hết chỗ (đã book hết hoặc không có gaps)
-          // Kiểm tra xem có phải do đã book hết không
-          if (rawGaps.length === 0) {
-            // Không có gaps ban đầu - có thể là đã book hết
-            displayMessage = 'Đã hết chỗ';
-          } else {
-            // Có gaps ban đầu nhưng bị filter hết - có thể do thời gian thực
-            // Nhưng vì đã check isShiftPassed ở trên, nên đây là do đã book hết
-            displayMessage = 'Đã hết chỗ';
-          }
+          displayMessage = 'Đã hết chỗ';
         } else {
-          // Còn slots khả dụng
-          displayMessage = availableGaps.map(gap => `${formatTime(gap.start)}-${formatTime(gap.end)}`).join(', ');
+          displayMessage = availableGaps
+            .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
+            .join(', ');
         }
-        
+
         scheduleRanges.push({
           shift: 'Afternoon',
           shiftDisplay: 'Buổi chiều',
           startTime: afternoonStart.toISOString(),
           endTime: afternoonEnd.toISOString(),
-          availableGaps: availableGaps.map(gap => ({
+          availableGaps: availableGaps.map((gap) => ({
             start: gap.start.toISOString(),
             end: gap.end.toISOString(),
             display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
@@ -1786,14 +1819,13 @@ class AvailableSlotService {
         });
       }
     } else {
-      // Không có schedule buổi chiều - trả về "Đã hết chỗ"
       scheduleRanges.push({
         shift: 'Afternoon',
         shiftDisplay: 'Buổi chiều',
         startTime: afternoonStart.toISOString(),
         endTime: afternoonEnd.toISOString(),
         availableGaps: [],
-        displayRange: 'Đã hết chỗ'
+        displayRange: afternoonShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
       });
     }
 
@@ -1858,7 +1890,10 @@ class AvailableSlotService {
     // ⭐ 3.1. Không cho đặt thời gian ở quá khứ - CHECK TRƯỚC TẤT CẢ CÁC VALIDATION KHÁC
     // Nếu thời gian ở quá khứ, return ngay, không check conflict hay validation khác
     const nowUtc = new Date();
-    if (startTimeObj.getTime() < nowUtc.getTime()) {
+    const nowUtcRounded = new Date(nowUtc);
+    nowUtcRounded.setSeconds(0, 0); // Cho phép đặt đúng phút hiện tại
+
+    if (startTimeObj.getTime() < (nowUtcRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
 
@@ -1986,12 +2021,34 @@ class AvailableSlotService {
     // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
     const Timeslot = require('../models/timeslot.model');
     
-    const conflictingTimeslots = await Timeslot.find({
+    const conflictingTimeslotsRaw = await Timeslot.find({
       doctorUserId: doctorUserId,
       startTime: { $lt: endTimeObj },
       endTime: { $gt: startTimeObj },
       status: { $in: ['Reserved', 'Booked'] }
     });
+    
+    const nowForSlot = new Date();
+    const conflictingTimeslots = [];
+
+    for (const slot of conflictingTimeslotsRaw) {
+      if (slot.status === 'Reserved' && slot.reservedUntil && slot.reservedUntil <= nowForSlot) {
+        await Timeslot.updateOne(
+          { _id: slot._id },
+          {
+            $set: {
+              status: 'Available',
+              reservedUntil: null,
+              reservedByUserId: null,
+              appointmentId: null
+            }
+          }
+        );
+        continue;
+      }
+
+      conflictingTimeslots.push(slot);
+    }
 
     if (conflictingTimeslots.length > 0) {
       throw new Error('Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.');

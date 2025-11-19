@@ -83,7 +83,8 @@ const createConsultationAppointment = async (req, res) => {
       doctorUserId, 
       doctorScheduleId,
       selectedSlot,
-      notes
+      notes,
+      reservedTimeslotId
     } = req.body;
 
     // fullName và email có thể không được gửi nếu appointmentFor là 'self'
@@ -170,7 +171,8 @@ const createConsultationAppointment = async (req, res) => {
       doctorUserId,
       doctorScheduleId,
       selectedSlot,
-      notes
+      notes,
+      reservedTimeslotId
     });
 
     console.log('✅ Appointment created successfully:', result);
@@ -286,6 +288,86 @@ const reviewAppointment = async (req, res) => {
       success: false,
       message: error.message || 'Có lỗi xảy ra khi xử lý lịch hẹn',
       error: error.message
+    });
+  }
+};
+
+const reserveTimeslot = async (req, res) => {
+  try {
+    const patientUserId = req.user?.userId;
+
+    if (!patientUserId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Vui lòng đăng nhập để giữ chỗ.'
+      });
+    }
+
+    const {
+      doctorUserId,
+      serviceId,
+      doctorScheduleId,
+      date,
+      startTime,
+      appointmentFor
+    } = req.body;
+
+    const result = await appointmentService.reserveTimeslot({
+      patientUserId,
+      doctorUserId,
+      serviceId,
+      doctorScheduleId,
+      date,
+      startTime,
+      appointmentFor
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('❌ Error in reserveTimeslot:', error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Không thể giữ chỗ. Vui lòng thử lại.'
+    });
+  }
+};
+
+const releaseReservedTimeslot = async (req, res) => {
+  try {
+    const patientUserId = req.user?.userId;
+
+    if (!patientUserId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Vui lòng đăng nhập.'
+      });
+    }
+
+    const { timeslotId } = req.body;
+    if (!timeslotId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu thông tin timeslotId.'
+      });
+    }
+
+    const result = await appointmentService.releaseReservedTimeslot({
+      patientUserId,
+      timeslotId
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('❌ Error in releaseReservedTimeslot:', error);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Không thể hủy giữ chỗ.'
     });
   }
 };
@@ -1059,20 +1141,53 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       _id : {$ne : appointment.doctorUserId._id}
     }).select('_id fullName email');
 
-    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive"
+    // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "Inactive" và chưa có workingHours
     const doctorStatuses = await Doctor.find({
       doctorUserId: { $in: doctors.map(d => d._id) }
-    }).select('doctorUserId status');
+    }).select('doctorUserId status workingHours workingHoursEffectiveDate');
 
     // Tạo Map để lookup nhanh
     const doctorStatusMap = new Map();
+    const doctorWorkingHoursMap = new Map();
+    const doctorWorkingHoursEffectiveMap = new Map();
     doctorStatuses.forEach(doc => {
       doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+      doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
+      doctorWorkingHoursEffectiveMap.set(doc.doctorUserId.toString(), doc.workingHoursEffectiveDate);
     });
 
-    // Filter bỏ các bác sĩ có status "Inactive" (KHÔNG filter "On Leave" ở đây, sẽ check theo ngày cụ thể)
+    // Filter bỏ các bác sĩ:
+    // 1. Có status "Inactive"
+    // 2. Chưa có workingHours (chưa được manager tạo lịch làm việc)
+    const normalizedRequestDate = new Date(startDateTime);
+    normalizedRequestDate.setUTCHours(0, 0, 0, 0);
+
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
+      const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
+      
+      // ⭐ Kiểm tra xem bác sĩ đã có workingHours chưa
+      const hasWorkingHours = workingHours && 
+        workingHours.morningStart && 
+        workingHours.morningEnd && 
+        workingHours.afternoonStart && 
+        workingHours.afternoonEnd;
+      
+      if (!hasWorkingHours) {
+        console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có workingHours, skip...`);
+        return false; // Bỏ qua bác sĩ chưa có workingHours
+      }
+
+      const effectiveDateRaw = doctorWorkingHoursEffectiveMap.get(doctor._id.toString());
+      if (effectiveDateRaw) {
+        const effectiveDate = new Date(effectiveDateRaw);
+        effectiveDate.setUTCHours(0, 0, 0, 0);
+        if (normalizedRequestDate < effectiveDate) {
+          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa bắt đầu làm việc cho đến ${effectiveDate.toISOString().split('T')[0]}, skip...`);
+          return false;
+        }
+      }
+      
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
       // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave" (sẽ check leave theo ngày cụ thể)
@@ -1080,7 +1195,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     });
 
     console.log(`🔍 Found ${doctors.length} active doctors`);
-    console.log(`🔍 After filtering (removing Inactive): ${availableDoctorsUser.length} doctors`);
+    console.log(`🔍 After filtering (removing Inactive and doctors without workingHours): ${availableDoctorsUser.length} doctors`);
 
     const availableDoctors = [];
 
@@ -1477,4 +1592,6 @@ module.exports = {
   managerDashboard,
   getMonthlyRevenue,
   getMyRelatives,
+  reserveTimeslot,
+  releaseReservedTimeslot
 };

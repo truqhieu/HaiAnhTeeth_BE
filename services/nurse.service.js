@@ -95,7 +95,9 @@ class NurseService {
       medicalRecordStatusMap[record.appointmentId.toString()] = record.status === 'Finalized';
     });
 
-    // ⭐ Thêm doctor status vào mỗi appointment để FE biết doctor có "On Leave" không
+    // ⭐ Thêm doctor status vào mỗi appointment - kiểm tra leave request theo ngày của appointment
+    const LeaveRequest = require('../models/leaveRequest.model');
+    
     const doctorUserIds = appointments
       .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
       .map(apt => apt.doctorUserId._id);
@@ -110,18 +112,56 @@ class NurseService {
     doctors.forEach(doctor => {
       doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
     });
+    
+    // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
+    const approvedLeaves = await LeaveRequest.find({
+      status: 'Approved',
+      userId: { $in: doctorUserIds }
+    }).select('userId startDate endDate').lean();
 
     // Format response thành array dạng bảng
     return appointments.map(appointment => {
       const timeslot = appointment.timeslotId;
       const patient = appointment.customerId || appointment.patientUserId;
       
-      // ⭐ Lấy doctorUserId và doctorStatus
+      // ⭐ Lấy doctorUserId và doctorStatus - kiểm tra leave theo ngày appointment
       let doctorUserId = null;
       let doctorStatus = null;
       if (appointment.doctorUserId && appointment.doctorUserId._id) {
         doctorUserId = appointment.doctorUserId._id.toString();
-        doctorStatus = doctorStatusMap.get(doctorUserId) || null;
+        const globalStatus = doctorStatusMap.get(doctorUserId) || null;
+        
+        // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
+        let isOnLeaveForThisDate = false;
+        if (timeslot && timeslot.startTime) {
+          const appointmentDate = new Date(timeslot.startTime);
+          appointmentDate.setUTCHours(0, 0, 0, 0);
+          
+          // Kiểm tra trong danh sách approved leaves
+          for (const leave of approvedLeaves) {
+            if (leave.userId && leave.userId.toString() === doctorUserId) {
+              const leaveStart = new Date(leave.startDate);
+              const leaveEnd = new Date(leave.endDate);
+              leaveStart.setUTCHours(0, 0, 0, 0);
+              leaveEnd.setUTCHours(23, 59, 59, 999);
+              
+              // Nếu appointment nằm trong khoảng nghỉ phép
+              if (appointmentDate >= leaveStart && appointmentDate <= leaveEnd) {
+                isOnLeaveForThisDate = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // ⭐ Chỉ set doctorStatus = 'On Leave' nếu appointment thực sự nằm trong khoảng nghỉ phép
+        // Không dùng status global vì nó có thể áp dụng cho tất cả appointments
+        if (isOnLeaveForThisDate) {
+          doctorStatus = 'On Leave';
+        } else {
+          // Nếu không có leave cho ngày này, dùng status global (Available, Busy, Inactive)
+          doctorStatus = globalStatus;
+        }
       }
 
       return {

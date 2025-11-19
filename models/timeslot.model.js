@@ -28,6 +28,15 @@ const timeslotSchema = new mongoose.Schema({
     enum: ['Available', 'Reserved', 'Booked', 'Cancelled', 'Completed'],
     default: 'Available',
   },
+  reservedUntil: {
+    type: Date,
+    default: null,
+  },
+  reservedByUserId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
   appointmentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Appointment',

@@ -28,26 +28,55 @@ const doctorSchema = new mongoose.Schema({
   workingHours: {
     morningStart: {
       type: String,
-      default: '08:00',
-      validate: timeValidator
+      default: null, // ⭐ Không có default - phải do manager tạo
+      validate: {
+        validator: function(v) {
+          // Cho phép null hoặc empty, nếu có giá trị thì validate format
+          if (!v || v === null || v === '') return true;
+          return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+        },
+        message: 'Thời gian phải có định dạng HH:MM (24h)'
+      }
     },
     morningEnd: {
       type: String,
-      default: '12:00',
-      validate: timeValidator
+      default: null,
+      validate: {
+        validator: function(v) {
+          if (!v || v === null || v === '') return true;
+          return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+        },
+        message: 'Thời gian phải có định dạng HH:MM (24h)'
+      }
     },
     afternoonStart: {
       type: String,
-      default: '14:00',
-      validate: timeValidator
+      default: null,
+      validate: {
+        validator: function(v) {
+          if (!v || v === null || v === '') return true;
+          return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+        },
+        message: 'Thời gian phải có định dạng HH:MM (24h)'
+      }
     },
     afternoonEnd: {
       type: String,
-      default: '18:00',
-      validate: timeValidator
+      default: null,
+      validate: {
+        validator: function(v) {
+          if (!v || v === null || v === '') return true;
+          return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(v);
+        },
+        message: 'Thời gian phải có định dạng HH:MM (24h)'
+      }
     }
   },
   workingHoursUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  workingHoursEffectiveDate: {
     type: Date,
     default: null
   }

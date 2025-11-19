@@ -463,12 +463,25 @@ class LeaveRequestService {
         // 3. Đánh dấu DoctorSchedule thành Unavailable
         await this._updateDoctorSchedule(doctorUserId, startDate, endDate);
 
-        // 4. Update Doctor status thành 'On Leave'
-        await Doctor.updateOne(
-          { doctorUserId: doctorUserId },
-          { $set: { status: 'On Leave' } }
-        );
-        console.log(`✅ Đã cập nhật status của bác sĩ ${doctorName} thành 'On Leave'`);
+        // ⭐ FIX: KHÔNG update Doctor status global thành 'On Leave'
+        // Vì status global sẽ ảnh hưởng đến TẤT CẢ appointments, kể cả appointments ngoài khoảng nghỉ phép
+        // Logic kiểm tra leave request đã được sửa để kiểm tra theo ngày của từng appointment
+        // Nên không cần status global nữa
+        
+        // ⭐ Clear status global 'On Leave' nếu có (để đảm bảo không ảnh hưởng đến appointments tương lai)
+        // Logic kiểm tra leave request theo ngày sẽ tự động xử lý việc hiển thị "Vắng mặt" cho appointments trong khoảng nghỉ phép
+        const currentDoctor = await Doctor.findOne({ doctorUserId: doctorUserId }).select('status').lean();
+        if (currentDoctor && currentDoctor.status === 'On Leave') {
+          // Chỉ restore về 'Available' nếu status hiện tại là 'On Leave'
+          // (để tránh ghi đè status 'Busy' hoặc 'Inactive' hợp lệ)
+          await Doctor.updateOne(
+            { doctorUserId: doctorUserId },
+            { $set: { status: 'Available' } }
+          );
+          console.log(`✅ Đã clear status global 'On Leave' của bác sĩ ${doctorName} (sử dụng logic kiểm tra leave theo ngày thay vì status global)`);
+        }
+        
+        console.log(`✅ Đã đánh dấu DoctorSchedule thành Unavailable cho bác sĩ ${doctorName} từ ${startDate.toISOString().split('T')[0]} đến ${endDate.toISOString().split('T')[0]}`);
 
              // ✅ Gửi notification cho bác sĩ khi duyệt đơn nghỉ
           try {

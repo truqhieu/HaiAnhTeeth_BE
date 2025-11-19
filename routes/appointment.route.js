@@ -24,7 +24,9 @@ const {
   managerDashboard,
   getMonthlyRevenue,
   getDashboardDetails,
-  getMyRelatives
+  getMyRelatives,
+  reserveTimeslot,
+  releaseReservedTimeslot
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -35,6 +37,12 @@ router.post('/ai-create', verifyToken, verifyRole('Patient'), createAppointmentB
 
 // ⭐ Patient đặt lịch tư vấn/khám - Cần đăng nhập
 router.post('/consultation/create', verifyToken, verifyRole('Patient'), createConsultationAppointment);
+
+// ⭐ Patient giữ chỗ tạm thời cho khung giờ
+router.post('/reserve-slot', verifyToken, verifyRole('Patient'), reserveTimeslot);
+
+// ⭐ Patient hủy giữ chỗ
+router.post('/release-slot', verifyToken, verifyRole('Patient'), releaseReservedTimeslot);
 
 // ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
 router.post('/walk-in/create', verifyToken, verifyRole(['Staff', 'Manager']), createWalkInAppointment);

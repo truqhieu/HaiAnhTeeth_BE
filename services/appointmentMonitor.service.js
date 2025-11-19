@@ -113,22 +113,34 @@ class AppointmentMonitorService {
           });
 
           if (!schedules || schedules.length === 0) {
-            // Nếu không có schedule, dùng mặc định 18:00 cho buổi chiều
-            const defaultEndTime = new Date(appointmentDateOnly);
-            defaultEndTime.setUTCHours(18 - 7, 0, 0, 0); // 18:00 VN = 11:00 UTC
+            // ⭐ FIX: Không tìm thấy schedule - kiểm tra xem appointment có thuộc ngày hôm nay hoặc quá khứ không
+            // Lấy ngày hôm nay theo timezone VN (UTC+7)
+            const todayVN = new Date();
+            const todayVNStr = todayVN.toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }); // YYYY-MM-DD
+            const appointmentDateStr = appointmentDateOnly.toISOString().split('T')[0]; // YYYY-MM-DD
             
-            if (now >= defaultEndTime) {
-              const oldStatus = appointment.status;
-              const updated = await this._updateAppointmentStatus(appointment, now);
-              if (updated) {
-                if (oldStatus === 'Pending' || oldStatus === 'Approved') {
-                  expiredCount++;
-                } else if (oldStatus === 'CheckedIn') {
-                  noShowCount++;
-                } else if (oldStatus === 'InProgress') {
-                  completedCount++;
+            // Chỉ xử lý nếu appointment là ngày hôm nay hoặc quá khứ
+            if (appointmentDateStr <= todayVNStr) {
+              // Nếu là ngày hôm nay hoặc quá khứ và không có schedule, dùng mặc định 18:00 cho buổi chiều
+              const defaultEndTime = new Date(appointmentDateOnly);
+              defaultEndTime.setUTCHours(18 - 7, 0, 0, 0); // 18:00 VN = 11:00 UTC
+              
+              if (now >= defaultEndTime) {
+                const oldStatus = appointment.status;
+                const updated = await this._updateAppointmentStatus(appointment, now);
+                if (updated) {
+                  if (oldStatus === 'Pending' || oldStatus === 'Approved') {
+                    expiredCount++;
+                  } else if (oldStatus === 'CheckedIn') {
+                    noShowCount++;
+                  } else if (oldStatus === 'InProgress') {
+                    completedCount++;
+                  }
                 }
               }
+            } else {
+              // Appointment là ngày tương lai và không có schedule - bỏ qua (schedule có thể chưa được tạo)
+              console.log(`   ⚠️  Appointment ${appointment._id} là ngày tương lai (${appointmentDateStr}) và chưa có schedule - bỏ qua`);
             }
             continue;
           }

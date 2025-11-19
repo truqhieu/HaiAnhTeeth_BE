@@ -292,39 +292,44 @@ class ScheduleHelper {
    * Ưu tiên lấy từ hồ sơ Doctor, sau đó đến schedule gần nhất, nếu không có thì dùng default
    * @static
    */
-  static async getDoctorWorkingHours(doctorUserId) {
-    const defaultWorkingHours = {
-      morningStart: '08:00',
-      morningEnd: '12:00',
-      afternoonStart: '14:00',
-      afternoonEnd: '18:00'
-    };
-
+  static async getDoctorWorkingHours(doctorUserId, targetDate = null) {
     try {
-      const doctorProfile = await Doctor.findOne({ doctorUserId })
-        .select('workingHours')
-        .lean();
+      // ⭐ Ưu tiên lấy workingHours từ Doctor model
+      const doctorProfile = await Doctor.findOne({ doctorUserId: doctorUserId }).select('workingHours workingHoursEffectiveDate').lean();
+      if (doctorProfile && doctorProfile.workingHours && doctorProfile.workingHours.morningStart) {
+        if (targetDate && doctorProfile.workingHoursEffectiveDate) {
+          const normalizedTarget = new Date(targetDate);
+          normalizedTarget.setUTCHours(0, 0, 0, 0);
 
-      if (doctorProfile?.workingHours?.morningStart) {
-        console.log(`✅ Lấy workingHours từ hồ sơ bác sĩ ${doctorUserId}`);
+          const effectiveDate = new Date(doctorProfile.workingHoursEffectiveDate);
+          effectiveDate.setUTCHours(0, 0, 0, 0);
+
+          if (normalizedTarget < effectiveDate) {
+            console.log(`⚠️  Bác sĩ ${doctorUserId} chưa bắt đầu làm việc trước ${effectiveDate.toISOString().split('T')[0]}, bỏ qua`);
+            return null;
+          }
+        }
+        console.log(`✅ Lấy workingHours từ Doctor model của bác sĩ ${doctorUserId}`);
         return doctorProfile.workingHours;
       }
 
-      // Tìm schedule gần nhất của bác sĩ này (bất kỳ ngày nào)
+      // Nếu Doctor model chưa có, tìm schedule gần nhất của bác sĩ này
       const existingSchedule = await DoctorSchedule.findOne({
         doctorUserId: doctorUserId
       }).sort({ date: -1 }); // Lấy schedule mới nhất
 
       if (existingSchedule && existingSchedule.workingHours) {
-        console.log(`✅ Lấy workingHours từ schedule của bác sĩ ${doctorUserId}`);
+        console.log(`✅ Lấy workingHours từ schedule gần nhất của bác sĩ ${doctorUserId}`);
         return existingSchedule.workingHours;
       }
 
-      console.log(`⚠️  Bác sĩ ${doctorUserId} chưa có workingHours, dùng mặc định`);
-      return defaultWorkingHours;
+      // ⭐ Nếu không có workingHours → trả về null (không dùng default)
+      // Bác sĩ chưa được manager tạo lịch làm việc
+      console.log(`⚠️  Bác sĩ ${doctorUserId} chưa có workingHours (chưa được manager tạo lịch làm việc)`);
+      return null;
     } catch (error) {
       console.error(`❌ Lỗi lấy workingHours cho bác sĩ ${doctorUserId}:`, error.message);
-      return defaultWorkingHours;
+      return null; // ⭐ Trả về null thay vì default
     }
   }
 
@@ -345,8 +350,14 @@ class ScheduleHelper {
         return;
       }
 
-      // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có), không thì dùng default
-      const workingHours = await this.getDoctorWorkingHours(doctorUserId);
+      // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có)
+      const workingHours = await this.getDoctorWorkingHours(doctorUserId, searchDate);
+      
+      // ⭐ Nếu bác sĩ chưa có workingHours (chưa được manager tạo lịch làm việc) → không tạo schedule
+      if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+        console.log(`⚠️  Bác sĩ ${doctorUserId} chưa có workingHours (chưa được manager tạo lịch làm việc), không tạo schedule`);
+        return; // Không tạo schedule cho bác sĩ chưa có workingHours
+      }
 
       const now = new Date(); // Thời gian hiện tại (UTC thực)
       
@@ -439,10 +450,16 @@ class ScheduleHelper {
       const now = new Date(); // Thời gian hiện tại (UTC thực)
       
       for (const doctor of doctors) {
-        // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có), không thì dùng default
-        const workingHours = await this.getDoctorWorkingHours(doctor._id);
+        // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có)
+        const workingHours = await this.getDoctorWorkingHours(doctor._id, searchDate);
+        
+        // ⭐ Nếu bác sĩ chưa có workingHours (chưa được manager tạo lịch làm việc) → bỏ qua
+        if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || !workingHours.afternoonStart || !workingHours.afternoonEnd) {
+          console.log(`⚠️  Bác sĩ ${doctor._id} chưa có workingHours (chưa được manager tạo lịch làm việc), bỏ qua...`);
+          continue; // Bỏ qua bác sĩ chưa có workingHours
+        }
 
-        // ⭐ Sử dụng workingHours thay vì hardcode
+        // ⭐ Sử dụng workingHours từ Doctor model hoặc schedule gần nhất
         const morningStart = new Date(searchDate);
         const [morningStartHour, morningStartMinute] = workingHours.morningStart.split(':').map(Number);
         morningStart.setUTCHours(morningStartHour - 7, morningStartMinute, 0, 0); // Convert VN time to UTC

@@ -84,6 +84,26 @@ const getDoctorsWithWorkingHours = async (req, res) => {
   }
 };
 
+// ⭐ Lấy danh sách bác sĩ chưa có workingHours (chưa được manager tạo lịch làm việc)
+const getDoctorsWithoutWorkingHours = async (req, res) => {
+  try {
+    const data = await scheduleService.getDoctorsWithoutWorkingHours();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lấy danh sách bác sĩ chưa có lịch làm việc thành công',
+      data
+    });
+  } catch (error) {
+    console.error('Error in getDoctorsWithoutWorkingHours:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi server khi lấy danh sách bác sĩ',
+      error: error.message
+    });
+  }
+};
+
 const updateDoctorWorkingHours = async (req, res) => {
   try {
     const { doctorId } = req.params;
@@ -106,10 +126,41 @@ const updateDoctorWorkingHours = async (req, res) => {
   }
 };
 
+// ⭐ Tạo lịch làm việc mới (tự động tạo cả ca sáng và ca chiều)
+const createSchedule = async (req, res) => {
+  try {
+    const { doctorId, date, workingHours, roomId } = req.body;
+
+    if (!doctorId || !date || !workingHours) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng cung cấp đầy đủ doctorId, date và workingHours'
+      });
+    }
+
+    const data = await scheduleService.createSchedule(doctorId, date, workingHours, roomId);
+
+    return res.status(201).json({
+      success: true,
+      message: data.message || 'Tạo lịch làm việc thành công',
+      data: data
+    });
+  } catch (error) {
+    console.error('Error in createSchedule:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi server khi tạo lịch làm việc',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   updateWorkingHours,
   getWorkingHours,
   updateDoctorWorkingHoursForDate,
   getDoctorsWithWorkingHours,
-  updateDoctorWorkingHours
+  getDoctorsWithoutWorkingHours,
+  updateDoctorWorkingHours,
+  createSchedule
 };
