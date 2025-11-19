@@ -342,6 +342,9 @@ class UserService {
   }
 
 async updateProfile(userId, data, file) {
+  let uploadedImageId = null;
+  let tempFilePath = null;
+
   try {
     const allowedFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'emergencyContact'];
 
@@ -454,18 +457,13 @@ async updateProfile(userId, data, file) {
       }
     }
 
+    // ✅ Upload ảnh mới trước (nếu có)
     if (file) {
+      tempFilePath = file.path;
       const result = await this.uploadImage(file.path);
-
-      const user = await User.findById(userId);
-      if (user && user.avatar) {
-        await deleteOldImage(user.avatarId);
-      }
-
+      uploadedImageId = result.public_id;
       updates.avatar = result.secure_url;
       updates.avatarId = result.public_id;
-
-      fs.unlinkSync(file.path);
     }
 
     // Không có gì để cập nhật
@@ -473,7 +471,7 @@ async updateProfile(userId, data, file) {
       throw new Error('Không có trường hợp lệ để cập nhật');
     }
 
-    // Update User
+    // ✅ Update User (database)
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { $set: updates },
@@ -482,6 +480,11 @@ async updateProfile(userId, data, file) {
 
     if (!updatedUser) {
       throw new Error('Không tìm thấy người dùng');
+    }
+
+    // ✅ Xóa ảnh cũ SAU khi update database thành công
+    if (file && user.avatarId && user.avatarId !== uploadedImageId) {
+      await deleteOldImage(user.avatarId);
     }
 
     // Update emergency contact trong Patient
@@ -505,31 +508,30 @@ async updateProfile(userId, data, file) {
       emergencyContactResponse = patient?.emergencyContact || null;
     }
 
-    return {
-      success: true,
-      message: 'Cập nhật thông tin cá nhân thành công',
-      data: {
-        user: {
-          id: updatedUser._id,
-          fullName: updatedUser.fullName,
-          email: updatedUser.email,
-          role: updatedUser.role,
-          status: updatedUser.status,
-          phone: updatedUser.phoneNumber,
-          address: updatedUser.address,
-          dateOfBirth: updatedUser.dob,
-          gender: updatedUser.gender,
-          avatar: updatedUser.avatar,
-          emergencyContact: emergencyContactResponse,
-          createdAt: updatedUser.createdAt,
-          updatedAt: updatedUser.updatedAt
-        }
-      }
-    };
+    return updatedUser
 
   } catch (error) {
     console.error("Lỗi cập nhật profile:", error);
+    
+    // ❌ Nếu có lỗi, xóa ảnh vừa upload
+    if (uploadedImageId) {
+      console.warn(`⚠️  Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
+      await deleteOldImage(uploadedImageId);
+    }
+    
     throw new Error(error.message || "Lỗi server. Vui lòng thử lại sau");
+
+  } finally {
+    // ✅ Cleanup file tạm thời (an toàn)
+    if (tempFilePath) {
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (cleanupError) {
+        console.error('❌ Lỗi khi xóa file tạm:', cleanupError);
+      }
+    }
   }
 }
 
