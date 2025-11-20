@@ -18,6 +18,10 @@ const appointmentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Service'
   },
+  additionalServiceIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service'
+  }],
   timeslotId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Timeslot'
@@ -40,6 +44,11 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     enum: ['Online', 'Offline'],
     default: 'Online',
+  },
+  followUpOfAppointmentId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Appointment',
+    default: null
   },
   linkMeetUrl: {
     type: String,

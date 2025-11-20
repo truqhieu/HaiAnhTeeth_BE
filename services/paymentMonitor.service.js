@@ -50,15 +50,16 @@ class PaymentMonitorService {
     const intervalMs = intervalMinutes * 60 * 1000;
 
     // Chạy check expired
-    setInterval(() => {
+    this.expireInterval = setInterval(() => {
       this.expireOldPayments();
     }, intervalMs);
 
     // ⭐ THÊM: Sync timeslot status (để handle manual payment status changes)
-    setInterval(() => {
+    // ⭐ GIẢM TẦN SUẤT: Chỉ sync mỗi 5 phút thay vì mỗi 1 phút để giảm log
+    this.syncInterval = setInterval(() => {
       const paymentService = require('./payment.service');
       paymentService.syncTimeslotStatus();
-    }, intervalMs);
+    }, 5 * 60 * 1000); // 5 phút
 
     // Chạy ngay lần đầu
     console.log('🔍 [PaymentMonitor] Chạy check đầu tiên...\n');
@@ -67,6 +68,20 @@ class PaymentMonitorService {
     // Sync ngay lần đầu
     const paymentService = require('./payment.service');
     paymentService.syncTimeslotStatus();
+  }
+
+  /**
+   * Dừng monitoring (cleanup)
+   */
+  stopMonitoring() {
+    if (this.expireInterval) {
+      clearInterval(this.expireInterval);
+      this.expireInterval = null;
+    }
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
   }
 }
 

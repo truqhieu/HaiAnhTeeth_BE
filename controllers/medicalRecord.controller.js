@@ -163,7 +163,17 @@ exports.updateAdditionalServicesForNurse = async (req, res) => {
 exports.updateMedicalRecordForDoctor = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { diagnosis, conclusion, prescription, nurseNote, approve } = req.body || {};
+    const {
+      diagnosis,
+      conclusion,
+      prescription,
+      nurseNote,
+      approve,
+      followUpRequired,
+      followUpDate,
+      followUpNote
+    } = req.body || {};
+    const doctorUserId = req.user?.userId || null;
 
     const updateData = {};
     if (diagnosis !== undefined) updateData.diagnosis = diagnosis;
@@ -171,8 +181,15 @@ exports.updateMedicalRecordForDoctor = async (req, res) => {
     if (prescription !== undefined) updateData.prescription = prescription;
     if (nurseNote !== undefined) updateData.nurseNote = nurseNote;
     if (approve !== undefined) updateData.approve = approve;
+    if (followUpRequired !== undefined) updateData.followUpRequired = followUpRequired;
+    if (followUpDate !== undefined) updateData.followUpDate = followUpDate;
+    if (followUpNote !== undefined) updateData.followUpNote = followUpNote;
 
-    const record = await medicalRecordService.updateMedicalRecordForDoctor(appointmentId, updateData);
+    const record = await medicalRecordService.updateMedicalRecordForDoctor(
+      appointmentId,
+      updateData,
+      doctorUserId
+    );
 
     return res.status(200).json({
       success: true,

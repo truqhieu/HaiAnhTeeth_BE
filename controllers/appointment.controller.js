@@ -739,7 +739,9 @@ const getRescheduleAvailableSlots = async (req, res) => {
       date,
       serviceName: appointment.serviceId.serviceName,
       serviceDuration: appointment.serviceId.durationMinutes,
+      serviceId: appointment.serviceId._id.toString(), // ⭐ THÊM: Trả về serviceId
       doctorName: appointment.doctorUserId.fullName,
+      doctorUserId: appointment.doctorUserId._id.toString(), // ⭐ THÊM: Trả về doctorUserId
       doctorScheduleId: scheduleRangeResult?.doctorScheduleId || null,
       scheduleRanges,
       availableGaps: flattenedGaps,
@@ -765,7 +767,7 @@ const getRescheduleAvailableSlots = async (req, res) => {
 const requestReschedule = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { newStartTime, newEndTime, reason } = req.body;
+    const { newStartTime, newEndTime, reason, reservedTimeslotId } = req.body;
     const userId = req.user?.userId;
 
     console.log('🔍 DEBUG requestReschedule:');
@@ -773,6 +775,7 @@ const requestReschedule = async (req, res) => {
     console.log('   - userId:', userId);
     console.log('   - newStartTime:', newStartTime);
     console.log('   - newEndTime:', newEndTime);
+    console.log('   - reservedTimeslotId:', reservedTimeslotId);
 
     // Validation
     if (!newStartTime || !newEndTime) {
@@ -852,25 +855,86 @@ const requestReschedule = async (req, res) => {
     // Không bó buộc vào DoctorSchedule; nếu ngày chưa có lịch sẽ tự tạo khi duyệt
     const Timeslot = require('../models/timeslot.model');
 
-    // Kiểm tra xem có bị trùng với lịch hẹn khác không (bao gồm cả timeslot đã reserved)
+    let reservedTimeslot = null;
+
+    // ⭐ Nếu có reservedTimeslotId, sử dụng timeslot đã reserved từ trước
+    if (reservedTimeslotId) {
+      reservedTimeslot = await Timeslot.findById(reservedTimeslotId);
+      
+      if (!reservedTimeslot) {
+        return res.status(400).json({
+          success: false,
+          message: 'Không tìm thấy khung giờ đã giữ chỗ. Vui lòng thử lại.'
+        });
+      }
+
+      // Kiểm tra xem timeslot có thuộc về user này không
+      if (reservedTimeslot.reservedByUserId && reservedTimeslot.reservedByUserId.toString() !== userId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Khung giờ này không thuộc về bạn. Vui lòng thử lại.'
+        });
+      }
+
+      // Kiểm tra xem timeslot có còn valid không (chưa hết hạn)
+      if (reservedTimeslot.status === 'Reserved' && reservedTimeslot.reservedUntil && reservedTimeslot.reservedUntil <= new Date()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Khung giờ đã giữ chỗ đã hết hạn. Vui lòng chọn lại thời gian.'
+        });
+      }
+
+      // Kiểm tra xem timeslot có khớp với thời gian yêu cầu không
+      const slotStart = new Date(reservedTimeslot.startTime);
+      const slotEnd = new Date(reservedTimeslot.endTime);
+      
+      if (slotStart.getTime() !== newStart.getTime() || slotEnd.getTime() !== newEnd.getTime()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Thời gian yêu cầu không khớp với khung giờ đã giữ chỗ. Vui lòng thử lại.'
+        });
+      }
+
+      // Kiểm tra xem timeslot có thuộc về bác sĩ và dịch vụ đúng không
+      if (reservedTimeslot.doctorUserId.toString() !== appointment.doctorUserId._id.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Khung giờ đã giữ chỗ không thuộc về bác sĩ này.'
+        });
+      }
+
+      if (reservedTimeslot.serviceId.toString() !== appointment.serviceId._id.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Khung giờ đã giữ chỗ không thuộc về dịch vụ này.'
+        });
+      }
+
+      console.log('✅ Using existing reserved timeslot:', reservedTimeslot._id);
+    } else {
+      // ⭐ Nếu không có reservedTimeslotId, kiểm tra xem có bị trùng với lịch hẹn khác không
     const existingAppointments = await Appointment.find({
       doctorUserId: appointment.doctorUserId._id,
       _id: { $ne: appointmentId },
       status: { $in: ['Pending', 'Approved', 'CheckedIn'] }
     }).populate('timeslotId');
 
-    // Kiểm tra timeslot đã bị reserved chưa
+      // Kiểm tra timeslot đã bị reserved chưa (trừ timeslot của chính user này)
     const existingTimeslot = await Timeslot.findOne({
       doctorUserId: appointment.doctorUserId._id,
       startTime: newStart,
       endTime: newEnd,
-      status: { $in: ['Reserved', 'Booked'] }
+        status: { $in: ['Reserved', 'Booked'] },
+        $or: [
+          { reservedByUserId: { $ne: userId } },
+          { reservedByUserId: null }
+        ]
     });
 
     if (existingTimeslot) {
       return res.status(400).json({
         success: false,
-        message: 'Khung giờ này đã được đặt hoặc đang chờ xử lý'
+          message: 'Khung giờ này đã được đặt hoặc đang được người khác giữ chỗ'
       });
     }
 
@@ -892,13 +956,17 @@ const requestReschedule = async (req, res) => {
     }
 
     // Tạo timeslot với status "Reserved" để tránh xung đột
-    const reservedTimeslot = await Timeslot.create({
+      reservedTimeslot = await Timeslot.create({
       doctorUserId: appointment.doctorUserId._id,
       serviceId: appointment.serviceId._id,
       startTime: newStart,
       endTime: newEnd,
-      status: 'Reserved'
+        status: 'Reserved',
+        reservedByUserId: userId
     });
+
+      console.log('✅ Created new reserved timeslot:', reservedTimeslot._id);
+    }
 
     // Tạo PatientRequest
     const request = new PatientRequest({

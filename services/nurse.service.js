@@ -76,6 +76,10 @@ class NurseService {
         select: 'serviceName'
       })
       .populate({
+        path: 'additionalServiceIds',
+        select: 'serviceName'
+      })
+      .populate({
         path: 'timeslotId',
         select: 'startTime endTime'
       })
@@ -171,6 +175,8 @@ class NurseService {
         doctorUserId: doctorUserId, // ⭐ Thêm doctorUserId
         doctorStatus: doctorStatus, // ⭐ Thêm doctorStatus
         serviceName: appointment.serviceId?.serviceName || 'N/A',
+        // ⭐ Hiển thị tất cả services nếu có additionalServiceIds (cho follow-up với nhiều services)
+        additionalServiceNames: appointment.additionalServiceIds?.map(s => s?.serviceName || '').filter(Boolean) || [],
         patientName: patient?.fullName || 'N/A',
         appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'N/A',
         startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' }) : 'N/A',
@@ -178,7 +184,9 @@ class NurseService {
         type: appointment.type,
         status: appointment.status,
         mode: appointment.mode,
-        doctorApproved: medicalRecordStatusMap[appointment._id.toString()] || false
+        doctorApproved: medicalRecordStatusMap[appointment._id.toString()] || false,
+        createdAt: appointment.createdAt ? appointment.createdAt.toISOString() : null,
+        updatedAt: appointment.updatedAt ? appointment.updatedAt.toISOString() : null
       };
     });
   }

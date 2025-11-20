@@ -65,8 +65,7 @@ class AppointmentMonitorService {
    */
   async expireAppointments() {
     try {
-      console.log('\n🔍 [AppointmentMonitor] Checking for appointments to update status...');
-
+      // ⭐ GIẢM LOG: Chỉ log khi có appointments cần check
       // Lấy thời gian hiện tại (UTC)
       const now = new Date();
       
@@ -78,11 +77,11 @@ class AppointmentMonitorService {
         .populate('doctorUserId', '_id');
 
       if (!appointments || appointments.length === 0) {
-        console.log('   ✅ Không có appointment nào cần check');
+        // ⭐ Không log khi không có gì để check (giảm spam log)
         return;
       }
 
-      console.log(`   📋 Tìm thấy ${appointments.length} appointment(s) cần check`);
+      console.log(`\n🔍 [AppointmentMonitor] Checking ${appointments.length} appointment(s)...`);
 
       let expiredCount = 0;
       let noShowCount = 0;

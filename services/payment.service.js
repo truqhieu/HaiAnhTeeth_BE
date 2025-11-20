@@ -217,7 +217,8 @@ class PaymentService {
    */
   async syncTimeslotStatus() {
     try {
-      console.log('🔄 [PaymentSync] Đang sync timeslot status với payment status...');
+      // ⭐ GIẢM LOG: Chỉ log khi có thay đổi
+      let updatedCount = 0;
 
       // Tìm tất cả payment có status Expired hoặc Cancelled
       const expiredPayments = await Payment.find({
@@ -236,12 +237,15 @@ class PaymentService {
             await Timeslot.findByIdAndUpdate(payment.appointmentId.timeslotId, {
               status: 'Cancelled'
             });
-            console.log(`✅ [PaymentSync] Updated timeslot ${payment.appointmentId.timeslotId} → Cancelled`);
+            updatedCount++;
           }
         }
       }
 
-      console.log('✅ [PaymentSync] Hoàn tất sync');
+      // ⭐ Chỉ log khi có thay đổi
+      if (updatedCount > 0) {
+        console.log(`✅ [PaymentSync] Đã sync ${updatedCount} timeslot(s) → Cancelled`);
+      }
 
     } catch (error) {
       console.error('❌ [PaymentSync] Lỗi sync timeslot status:', error);

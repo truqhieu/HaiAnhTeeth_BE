@@ -14,7 +14,12 @@ const app = express();
 
 
 // Cấu hình middleware
-app.use(morgan('combined')); 
+// ⭐ GIẢM LOG: Chỉ log trong development, và dùng format ngắn gọn hơn
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev')); // Format ngắn gọn hơn 'combined'
+} else {
+  app.use(morgan('combined'));
+} 
 
 // QUAN TRỌNG: Đặt CORS trước các middleware khác
 // Nhưng BYPASS CORS cho webhook endpoint (server-to-server)
@@ -37,19 +42,17 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Logging middleware để track tất cả requests
+// ⭐ GIẢM LOG: Chỉ log chi tiết cho webhook và một số route quan trọng
 app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`\n${'='.repeat(60)}`);
-  console.log(`📥 [${timestamp}] ${req.method} ${req.originalUrl}`);
-  console.log(`   From: ${req.ip || req.connection.remoteAddress}`);
-  console.log(`   User-Agent: ${req.get('user-agent') || 'N/A'}`);
-  
-  // Log đặc biệt cho webhook
+  // ⭐ Chỉ log chi tiết cho webhook hoặc route quan trọng
   if (req.originalUrl.includes('/webhook')) {
-    console.log(`🔔 WEBHOOK DETECTED!`);
+    const timestamp = new Date().toISOString();
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🔔 WEBHOOK [${timestamp}] ${req.method} ${req.originalUrl}`);
     console.log(`   Headers:`, JSON.stringify(req.headers, null, 2));
     console.log(`   Body:`, JSON.stringify(req.body, null, 2));
   }
+  // ⭐ Bỏ qua log chi tiết cho các request thông thường (morgan đã log rồi)
   
   next();
 });

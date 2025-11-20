@@ -51,9 +51,14 @@ class DoctorService {
     }
 
     let dateRangeStart, dateRangeEnd;
+    let shouldFilterByDate = true; // Flag để biết có cần filter theo date không
 
-    // Nếu có startDate và endDate từ query params, dùng nó
-    if (startDate && endDate) {
+    // ⭐ Nếu cả startDate và endDate đều là null (không phải undefined), lấy tất cả không filter
+    if (startDate === null && endDate === null) {
+      shouldFilterByDate = false;
+      console.log(`📅 Doctor ${doctorUserId} - Lấy TẤT CẢ lịch hẹn (không filter theo date)`);
+    } else if (startDate && endDate) {
+      // Nếu có startDate và endDate từ query params, dùng nó
       dateRangeStart = new Date(startDate);
       dateRangeStart.setHours(0, 0, 0, 0);
       dateRangeEnd = new Date(endDate);
@@ -92,21 +97,37 @@ class DoctorService {
         select: 'serviceName'
       })
       .populate({
+        path: 'additionalServiceIds',
+        select: 'serviceName'
+      })
+      .populate({
         path: 'timeslotId',
         select: 'startTime endTime'
       })
       .lean();
 
-    // Filter theo timeslotId.startTime trong date range
-    let appointments = allAppointments.filter(appointment => {
-      if (!appointment.timeslotId || !appointment.timeslotId.startTime) {
-        return false;
-      }
-      const appointmentDate = new Date(appointment.timeslotId.startTime);
-      return appointmentDate >= dateRangeStart && appointmentDate <= dateRangeEnd;
-    });
+    // ⭐ Filter theo timeslotId.startTime trong date range (chỉ khi cần)
+    let appointments = allAppointments;
+    if (shouldFilterByDate) {
+      appointments = allAppointments.filter(appointment => {
+        if (!appointment.timeslotId || !appointment.timeslotId.startTime) {
+          return false;
+        }
+        const appointmentDate = new Date(appointment.timeslotId.startTime);
+        return appointmentDate >= dateRangeStart && appointmentDate <= dateRangeEnd;
+      });
+    } else {
+      // Khi không filter theo date, chỉ loại bỏ appointments không có timeslotId
+      appointments = allAppointments.filter(appointment => {
+        return appointment.timeslotId && appointment.timeslotId.startTime;
+      });
+    }
 
-    console.log(`✅ Lọc được ${appointments.length}/${allAppointments.length} lịch hẹn trong date range`);
+    if (shouldFilterByDate) {
+      console.log(`✅ Lọc được ${appointments.length}/${allAppointments.length} lịch hẹn trong date range`);
+    } else {
+      console.log(`✅ Lấy tất cả ${appointments.length} lịch hẹn (không filter theo date)`);
+    }
 
     // ⭐ Filter appointments khi doctor có leave trong thời gian appointment
     const appointmentsWithoutLeave = [];
@@ -158,6 +179,8 @@ class DoctorService {
       return {
         appointmentId: appointment._id,
         serviceName: appointment.serviceId?.serviceName || 'Chưa có thông tin',
+        // ⭐ Hiển thị tất cả services nếu có additionalServiceIds (cho follow-up với nhiều services)
+        additionalServiceNames: appointment.additionalServiceIds?.map(s => s?.serviceName || '').filter(Boolean) || [],
         patientName: patient?.fullName || 'Chưa có thông tin',
         appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'Chưa có thông tin',
         startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {
@@ -174,7 +197,9 @@ class DoctorService {
         status: appointment.status,
         mode: appointment.mode,
         medicalRecordStatus: appointment.noTreatment ? null : medicalRecordStatus,
-        noTreatment: !!appointment.noTreatment
+        noTreatment: !!appointment.noTreatment,
+        createdAt: appointment.createdAt ? appointment.createdAt.toISOString() : null,
+        updatedAt: appointment.updatedAt ? appointment.updatedAt.toISOString() : null
       };
     });
   }
@@ -234,12 +259,18 @@ class DoctorService {
       status: appointment.status,
       mode: appointment.mode,
       appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'Chưa có thông tin',
-      startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {
+      // ⭐ Trả về ISO string để frontend có thể tạo Date object đúng
+      startTime: timeslot?.startTime ? new Date(timeslot.startTime).toISOString() : null,
+      // ⭐ Thêm formatted time string để hiển thị (backward compatibility)
+      startTimeFormatted: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
       }) : 'Chưa có thông tin',
-      endTime: timeslot?.endTime ? new Date(timeslot.endTime).toLocaleTimeString('vi-VN', {
+      // ⭐ Trả về ISO string để frontend có thể tạo Date object đúng
+      endTime: timeslot?.endTime ? new Date(timeslot.endTime).toISOString() : null,
+      // ⭐ Thêm formatted time string để hiển thị (backward compatibility)
+      endTimeFormatted: timeslot?.endTime ? new Date(timeslot.endTime).toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Asia/Ho_Chi_Minh'
