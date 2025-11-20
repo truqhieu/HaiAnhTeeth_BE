@@ -233,10 +233,13 @@ class BlogService {
   /**
    * Cập nhật blog
    */
-  async updateBlog(id, data, file) {
-    const allowedFields = ['title', 'summary', 'category', 'status'];
-    const updates = {};
+async updateBlog(id, data, file) {
+  const allowedFields = ['title', 'summary', 'category', 'status'];
+  const updates = {};
+  let uploadedImageId = null;
+  let tempFilePath = null;
 
+  try {
     // Xử lý các trường text
     for (const field of allowedFields) {
       const value = data[field];
@@ -284,23 +287,20 @@ class BlogService {
 
     // Xử lý ảnh (nếu có)
     if (file) {
+      tempFilePath = file.path;
+      
+      // ✅ Upload ảnh mới trước
       const result = await this.uploadImage(file.path);
-
-      const blog = await Blog.findById(id);
-      if (blog && blog.thumbnailId) {
-        await deleteOldImage(blog.thumbnailId);
-      }
-
+      uploadedImageId = result.public_id;
       updates.thumbnailUrl = result.secure_url;
       updates.thumbnailId = result.public_id;
-
-      fs.unlinkSync(file.path);
     }
 
     if (Object.keys(updates).length === 0) {
       throw new Error('Không có trường hợp lệ để cập nhật');
     }
 
+    // ✅ Update database
     const blog = await Blog.findByIdAndUpdate(
       id,
       { $set: updates },
@@ -311,8 +311,35 @@ class BlogService {
       throw new Error('Không tìm thấy blog');
     }
 
+    // ✅ Xóa ảnh cũ SAU khi update thành công
+    if (file && blog.thumbnailId && blog.thumbnailId !== uploadedImageId) {
+      await deleteOldImage(blog.thumbnailId);
+    }
+
     return blog;
+
+  } catch (error) {
+    // ❌ Nếu có lỗi, xóa ảnh vừa upload
+    if (uploadedImageId) {
+      console.warn(`⚠️  Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
+      await deleteOldImage(uploadedImageId);
+    }
+    throw error;
+
+  } finally {
+    // ✅ Cleanup file tạm thời (an toàn)
+    if (tempFilePath) {
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (cleanupError) {
+        console.error('❌ Lỗi khi xóa file tạm:', cleanupError);
+      }
+    }
   }
+}
+
 
   /**
    * Xóa blog

@@ -166,9 +166,25 @@ class IntroductionService {
   /**
    * Cập nhật introduction
    */
-  async updateIntroduction(id, data, file) {
+async updateIntroduction(id, data, file) {
+  let uploadedImageId = null;
+  let tempFilePath = null;
+  let oldImageId = null;
+
+  try {
     const allowedFields = ['title', 'summary', 'status'];
     const updates = {};
+
+    // ✅ Lấy introduction cũ để lưu avatarId trước khi update
+    const introduction = await Introduction.findById(id);
+    if (!introduction) {
+      throw new Error('Không tìm thấy giới thiệu');
+    }
+
+    // Lưu imageId cũ (nếu có)
+    if (file && introduction.thumbnailId) {
+      oldImageId = introduction.thumbnailId;
+    }
 
     // Xử lý các trường text
     for (const field of allowedFields) {
@@ -211,37 +227,61 @@ class IntroductionService {
       updates[field] = cleanValue;
     }
 
-    // Xử lý ảnh (nếu có)
+    // ✅ Upload ảnh mới trước (nếu có)
     if (file) {
+      tempFilePath = file.path;
       const result = await this.uploadImage(file.path);
-
-      const introduction = await Introduction.findById(id);
-      if (introduction && introduction.thumbnailId) {
-        await deleteOldImage(introduction.thumbnailId);
-      }
-
+      uploadedImageId = result.public_id;
       updates.thumbnailUrl = result.secure_url;
       updates.thumbnailId = result.public_id;
-
-      fs.unlinkSync(file.path);
     }
 
     if (Object.keys(updates).length === 0) {
       throw new Error('Không có trường hợp lệ để cập nhật');
     }
 
-    const introduction = await Introduction.findByIdAndUpdate(
+    // ✅ Update database
+    const updatedIntroduction = await Introduction.findByIdAndUpdate(
       id,
       { $set: updates },
       { new: true, runValidators: true }
     );
 
-    if (!introduction) {
+    if (!updatedIntroduction) {
       throw new Error('Không tìm thấy giới thiệu');
     }
 
-    return introduction;
+    // ✅ Xóa ảnh cũ SAU khi update thành công
+    if (oldImageId && oldImageId !== uploadedImageId) {
+      await deleteOldImage(oldImageId);
+    }
+
+    return updatedIntroduction;
+
+  } catch (error) {
+    console.error('Lỗi cập nhật giới thiệu:', error);
+
+    // ❌ Nếu có lỗi, xóa ảnh vừa upload
+    if (uploadedImageId) {
+      console.warn(`⚠️  Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
+      await deleteOldImage(uploadedImageId);
+    }
+
+    throw error;
+
+  } finally {
+    // ✅ Cleanup file tạm thời (an toàn)
+    if (tempFilePath) {
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (cleanupError) {
+        console.error('❌ Lỗi khi xóa file tạm:', cleanupError);
+      }
+    }
   }
+}
 
   /**
    * Xóa introduction
