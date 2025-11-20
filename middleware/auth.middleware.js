@@ -78,12 +78,29 @@ const verifyRole = (...allowedRoles) => {
     // ⭐ Flatten array nếu phần tử đầu tiên là array (hỗ trợ cả verifyRole('Staff') và verifyRole(['Staff']))
     const roles = Array.isArray(allowedRoles[0]) ? allowedRoles[0] : allowedRoles;
     
+    // ⭐ Normalize roles để so sánh case-insensitive (hỗ trợ cả 'Doctor' và 'doctor')
+    const normalizedAllowedRoles = roles.map(r => {
+      // Capitalize first letter: 'doctor' -> 'Doctor', 'nurse' -> 'Nurse'
+      if (typeof r === 'string' && r.length > 0) {
+        return r.charAt(0).toUpperCase() + r.slice(1).toLowerCase();
+      }
+      return r;
+    });
+    
+    // Normalize user role
+    const userRole = req.user.role;
+    const normalizedUserRole = userRole && typeof userRole === 'string' && userRole.length > 0
+      ? userRole.charAt(0).toUpperCase() + userRole.slice(1).toLowerCase()
+      : userRole;
+    
     console.log('🔍 verifyRole check:');
-    console.log('   - User role:', req.user.role);
-    console.log('   - Allowed roles:', roles);
-    console.log('   - Has permission?', roles.includes(req.user.role));
+    console.log('   - User role (original):', req.user.role);
+    console.log('   - User role (normalized):', normalizedUserRole);
+    console.log('   - Allowed roles (original):', roles);
+    console.log('   - Allowed roles (normalized):', normalizedAllowedRoles);
+    console.log('   - Has permission?', normalizedAllowedRoles.includes(normalizedUserRole));
 
-    if (!roles.includes(req.user.role)) {
+    if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
       console.error('❌ Permission denied for role:', req.user.role);
       return res.status(403).json({
         success: false,

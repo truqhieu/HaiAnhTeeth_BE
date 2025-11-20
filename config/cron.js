@@ -7,7 +7,7 @@ const appointmentService = require('../services/appointment.service');
 const leaveRequestService = require('../services/leaveRequest.service');
 
 // ===== 1️⃣ Cron auto check date promotion =====
-cron.schedule('*/1 * * * *', async () => {  // test mỗi phút
+cron.schedule('0 * * * *', async () => {  // chạy mỗi giờ (vào phút 0)
     try {
         const now = new Date();
         // Expire promotion

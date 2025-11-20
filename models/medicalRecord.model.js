@@ -59,12 +59,14 @@ const medicalRecordSchema = new mongoose.Schema(
     prescriptions: [{ type: prescriptionSchema }],
 
     // Follow-up
+    followUpRequired: { type: Boolean, default: false },
     followUpDate: { type: Date, default: null },
     followUpAppointmentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Appointment',
       default: null
     },
+    followUpNote: { type: String, default: '' },
     status: {
       type: String,
       enum: ['Draft', 'Finalized'],
