@@ -7,7 +7,7 @@ const appointmentService = require('../services/appointment.service');
 const leaveRequestService = require('../services/leaveRequest.service');
 
 // ===== 1️⃣ Cron auto check date promotion =====
-cron.schedule('0 * * * *', async () => {  // chạy mỗi giờ (vào phút 0)
+cron.schedule('* * * * *', async () => {  // chạy mỗi phút
     try {
         const now = new Date();
         // Expire promotion
@@ -20,9 +20,9 @@ cron.schedule('0 * * * *', async () => {  // chạy mỗi giờ (vào phút 0)
         const expiredList = await Promotion.find({ endDate: { $lt: now } });
         const expiredIds = expiredList.map(p => p._id);
         // Xóa tất cả promotionService của các promotion hết hạn
-        const deleteExpiredService = await PromotionService.deleteMany({
-        promotionId: { $in: expiredIds }
-        });
+        // const deleteExpiredService = await PromotionService.deleteMany({
+        // promotionId: { $in: expiredIds }
+        // });
 
 
 

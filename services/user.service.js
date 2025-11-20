@@ -428,7 +428,7 @@ async updateProfile(userId, data, file) {
 
       // === Validate emergencyContact (chỉ cho Patient) ===
       if (key === 'emergencyContact') {
-        const ec = value;
+        let ec = value;
 
         if(typeof ec === 'string') {
           try {
@@ -516,7 +516,13 @@ async updateProfile(userId, data, file) {
       emergencyContactResponse = patient?.emergencyContact || null;
     }
 
-    return updatedUser
+    const responseData = updatedUser.toObject ? updatedUser.toObject() : { ...updatedUser };
+
+    if (updatedUser.role === 'Patient') {
+      responseData.emergencyContact = emergencyContactResponse;
+    }
+
+    return responseData;
 
   } catch (error) {
     console.error("Lỗi cập nhật profile:", error);

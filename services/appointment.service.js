@@ -2935,10 +2935,9 @@ async getVisitTicketPDF(appointmentId, res) {
       nurseId : medicalRecordOrigin?.nurseId || null,
       patientAge: medicalRecordOrigin?.patientAge || 0,
       address: medicalRecordOrigin?.address || '',
-      diagnosis: medicalRecordOrigin?.diagnosis || '',
       additionalServiceIds: finalServiceIds,
-      diagnosisDetails: medicalRecordOrigin?.diagnosisDetails || '',
-      nurseNotes: medicalRecordOrigin?.nurseNote || '',
+      nurseNote: medicalRecordOrigin?.nurseNote || '',
+      diagnosis: medicalRecordOrigin?.diagnosis || '',
       conclusion: medicalRecordOrigin?.conclusion || '',
       prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
         medicine: item?.medicine || '',
