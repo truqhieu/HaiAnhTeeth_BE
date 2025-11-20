@@ -1,7 +1,7 @@
 const Blog = require('../models/blog.model');
 const { cloudinary, deleteOldImage } = require('../config/cloudinary');
 const fs = require('fs');
-const { content } = require('googleapis/build/src/apis/content');
+// const { content } = require('googleapis/build/src/apis/content');
 
 const CATEGORY = Blog.schema.path('category').enumValues;
 const STATUS = Blog.schema.path('status').enumValues;
@@ -27,7 +27,7 @@ class BlogService {
    * Tạo blog mới
    */
   async createBlog(data, file, authorUserId) {
-    const { title, category, content, status } = data;
+    const { title, category,summary ,content, status } = data;
 
     if (title) {
       if (typeof title !== 'string' || title.trim().length === 0) {
@@ -44,6 +44,20 @@ class BlogService {
       }
     }
 
+    if (summary) {
+      if (typeof summary !== 'string' || summary.trim().length === 0) {
+        throw new Error('Tóm tắt blog không được để trống');
+      }
+
+      const cleanSummary = summary.trim();
+      if (/[<>]/.test(cleanSummary)) {
+      throw new Error('Tóm tắt blog không được chứa ký tự < hoặc > để tránh lỗi bảo mật.');
+      }
+
+      if (cleanSummary.length < 10) {
+        throw new Error('Tóm tắt blog phải có ít nhất 10 ký tự');
+      }
+    }
     if (content) {
       if (typeof content !== 'string' || content.trim().length === 0) {
         throw new Error('Nội dung blog không được để trống');
@@ -71,6 +85,7 @@ class BlogService {
     const blog = new Blog({
       title,
       category,
+      summary,
       content,
       authorUserId,
       thumbnailUrl: imageUrl,
@@ -114,7 +129,7 @@ class BlogService {
       const regex = new RegExp(safe, 'i');
       filter.$or = [
         { title: { $regex: regex } },
-        { content: { $regex: regex } },
+        { summary: { $regex: regex } },
       ];
     }
 
@@ -179,7 +194,7 @@ class BlogService {
       const regex = new RegExp(safe, 'i');
       filter.$or = [
         { title: { $regex: regex } },
-        { content: { $regex: regex } },
+        { summary: { $regex: regex } },
       ];
     }
 
@@ -234,7 +249,7 @@ class BlogService {
    * Cập nhật blog
    */
 async updateBlog(id, data, file) {
-  const allowedFields = ['title', 'summary', 'category', 'status'];
+  const allowedFields = ['title', 'summary', 'content', 'category', 'status'];
   const updates = {};
   let uploadedImageId = null;
   let tempFilePath = null;
@@ -249,6 +264,7 @@ async updateBlog(id, data, file) {
       if (typeof value !== 'string' || value.trim().length === 0) {
         const fieldNames = {
           title: 'Tiêu đề',
+          summary : 'Tóm tắt',
           content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'
@@ -261,6 +277,7 @@ async updateBlog(id, data, file) {
       if (!/^[a-zA-ZÀ-ỹ0-9\s]+$/.test(cleanValue)) {
         const fieldNames = {
           title: 'Tiêu đề',
+          summary : 'Tóm tắt',        
           content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'
@@ -270,11 +287,13 @@ async updateBlog(id, data, file) {
 
       const minLength = field === 'title' ? 3 :
         field === 'summary' ? 10 :
-          field === 'category' ? 2 : 3;
+        field === 'content' ? 10 :
+        field === 'category' ? 2 : 3;
 
       if (cleanValue.length < minLength) {
         const fieldNames = {
           title: 'Tiêu đề',
+          summary : 'Tóm tắt',
           content: 'Nội dung',
           category: 'Danh mục',
           status: 'Trạng thái'

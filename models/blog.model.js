@@ -19,6 +19,11 @@ const blogSchema = new mongoose.Schema({
         required: [true, 'Vui chọn thể loại của blog'],
         trim : true,
     },
+    summary : {
+        type : String,
+        required : [true, 'Vui lòng điền tóm tắt blog'],
+        trim : true,
+    },
     content : {
         type : String,
         required : [true, 'Vui lòng điền nội dung blog'],

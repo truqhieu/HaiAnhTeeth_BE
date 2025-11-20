@@ -7,7 +7,7 @@ class PromotionService {
   /**
    * Tạo promotion mới
    */
-  async createPromotion(data) {
+async createPromotion(data) {
     const {
       title,
       description,
@@ -78,15 +78,20 @@ class PromotionService {
       finalServiceIds = await Service.find().distinct('_id');
     }
 
-    // Validate dates
+    // ⭐ FIX: Parse dates đúng cách
     const start = new Date(startDate);
     const end = new Date(endDate);
+    
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
       throw new Error('Ngày không hợp lệ');
     }
     if (end <= start) {
       throw new Error('Ngày kết thúc phải sau ngày bắt đầu');
     }
+
+    // Log để debug
+    console.log('📅 [Promotion] Start:', start.toISOString());
+    console.log('📅 [Promotion] End:', end.toISOString());
 
     // Check conflict promotion for services
     const conflictingPromotions = await PromotionServiceModel.aggregate([
@@ -107,11 +112,20 @@ class PromotionService {
       throw error;
     }
 
-    // Tính status realtime
+    // ⭐ FIX: Tính status realtime với timezone support
     const now = new Date();
+    console.log('⏰ [Promotion] Now:', now.toISOString());
+    
     let status = 'Upcoming';
-    if (start <= now && now <= end) status = 'Active';
-    else if (now > end) status = 'Expired';
+    if (start <= now && now < end) {
+      status = 'Active';
+      console.log('✅ [Promotion] Status = Active');
+    } else if (now >= end) {
+      status = 'Expired';
+      console.log('⏱️  [Promotion] Status = Expired');
+    } else {
+      console.log('🔜 [Promotion] Status = Upcoming');
+    }
 
     // Tạo promotion
     const promotion = new Promotion({
@@ -125,6 +139,8 @@ class PromotionService {
       status
     });
     await promotion.save();
+
+    console.log(`✅ [Promotion] Tạo thành công: ${promotion._id} - Status: ${status}`);
 
     // Tạo liên kết dịch vụ trong PromotionService
     if (finalServiceIds.length > 0) {

@@ -5,17 +5,18 @@ const createBlog = async (req, res) => {
         const {
             title,
             category,
+            summary,
             content,
             status,
         } = req.body;
         
     const blog = await blogService.createBlog(
-      { title, category, content, status },
+      { title, summary, category, content, status },
       req.file,
       req.user.userId
     );
 
-        res.status(201).json({
+      res.status(201).json({
       success: true,
       message: 'Tạo mới blog thành công',
       data: blog
@@ -123,7 +124,7 @@ const updateBlog = async (req, res) => {
     try {
         const { id } = req.params;
         const updates = {};
-        const allowedFields = ['title', 'content', 'category', 'status'];
+        const allowedFields = ['title', 'summary','content', 'category', 'status'];
 
     // Lấy các fields được gửi lên
         for (const field of allowedFields) {
