@@ -430,6 +430,14 @@ async updateProfile(userId, data, file) {
       if (key === 'emergencyContact') {
         const ec = value;
 
+        if(typeof ec === 'string') {
+          try {
+            ec = JSON.parse(ec);
+          } catch (error) {
+            throw new Error('Lỗi định dạng emergencyContact');
+          }
+        }
+
         if (ec) {
           if (!ec.name || ec.name.trim().length === 0) {
             throw new Error('emergencyContact.name không được để trống');

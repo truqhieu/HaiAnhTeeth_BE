@@ -484,9 +484,9 @@ class MedicalRecordService {
 
     // ⭐ FIX: Nếu approve, set status = 'Finalized'
     // Nếu không approve, set status = 'Draft' (kể cả follow-up appointments)
-    if (approve === true) {
-      updateFields.status = 'Finalized';
-    } else {
+    // if (approve === true) {
+      // updateFields.status = 'Finalized';
+    if(approve !== true) {
       // Sau khi duyệt, không cho chỉnh sửa nữa, nên chỉ set về Draft khi không approve
       updateFields.status = 'Draft';
     }
@@ -601,7 +601,7 @@ class MedicalRecordService {
       throw new Error('Thiếu appointmentId');
     }
 
-    const appointment = await Appointment.findById(appointmentId).select('status doctorUserId type followUpOfAppointmentId');
+    const appointment = await Appointment.findById(appointmentId).select('status doctorUserId type followUpOfAppointmentId serviceId');
     if (!appointment) {
       throw new Error('Không tìm thấy lịch hẹn');
     }
@@ -842,7 +842,7 @@ class MedicalRecordService {
     })
       .populate({
         path: 'appointmentId',
-        select: 'status timeslotId serviceId doctorUserId patientUserId customerId',
+        select: 'status timeslotId serviceId doctorUserId patientUserId customerId type followUpOfAppointmentId',
         match: { status: 'Completed' }, // Chỉ lấy appointments đã hoàn thành
         populate: [
           {
@@ -931,6 +931,10 @@ class MedicalRecordService {
         diagnosis: record.diagnosis || null,
         conclusion: record.conclusion || null,
         status: record.status,
+        appointmentType: appointment?.type || null,
+        followUpOfAppointmentId: appointment?.followUpOfAppointmentId
+          ? appointment.followUpOfAppointmentId.toString()
+          : null,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt
       };

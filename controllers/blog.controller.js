@@ -8,10 +8,12 @@ const createBlog = async (req, res) => {
             summary,
             content,
             status,
+            startDate,
+            endDate,
         } = req.body;
         
     const blog = await blogService.createBlog(
-      { title, summary, category, content, status },
+      { title, summary, category, content, status, startDate, endDate },
       req.file,
       req.user.userId
     );
@@ -121,33 +123,35 @@ const viewDetailBlogs = async (req, res) => {
 };
 
 const updateBlog = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const updates = {};
-        const allowedFields = ['title', 'summary','content', 'category', 'status'];
+  try {
+    const { id } = req.params;
+    const updates = {};
+    const allowedFields = ['title', 'summary', 'content', 'category', 'status', 'startDate', 'endDate'];
 
     // Lấy các fields được gửi lên
-        for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
-      }
+    for (const field of allowedFields) {
+      const value = req.body[field];
+      // ❗ BỎ QUA field không gửi hoặc gửi rỗng ""
+      if (value === undefined || value === '') continue;
+      updates[field] = value;
     }
 
     const blog = await blogService.updateBlog(id, updates, req.file);
 
-        res.status(200).json({
-            success: true,
-            message: 'Cập nhật blog thành công',
-            data: blog
-        });
-    } catch (error) {
-        console.error('Lỗi khi cập nhật blog:', error);
-        return res.status(500).json({
-            success: false,
+    res.status(200).json({
+      success: true,
+      message: 'Cập nhật blog thành công',
+      data: blog
+    });
+  } catch (error) {
+    console.error('Lỗi khi cập nhật blog:', error);
+    return res.status(500).json({
+      success: false,
       message: error.message || 'Đã xảy ra lỗi khi cập nhật blog'
-        });
-    }
+    });
+  }
 };
+
 
 const deleteBlog = async (req, res) => {
   try {

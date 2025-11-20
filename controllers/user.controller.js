@@ -428,11 +428,23 @@ const updateProfile = async (req, res) => {
     const userId = req.user.userId;
 
     // Các trường sẽ validate giống updateAccount
-    const allowedFields = ['fullName', 'phoneNumber', 'address', ,'dob', 'gender', 'emergencyContact'];
+    const allowedFields = ['fullName', 'phoneNumber', 'address','dob', 'gender', 'emergencyContact'];
     const updates = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+        if(field === 'emergencyContact' && typeof req.body[field] === 'string') {
+          try {
+            req.body[field] = JSON.parse(req.body[field]);
+          } catch (error) {
+            return res.status(400).json({
+              success: false,
+              message: 'Lỗi định dạng emergencyContact'
+            });
+          }
+        }
+        else {
+          updates[field] = req.body[field];
+        }
       }
     }
 
@@ -441,25 +453,24 @@ const updateProfile = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Cập nhật thông tin cá nhân thành công',
-      data: updatedUser
-      // {
-      //   user: {
-      //     id: updatedUser._id,
-      //     fullName: updatedUser.fullName,
-      //     email: updatedUser.email,
-      //     role: updatedUser.role,
-      //     status: updatedUser.status,
-      //     phoneNumber: updatedUser.phoneNumber,
-      //     phone: updatedUser.phoneNumber,
-      //     address: updatedUser.address,
-      //     dateOfBirth: updatedUser.dob,
-      //     gender: updatedUser.gender,
-      //     avatar: updatedUser.avatar,
-      //     emergencyContact: updatedUser.emergencyContact,
-      //     createdAt: updatedUser.createdAt,
-      //     updatedAt: updatedUser.updatedAt
-      //   }
-      // }
+      data: {
+        user: {
+          id: updatedUser._id,
+          fullName: updatedUser.fullName,
+          email: updatedUser.email,
+          role: updatedUser.role,
+          status: updatedUser.status,
+          phoneNumber: updatedUser.phoneNumber,
+          phone: updatedUser.phoneNumber,
+          address: updatedUser.address,
+          dateOfBirth: updatedUser.dob,
+          gender: updatedUser.gender,
+          avatar: updatedUser.avatar,
+          emergencyContact: updatedUser.role === 'Patient' ? updatedUser.emergencyContact : null,
+          createdAt: updatedUser.createdAt,
+          updatedAt: updatedUser.updatedAt
+        }
+      }
     });
 
   } catch (error) {

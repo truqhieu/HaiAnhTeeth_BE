@@ -42,7 +42,15 @@ const blogSchema = new mongoose.Schema({
         type : String,
         enum : ["Published","Hidden"],
         default : "Published",
-    }
+    },
+    startDate : {
+        type : Date,
+        required : false,
+    },
+    endDate : {
+        type : Date,
+        required : false,
+    },
 },{
   timestamps: true
 });
