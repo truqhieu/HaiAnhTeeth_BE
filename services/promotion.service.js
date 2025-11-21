@@ -18,8 +18,10 @@ class PromotionService {
       endDate,
       serviceIds
     } = data;
-
-    // Validate title
+  
+    // =========================
+    // 1. Validate title
+    // =========================
     if (typeof title !== 'string' || title.trim().length === 0) {
       throw new Error('Tiêu đề giảm giá không được để trống');
     }
@@ -30,8 +32,10 @@ class PromotionService {
     if (cleanTitle.length < 5 || cleanTitle.length > 100) {
       throw new Error('Tiêu đề phải từ 5 đến 100 ký tự');
     }
-
-    // Validate description
+  
+    // =========================
+    // 2. Validate description
+    // =========================
     if (typeof description !== 'string' || description.trim().length === 0) {
       throw new Error('Mô tả giảm giá không được để trống');
     }
@@ -42,8 +46,10 @@ class PromotionService {
     if (cleanDescription.length < 10) {
       throw new Error('Mô tả phải có ít nhất 10 ký tự');
     }
-
-    // Validate discount type & value
+  
+    // =========================
+    // 3. Validate discount type & value
+    // =========================
     if (typeof discountType !== 'string' || discountType.trim().length === 0) {
       throw new Error('Thể loại giảm giá không được để trống');
     }
@@ -51,6 +57,7 @@ class PromotionService {
     if (!['Percent', 'Fix'].includes(trimmedType)) {
       throw new Error('Thể loại giảm giá chỉ được là "Percent" hoặc "Fix"');
     }
+  
     if (typeof discountValue !== 'number' || isNaN(discountValue)) {
       throw new Error('Giá trị giảm giá phải là số');
     }
@@ -60,13 +67,15 @@ class PromotionService {
     if (trimmedType === 'Fix' && discountValue <= 0) {
       throw new Error('Giá trị giảm cố định phải lớn hơn 0');
     }
-
-    // Validate apply to all
+  
+    // =========================
+    // 4. Validate applyToAll & services
+    // =========================
     if (typeof applyToAll !== 'boolean') {
       throw new Error('Áp dụng cho tất cả phải là true hoặc false');
     }
     const isApplyToAll = applyToAll === true;
-
+  
     let finalServiceIds = [];
     if (!isApplyToAll) {
       if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
@@ -74,46 +83,131 @@ class PromotionService {
       }
       finalServiceIds = serviceIds;
     } else {
-      // Lấy tất cả service nếu applyAll
+      // Lấy tất cả service nếu applyToAll
       finalServiceIds = await Service.find().distinct('_id');
     }
-
-    // Validate dates
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+  
+    // =========================
+    // 5. Parse & normalize dates
+    // =========================
+    const startRaw = new Date(startDate);
+    const endRaw = new Date(endDate);
+  
+    if (isNaN(startRaw.getTime()) || isNaN(endRaw.getTime())) {
       throw new Error('Ngày không hợp lệ');
     }
-    if (end <= start) {
-      throw new Error('Ngày kết thúc phải sau ngày bắt đầu');
+  
+    const now = new Date();
+  
+    // Chuẩn hóa phần "ngày"
+    const startDay = new Date(startRaw);
+    startDay.setHours(0, 0, 0, 0);
+  
+    const endDay = new Date(endRaw);
+    endDay.setHours(0, 0, 0, 0);
+  
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+  
+    // ✅ Không cho tạo khuyến mãi với ngày < hôm nay
+    if (startDay < today) {
+      throw new Error('Ngày bắt đầu khuyến mãi không được nhỏ hơn ngày hiện tại');
     }
-
-    // Check conflict promotion for services
+    if (endDay < today) {
+      throw new Error('Ngày kết thúc khuyến mãi không được nhỏ hơn ngày hiện tại');
+    }
+    // (an toàn thêm): không cho end < start theo ngày
+    if (endDay < startDay) {
+      throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
+    }
+  
+    let start;
+    let end;
+  
+    if (startDay.getTime() === endDay.getTime()) {
+      // 👉 Khuyến mãi 1 ngày
+  
+      // end luôn là cuối ngày
+      end = new Date(endDay);
+      end.setHours(23, 59, 59, 999);
+  
+      if (startDay.getTime() === today.getTime() && now < end) {
+        // Nếu là "ngày hôm nay" → chạy từ bây giờ đến hết ngày
+        start = new Date(now);
+        console.log('📅 [Promotion] One-day promo for TODAY: from now to end of day');
+      } else {
+        // Nếu là ngày tương lai → chạy cả ngày
+        start = new Date(startDay);
+        start.setHours(0, 0, 0, 0);
+        console.log('📅 [Promotion] One-day promo (full day):', start.toISOString(), '→', end.toISOString());
+      }
+    } else {
+      // 👉 Khoảng nhiều ngày: start = 00:00 ngày bắt đầu, end = 23:59:59.999 ngày kết thúc
+      start = new Date(startDay);
+      start.setHours(0, 0, 0, 0);
+  
+      end = new Date(endDay);
+      end.setHours(23, 59, 59, 999);
+  
+      console.log('📅 [Promotion] Multi-day promo:', start.toISOString(), '→', end.toISOString());
+    }
+  
+    if (end < start) {
+      throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
+    }
+  
+    console.log('⏰ [Promotion] Now:', now.toISOString());
+    console.log('📅 [Promotion] Start:', start.toISOString());
+    console.log('📅 [Promotion] End:', end.toISOString());
+  
+    // =========================
+    // 6. Check conflict with existing promotions
+    //    Khoảng [start, end] giao với [promo.startDate, promo.endDate]
+    // =========================
     const conflictingPromotions = await PromotionServiceModel.aggregate([
       { $match: { serviceId: { $in: finalServiceIds } } },
-      { $lookup: { from: 'promotions', localField: 'promotionId', foreignField: '_id', as: 'promotion' } },
+      {
+        $lookup: {
+          from: 'promotions',
+          localField: 'promotionId',
+          foreignField: '_id',
+          as: 'promotion'
+        }
+      },
       { $unwind: '$promotion' },
-      { $match: { 
-        $or: [
-          { 'promotion.startDate': { $lte: end }, 'promotion.endDate': { $gte: start } }
-        ]
-      }}
+      {
+        $match: {
+          'promotion.startDate': { $lte: end },
+          'promotion.endDate': { $gte: start }
+        }
+      }
     ]);
-
+  
     if (conflictingPromotions.length > 0) {
       const conflictedServiceIds = conflictingPromotions.map(c => c.serviceId);
       const error = new Error('Một số dịch vụ đã có khuyến mãi trùng thời gian');
       error.conflictedServiceIds = conflictedServiceIds;
       throw error;
     }
-
-    // Tính status realtime
-    const now = new Date();
+  
+    // =========================
+    // 7. Tính status ban đầu
+    //    Cron sẽ đồng bộ lại sau (Expired / Active / Upcoming)
+    // =========================
     let status = 'Upcoming';
-    if (start <= now && now <= end) status = 'Active';
-    else if (now > end) status = 'Expired';
-
-    // Tạo promotion
+    if (start <= now && now < end) {
+      status = 'Active';
+      console.log('✅ [Promotion] Status = Active');
+    } else if (now >= end) {
+      status = 'Expired';
+      console.log('⏱️  [Promotion] Status = Expired');
+    } else {
+      console.log('🔜 [Promotion] Status = Upcoming');
+    }
+  
+    // =========================
+    // 8. Tạo promotion
+    // =========================
     const promotion = new Promotion({
       title: cleanTitle,
       description: cleanDescription,
@@ -125,24 +219,35 @@ class PromotionService {
       status
     });
     await promotion.save();
-
-    // Tạo liên kết dịch vụ trong PromotionService
+  
+    console.log(`✅ [Promotion] Tạo thành công: ${promotion._id} - Status: ${status}`);
+  
+    // =========================
+    // 9. Tạo liên kết dịch vụ trong PromotionService
+    // =========================
     if (finalServiceIds.length > 0) {
-      const links = finalServiceIds.map(id => ({ promotionId: promotion._id, serviceId: id }));
+      const links = finalServiceIds.map(id => ({
+        promotionId: promotion._id,
+        serviceId: id
+      }));
       await PromotionServiceModel.insertMany(links);
     }
-
-    // Lấy tên dịch vụ
+  
+    // =========================
+    // 10. Lấy tên dịch vụ áp dụng
+    // =========================
     const appliedServices = await Service.find({ _id: { $in: finalServiceIds } })
       .select('_id serviceName')
       .lean();
-
+  
     return {
       ...promotion.toObject(),
       appliedServices,
       status
     };
   }
+  
+  
 
   /**
    * Lấy danh sách promotions

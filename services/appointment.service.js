@@ -2955,6 +2955,29 @@ async getVisitTicketPDF(appointmentId, res) {
       followUpOfAppointmentId: originalAppointment._id
     });
 
+    const medicalRecordOrigin = await MedicalRecord.findOne({ appointmentId: originalAppointment._id }).populate('prescriptions' , 'medicine dosage duration');
+
+    const medicalRecord = await MedicalRecord.create({
+      appointmentId: followUpAppointment._id,
+      doctorUserId : doctorUserId,
+      patientUserId: patientUserId,
+      customerId: customerId,
+      nurseId : medicalRecordOrigin?.nurseId || null,
+      patientAge: medicalRecordOrigin?.patientAge || 0,
+      address: medicalRecordOrigin?.address || '',
+      additionalServiceIds: finalServiceIds,
+      nurseNote: medicalRecordOrigin?.nurseNote || '',
+      diagnosis: medicalRecordOrigin?.diagnosis || '',
+      conclusion: medicalRecordOrigin?.conclusion || '',
+      prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
+        medicine: item?.medicine || '',
+        dosage: item?.dosage || '',
+        duration: item?.duration || ''
+      })),
+      createdAt : new Date(),
+      updatedAt : new Date(),
+    });
+
     await Timeslot.findByIdAndUpdate(timeslot._id, {
       appointmentId: followUpAppointment._id
     });

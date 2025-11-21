@@ -33,9 +33,9 @@ class IntroductionService {
       }
 
       const cleanTitle = title.trim();
-      if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanTitle)) {
-        throw new Error('Tiêu đề giới thiệu không chứa ký tự đặc biệt');
-      }
+      // if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanTitle)) {
+      //   throw new Error('Tiêu đề giới thiệu không chứa ký tự đặc biệt');
+      // }
 
       if (cleanTitle.length < 3) {
         throw new Error('Tiêu đề giới thiệu phải có ít nhất 3 ký tự');
@@ -48,9 +48,9 @@ class IntroductionService {
       }
 
       const cleanSummary = summary.trim();
-      if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanSummary)) {
-        throw new Error('Nội dung giới thiệu không chứa ký tự đặc biệt');
-      }
+      // if (!/^[a-zA-ZÁ-ỹ0-9\s]+$/.test(cleanSummary)) {
+      //   throw new Error('Nội dung giới thiệu không chứa ký tự đặc biệt');
+      // }
 
       if (cleanSummary.length < 10) {
         throw new Error('Nội dung giới thiệu phải có ít nhất 10 ký tự');

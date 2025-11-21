@@ -110,21 +110,21 @@ const updateIntroduction = async (req, res) => {
     }
 };
 
-// const deleteIntroduction = async (req, res) => {
-//   try {
-//     await introductionService.deleteIntroduction(req.params.id);
-//
-//     res.status(200).json({
-//       success: true,
-//       message: 'Xóa giới thiệu thành công'
-//     });
-//   } catch (error) {
-//     console.error('Lỗi khi xóa giới thiệu:', error);
-//     return res.status(500).json({
-//       success: false,
-//       message: error.message || 'Đã xảy ra lỗi khi xóa giới thiệu'
-//     });
-//   }
-// };
+const deleteIntroduction = async (req, res) => {
+  try {
+    await introductionService.deleteIntroduction(req.params.id);
 
-module.exports = { createIntroduction, getAllIntroductions, viewDetailIntroduction, updateIntroduction };
+    res.status(200).json({
+      success: true,
+      message: 'Xóa giới thiệu thành công'
+    });
+  } catch (error) {
+    console.error('Lỗi khi xóa giới thiệu:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Đã xảy ra lỗi khi xóa giới thiệu'
+    });
+  }
+};
+
+module.exports = { createIntroduction, getAllIntroductions, viewDetailIntroduction, updateIntroduction, deleteIntroduction };

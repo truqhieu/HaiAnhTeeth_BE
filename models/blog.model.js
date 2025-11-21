@@ -19,6 +19,11 @@ const blogSchema = new mongoose.Schema({
         required: [true, 'Vui chọn thể loại của blog'],
         trim : true,
     },
+    summary : {
+        type : String,
+        required : [true, 'Vui lòng điền tóm tắt blog'],
+        trim : true,
+    },
     content : {
         type : String,
         required : [true, 'Vui lòng điền nội dung blog'],
@@ -37,7 +42,15 @@ const blogSchema = new mongoose.Schema({
         type : String,
         enum : ["Published","Hidden"],
         default : "Published",
-    }
+    },
+    startDate : {
+        type : Date,
+        required : false,
+    },
+    endDate : {
+        type : Date,
+        required : false,
+    },
 },{
   timestamps: true
 });
