@@ -1357,38 +1357,26 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
     const searchDate = new Date(date);
     searchDate.setUTCHours(0, 0, 0, 0);
 
-<<<<<<< HEAD
-    // ⭐ 4. CHECK BÁC SĨ CÓ LỊCH LÀM VIỆC AVAILABLE KHÔNG (bỏ check date)
-    const hasAnySchedule = await DoctorSchedule.findOne({
-=======
+const doctorProfile = await Doctor.findOne({ doctorUserId })
+  .select('workingHours workingHoursUpdatedAt status')
+  .lean();
+const doctorHasWorkingHours = hasCompleteWorkingHours(doctorProfile?.workingHours);
 
-    const doctorProfile = await Doctor.findOne({ doctorUserId })
-      .select('workingHours workingHoursUpdatedAt status')
-      .lean();
-    const doctorHasWorkingHours = hasCompleteWorkingHours(doctorProfile?.workingHours);
+const schedules = await DoctorSchedule.find({
+  doctorUserId,
+  date: searchDate,
+  status: 'Available'
+}).sort({ shift: 1 });
 
-    const schedules = await DoctorSchedule.find({
->>>>>>> d32270a (fix 2:00 11/23/2025)
-      doctorUserId,
-      status: 'Available'
-      // ⭐ BỎ: date: searchDate
-    });
-
-<<<<<<< HEAD
-    if (!hasAnySchedule) {
-=======
-    if (schedules.length === 0 && doctorHasWorkingHours) {
-      console.log(`⚠️ [getDoctorScheduleRange] No schedules for ${doctor.fullName} (${doctorUserId}) on ${searchDate.toISOString().split('T')[0]}. Auto-creating from workingHours...`);
-      await ScheduleHelper.ensureScheduleForDoctor(doctorUserId, searchDate);
-      schedules = await DoctorSchedule.find({
-        doctorUserId,
-        date: searchDate,
-        status: 'Available'
-      }).sort({ shift: 1 });
-    }
-
-    if (schedules.length === 0) {
->>>>>>> d32270a (fix 2:00 11/23/2025)
+if (schedules.length === 0) {
+  return {
+    doctorId: doctorUserId,
+    doctorName: doctor.fullName,
+    date: searchDate,
+    scheduleRanges: [],
+    message: 'Bác sĩ bạn chọn không có lịch làm việc. Vui lòng chọn bác sĩ khác.'
+  };
+}
       return {
         doctorId: doctorUserId,
         doctorName: doctor.fullName,
@@ -1577,7 +1565,9 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
         return slotDate.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0];
       });
 
-<<<<<<< HEAD
+      // ⭐ LOGIC EXCLUDE:
+      // - appointmentFor === 'self': Exclude TẤT CẢ appointments của user (bất kỳ bác sĩ nào) - tránh đặt trùng thời gian
+      // - appointmentFor === 'other': Chỉ exclude appointments của user với CÙNG bác sĩ - cho phép đặt cùng thời gian với bác sĩ khác
       const allUserBookedSlots = userAppointmentsOnDate
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
@@ -1586,38 +1576,31 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
         }));
       
       if (appointmentFor === 'self') {
+        // Exclude tất cả appointments của user (bất kỳ bác sĩ nào)
         userBookedSlots = allUserBookedSlots;
+        // ⭐ GIẢM LOG: Comment lại để giảm spam log
+        // console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=self) - EXCLUDING ALL DOCTORS`);
+        // userBookedSlots.forEach((slot, idx) => {
+        //   console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
+        // });
       } else if (appointmentFor === 'other') {
+        // Chỉ exclude appointments của user với CÙNG bác sĩ
         const currentDoctorId = doctorUserId.toString();
         userBookedSlots = allUserBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
-=======
-      const userAppointmentsWithType = userAppointmentsOnDate.map(apt => ({
-        start: new Date(apt.timeslotId.startTime),
-        end: new Date(apt.timeslotId.endTime),
-        doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null,
-        appointmentFor: apt.appointmentFor || 'self'
-      }));
-
-      userSelfBookedSlots = userAppointmentsWithType.filter(slot => slot.appointmentFor === 'self');
-      userOtherBookedSlots = userAppointmentsWithType.filter(slot => slot.appointmentFor === 'other');
-
-      console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} appointments on ${searchDate.toISOString().split('T')[0]} (self: ${userSelfBookedSlots.length}, other: ${userOtherBookedSlots.length})`);
-      userAppointmentsWithType.forEach((slot, idx) => {
-        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'}, appointmentFor: ${slot.appointmentFor})`);
-      });
-
-      const currentDoctorId = doctorUserId.toString();
-      if (appointmentFor === 'self') {
-        const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
-        userBookedSlots = [...userSelfBookedSlots, ...sameDoctorOtherSlots];
-      } else if (appointmentFor === 'other') {
-        userBookedSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
->>>>>>> d32270a (fix 2:00 11/23/2025)
+        // ⭐ GIẢM LOG: Comment lại để giảm spam log
+        // console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${allUserBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=other)`);
+        // console.log(`   - Chỉ exclude ${userBookedSlots.length} appointments với bác sĩ ${currentDoctorId} (cho phép đặt cùng thời gian với bác sĩ khác)`);
+        // userBookedSlots.forEach((slot, idx) => {
+        //   console.log(`   - Excluded slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
+        // });
       }
     }
 
-    // Final merged slots
-    const allBookedSlotsFinal = [...mergedBookedSlots, ...userBookedSlots];
+    // Gộp tất cả booked slots (doctor + user) và merge các slots có overlap
+    const allBookedSlotsFinal = [...uniqueBookedSlots, ...userBookedSlots];
+    
+    // ⭐ FIX: Merge các slots có overlap thay vì chỉ loại bỏ exact duplicates
+    // Sắp xếp theo start time trước
     allBookedSlotsFinal.sort((a, b) => a.start.getTime() - b.start.getTime());
     
     const finalMergedBookedSlots = [];

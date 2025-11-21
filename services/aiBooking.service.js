@@ -99,6 +99,21 @@ const CONTEXT_STOP_WORDS = new Set([
   'vao', 'vào', 'khoang', 'khoảng'
 ].map(word => word.normalize('NFD').replace(/[\u0300-\u036f]/g, '')));
 
+const WORKING_HOUR_FIELDS = [
+  'morningStart',
+  'morningEnd',
+  'afternoonStart',
+  'afternoonEnd'
+];
+
+const hasCompleteWorkingHours = (workingHours) => {
+  if (!workingHours) return false;
+  return WORKING_HOUR_FIELDS.every(field => {
+    const value = workingHours[field];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+};
+
 class AIBookingService {
   
   constructor() {
@@ -1369,20 +1384,17 @@ class AIBookingService {
           const availableDoctors = doctors.filter(doctor => {
             const doctorStatus = doctorStatusMap.get(doctor._id.toString());
             const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
-            
-            // Nếu không có trong Doctor model → coi như không có workingHours → filter bỏ
-            if (!doctorStatus && !workingHours) return false;
-            
+            const hasHours = hasCompleteWorkingHours(workingHours);
+
+            if (!hasHours) {
+              return false;
+            }
+
             // Check status: chỉ lấy bác sĩ có status "Available" hoặc "Busy"
             if (doctorStatus && doctorStatus !== 'Available' && doctorStatus !== 'Busy') {
               return false;
             }
-            
-            // ⭐ CỰC KỲ QUAN TRỌNG: Chỉ lấy bác sĩ có workingHours
-            if (!workingHours) {
-              return false;
-            }
-            
+
             return true;
           });
           
@@ -1398,7 +1410,7 @@ class AIBookingService {
                 doctorUserId: selectedDoctor._id 
               }).select('workingHours');
               
-              if (!doctorModelForValidation || !doctorModelForValidation.workingHours) {
+              if (!doctorModelForValidation || !hasCompleteWorkingHours(doctorModelForValidation.workingHours)) {
                 // Lấy danh sách bác sĩ có workingHours để làm suggestions
                 const doctorModelsForSuggestions = await Doctor.find({
                   doctorUserId: { $in: availableDoctors.map(d => d._id) }
@@ -1406,7 +1418,7 @@ class AIBookingService {
 
                 const doctorsWithValidWorkingHoursForSuggestions = new Set();
                 doctorModelsForSuggestions.forEach(doc => {
-                  if (doc.workingHours) {
+                  if (hasCompleteWorkingHours(doc.workingHours)) {
                     doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
                   }
                 });
@@ -1536,12 +1548,13 @@ class AIBookingService {
 
             console.log(`🔍 [find_doctor_by_name] Fetched ${matchedDoctorModels.length} doctor models from DB`);
             matchedDoctorModels.forEach(doc => {
-              console.log(`🔍 [find_doctor_by_name] Doctor ${doc.doctorUserId}: has workingHours = ${!!doc.workingHours}`);
+              const docHasWorkingHours = hasCompleteWorkingHours(doc.workingHours);
+              console.log(`🔍 [find_doctor_by_name] Doctor ${doc.doctorUserId}: has workingHours = ${docHasWorkingHours}`);
             });
 
             const matchedDoctorsWithWorkingHours = new Set();
             matchedDoctorModels.forEach(doc => {
-              if (doc.workingHours) {
+              if (hasCompleteWorkingHours(doc.workingHours)) {
                 matchedDoctorsWithWorkingHours.add(doc.doctorUserId.toString());
               }
             });
@@ -1565,7 +1578,7 @@ class AIBookingService {
 
               const doctorsWithValidWorkingHoursForSuggestions = new Set();
               doctorModelsForSuggestions.forEach(doc => {
-                if (doc.workingHours) {
+                if (hasCompleteWorkingHours(doc.workingHours)) {
                   doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
                 }
               });
@@ -1653,7 +1666,7 @@ class AIBookingService {
 
               const doctorsWithValidWorkingHoursForSuggestions = new Set();
               doctorModelsForSuggestions.forEach(doc => {
-                if (doc.workingHours) {
+                if (hasCompleteWorkingHours(doc.workingHours)) {
                   doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
                 }
               });
@@ -1696,7 +1709,7 @@ class AIBookingService {
 
             const doctorsWithWorkingHours = new Set();
             doctorModelsForValidation.forEach(doc => {
-              if (doc.workingHours) {
+              if (hasCompleteWorkingHours(doc.workingHours)) {
                 doctorsWithWorkingHours.add(doc.doctorUserId.toString());
               }
             });
@@ -1715,7 +1728,7 @@ class AIBookingService {
 
               const doctorsWithValidWorkingHoursForSuggestions = new Set();
               doctorModelsForSuggestions.forEach(doc => {
-                if (doc.workingHours) {
+                if (hasCompleteWorkingHours(doc.workingHours)) {
                   doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
                 }
               });
@@ -1809,20 +1822,32 @@ class AIBookingService {
               .sort({ fullName: 1 })
               .lean();
             
-            // ⭐ THÊM: Filter bỏ bác sĩ "On Leave" hoặc "Inactive"
-            const doctorStatuses = await Doctor.find({
+            // ⭐ THÊM: Lấy Doctor model để filter status + workingHours
+            const doctorModels = await Doctor.find({
               doctorUserId: { $in: allDoctors.map(d => d._id) }
-            }).select('doctorUserId status');
+            }).select('doctorUserId status workingHours');
             
             const doctorStatusMap = new Map();
-            doctorStatuses.forEach(doc => {
+            const doctorWorkingHoursMap = new Map();
+            doctorModels.forEach(doc => {
               doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+              doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
             });
             
             const availableDoctors = allDoctors.filter(d => {
               const doctorStatus = doctorStatusMap.get(d._id.toString());
-              if (!doctorStatus) return true;
-              return doctorStatus === 'Available' || doctorStatus === 'Busy';
+              const workingHours = doctorWorkingHoursMap.get(d._id.toString());
+              const hasHours = hasCompleteWorkingHours(workingHours);
+
+              if (!hasHours) {
+                return false;
+              }
+
+              if (doctorStatus && doctorStatus !== 'Available' && doctorStatus !== 'Busy') {
+                return false;
+              }
+
+              return true;
             });
             
             const inputLower = doctorIdStr.toLowerCase().trim();
@@ -1907,9 +1932,13 @@ class AIBookingService {
         }
           
           // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive)
-          const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
-          if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
+          const doctorModel = await Doctor.findOne({ doctorUserId: doctor._id }).select('status workingHours');
+          if (doctorModel && (doctorModel.status === 'On Leave' || doctorModel.status === 'Inactive')) {
             return { valid: false, error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
+          }
+
+          if (!doctorModel || !hasCompleteWorkingHours(doctorModel.workingHours)) {
+            return { valid: false, error: 'Bác sĩ này chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.' };
           }
 
         return {
@@ -1949,20 +1978,17 @@ class AIBookingService {
           let availableDoctors = doctors.filter(doctor => {
             const doctorStatus = doctorStatusMap.get(doctor._id.toString());
             const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
-            
-            // Nếu không có trong Doctor model → coi như không có workingHours → filter bỏ
-            if (!doctorStatus && !workingHours) return false;
-            
+            const hasHours = hasCompleteWorkingHours(workingHours);
+
+            if (!hasHours) {
+              return false;
+            }
+
             // Check status: chỉ lấy bác sĩ có status "Available" hoặc "Busy"
             if (doctorStatus && doctorStatus !== 'Available' && doctorStatus !== 'Busy') {
               return false;
             }
-            
-            // ⭐ CỰC KỲ QUAN TRỌNG: Chỉ lấy bác sĩ có workingHours
-            if (!workingHours) {
-              return false;
-            }
-            
+
             return true;
           });
 
@@ -2193,7 +2219,7 @@ class AIBookingService {
           }
 
           // ⭐ CỰC KỲ QUAN TRỌNG: Kiểm tra workingHours ngay sau khi validate doctor
-          if (!doctorModel || !doctorModel.workingHours) {
+          if (!doctorModel || !hasCompleteWorkingHours(doctorModel.workingHours)) {
             return { error: 'Bác sĩ này chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.' };
           }
           
@@ -3465,6 +3491,51 @@ class AIBookingService {
     return `${day}/${month}/${year}`;
   }
 
+  formatCurrency(amount) {
+    if (amount == null) return null;
+    const numeric = Number(amount);
+    if (Number.isNaN(numeric)) return amount;
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(numeric);
+  }
+
+  buildAppointmentConfirmationMessage(appointment) {
+    if (!appointment) {
+      return '✅ Lịch hẹn của bạn đã được đặt thành công.';
+    }
+
+    const dateDisplay = this.formatDateForDisplay(appointment.date);
+    const timeDisplay = appointment.time ? ` lúc ${appointment.time}` : '';
+
+    const statusMap = {
+      PendingPayment: 'Đang chờ thanh toán',
+      Pending: 'Đang chờ xác nhận',
+      Approved: 'Đã xác nhận',
+      Booked: 'Đã đặt chỗ',
+      CheckedIn: 'Đã đến phòng khám',
+      InProgress: 'Đang trong ca khám',
+      Completed: 'Đã hoàn tất'
+    };
+    const statusLabel = statusMap[appointment.status] || appointment.status;
+
+    const priceLine = appointment.finalPrice != null
+      ? `- Giá: ${this.formatCurrency(appointment.finalPrice)}`
+      : null;
+
+    const note = appointment.needsPayment
+      ? '- Vui lòng hoàn tất thanh toán trước để giữ chỗ. Thông tin thanh toán sẽ được gửi đến email của bạn.'
+      : '- Bạn chỉ cần đến trước 5-10 phút để làm thủ tục, không cần thanh toán trước.';
+
+    const lines = [
+      `✅ Lịch hẹn "${appointment.service}" với ${appointment.doctor} đã được xác nhận!`,
+      `- Ngày & giờ: ${dateDisplay}${timeDisplay}`,
+      `- Trạng thái: ${statusLabel}`,
+      priceLine,
+      note
+    ].filter(Boolean);
+
+    return lines.join('\n');
+  }
+
   collectUserMessages(latestPrompt, history) {
     const messages = [];
     if (latestPrompt && typeof latestPrompt === 'string' && latestPrompt.trim().length > 0) {
@@ -4718,6 +4789,7 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
       
       const dateValidationCache = new Map();
       
+      let stopAfterIteration = false;
       while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
         iteration++;
         
@@ -4725,6 +4797,13 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         for (const toolCall of assistantMessage.tool_calls) {
           const functionName = toolCall.function.name;
           let functionArgs;
+
+          const appointmentPreviouslyCreated = functionResults.some(fr => fr.functionName === 'create_appointment' && fr.result?.success);
+          if (functionName === 'get_available_slots' && appointmentPreviouslyCreated) {
+            console.log('⚠️ [AI Booking] Skipping get_available_slots after successful appointment creation');
+            stopAfterIteration = true;
+            break;
+          }
           
           // ⭐ LOGGING: Log tất cả function calls để debug
           console.log(`🔧 [AI Booking] Iteration ${iteration}: AI wants to call function: ${functionName}`);
@@ -5093,8 +5172,17 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
             functionArgs,
             result: functionResult
           });
+          
+          if (functionName === 'create_appointment' && functionResult?.success) {
+            stopAfterIteration = true;
+            break;
+          }
         }
         
+        if (stopAfterIteration) {
+          break;
+        }
+
         // Call OpenAI again với function results (với retry logic)
         // ⭐ Tối ưu parameters cho tốc độ phản hồi nhanh
         try {
@@ -5497,9 +5585,14 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
       // ⭐ QUAN TRỌNG: Kiểm tra xem có đủ thông tin (service + doctor + date) để tự động hiển thị slots không
       const serviceAlreadyChosen = this.hasServiceContext(functionResults, filteredHistory);
       const doctorAlreadyChosen = this.hasDoctorContext(functionResults, filteredHistory);
+
+      const appointmentCreated = functionResults.some(fr => 
+        fr.functionName === 'create_appointment' && fr.result?.success
+      );
+      console.log(`🔍 [AI Booking] appointmentCreated=${appointmentCreated}`);
       
       // ⭐ Nếu có đủ service + doctor, thử tự động hiển thị slots
-      if (serviceAlreadyChosen && doctorAlreadyChosen) {
+      if (!appointmentCreated && serviceAlreadyChosen && doctorAlreadyChosen) {
         const getLatestServiceInfo = () => {
           for (let i = functionResults.length - 1; i >= 0; i--) {
             const fr = functionResults[i];
@@ -5545,9 +5638,11 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         }
       }
       
-      const pendingServiceFollowUp = await this.buildServiceSelectionFollowUp(functionResults, filteredHistory, processedPrompt, patientUserId, serviceAlreadyChosen);
-      if (pendingServiceFollowUp) {
-        return pendingServiceFollowUp;
+      if (!appointmentCreated) {
+        const pendingServiceFollowUp = await this.buildServiceSelectionFollowUp(functionResults, filteredHistory, processedPrompt, patientUserId, serviceAlreadyChosen);
+        if (pendingServiceFollowUp) {
+          return pendingServiceFollowUp;
+        }
       }
       if (!serviceAlreadyChosen) {
         const summaryResponse = 'Bạn chưa chọn đầy đủ thông tin để tiếp tục. Nếu đã chọn dịch vụ, hãy cho tôi biết bác sĩ hoặc thời gian bạn muốn đặt lịch.';
@@ -5563,13 +5658,9 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         };
       }
       
-      // Check if appointment was created
-      const appointmentCreated = functionResults.some(fr => 
-        fr.functionName === 'create_appointment' && fr.result.success
-      );
-      
       if (appointmentCreated) {
         const appointmentResult = functionResults.find(fr => fr.functionName === 'create_appointment').result;
+        finalResponse = this.buildAppointmentConfirmationMessage(appointmentResult);
         // ⭐ Sử dụng filteredHistory thay vì conversationHistory để đảm bảo format đúng
         const updatedHistory = [...filteredHistory, 
           { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
@@ -5589,8 +5680,9 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
         { role: "assistant", content: finalResponse }
       ];
-        return {
-          success: false,
+      console.log('⚠️ [AI Booking] Returning needsMoreInfo after loop; finalResponse=', finalResponse);
+      return {
+        success: false,
         needsMoreInfo: true,
         response: finalResponse,
         conversationHistory: updatedHistory
