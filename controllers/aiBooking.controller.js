@@ -61,6 +61,24 @@ const createAppointmentByAI = async (req, res) => {
       });
     }
 
+    // ⭐ QUAN TRỌNG: Kiểm tra nếu result.success = true (informational query, off-topic response, etc.)
+    // Đây không phải là lỗi, chỉ là response thông tin
+    if (result.success && !result.appointment) {
+      console.log('✅ [AI Booking] Success response (informational/off-topic)');
+      const followUpQuestion = result.response || result.followUpQuestion || 'Đã xử lý yêu cầu của bạn.';
+      return res.status(200).json({
+        success: true, // ⭐ Trả về success: true cho informational/off-topic responses
+        needsMoreInfo: result.needsMoreInfo || false,
+        data: {
+          needsMoreInfo: result.needsMoreInfo || false,
+          followUpQuestion: followUpQuestion,
+          conversationHistory: result.conversationHistory || [],
+          parsedData: result.parsedData || {}
+        },
+        message: followUpQuestion
+      });
+    }
+
     // Check if AI needs more information (multi-turn conversation)
     if (result.needsMoreInfo) {
       console.log('🤖 [AI Booking] Needs more info.');
@@ -71,6 +89,7 @@ const createAppointmentByAI = async (req, res) => {
         data: {
           needsMoreInfo: true,
           followUpQuestion: followUpQuestion,
+          conversationHistory: result.conversationHistory || [],
           parsedData: result.parsedData || {}
         },
         message: followUpQuestion
@@ -83,6 +102,7 @@ const createAppointmentByAI = async (req, res) => {
       success: false,
       data: {
         followUpQuestion: followUpQuestion,
+        conversationHistory: result.conversationHistory || [],
         parsedData: result.parsedData || {}
       },
       message: followUpQuestion

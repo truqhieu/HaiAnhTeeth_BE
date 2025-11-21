@@ -30,13 +30,177 @@ const AI_MODEL = 'gpt-4o-mini';
 const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
 const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
+const FUNCTIONS_REQUIRING_DATE_VALIDATION = new Set([
+  'get_available_slots',
+  'check_appointment_conflict',
+  'create_appointment',
+  'get_doctors'
+]);
+
+const DATE_VALIDATION_MODEL = process.env.AI_DATE_MODEL || AI_MODEL;
+
+const DATE_VALIDATION_SYSTEM_PROMPT = `
+Bạn là trợ lý chuyên kiểm tra và chuẩn hóa NGÀY THÁNG bằng tiếng Việt.
+- Luôn suy luận ở timezone Asia/Ho_Chi_Minh.
+- Payload user gửi là JSON; trong đó có inputText (nguyên văn người dùng), today/tomorrow/dayAfterTomorrow/nextWeekSameDay (định dạng YYYY-MM-DD), now (ISO), latestUserPrompt và historySnippet.
+- Nhiệm vụ: diễn giải inputText thành ngày tuyệt đối định dạng YYYY-MM-DD nếu có thể.
+- normalizedDate PHẢI ở dạng YYYY-MM-DD để hệ thống nội bộ sử dụng, nhưng mọi message/hướng dẫn trong phản hồi phải yêu cầu người dùng nhập và hiểu ngày theo định dạng DD/MM/YYYY (ví dụ: 05/11/2025). Không bao giờ bảo người dùng nhập theo YYYY-MM-DD.
+- Nếu cụm từ là quan hệ (\"ngày mai\", \"thứ 5 tuần sau\"...), sử dụng giá trị trong payload để tính ngày chính xác.
+- ⚠️ QUAN TRỌNG: Nếu người dùng chỉ nói \"tuần sau\", \"tuần tới\", \"mỗi tuần sau\" hoặc \"mỗi tuần tới\" mà KHÔNG có thứ cụ thể (ví dụ: \"thứ 2 tuần sau\", \"thứ 5 tuần sau\") → PHẢI trả về status=ambiguous, requiresClarification=true, normalizedDate=null. KHÔNG được tự động chọn ngày (ví dụ: không được dùng nextWeekSameDay).
+- Nếu người dùng nói \"tuần sau\", \"mỗi tuần sau\" kèm theo thứ cụ thể (ví dụ: \"thứ 2 tuần sau\", \"thứ 5 tuần sau\") → tính ngày chính xác và trả về status=valid với normalizedDate.
+- Nếu ngày không tồn tại (ví dụ 30/02) → status=invalid, requiresClarification=true.
+- Nếu ngày hợp lệ nhưng nhỏ hơn today (trong quá khứ) → status=past, requiresClarification=true.
+- Không dùng dữ liệu ngoài payload, không dùng RAG.
+- Luôn trả kết quả dưới dạng function call commit_date_validation, không trả lời tự do.
+`.trim();
+
+const DATE_VALIDATION_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'commit_date_validation',
+      description: 'Chuẩn hóa ngày tháng sang YYYY-MM-DD và mô tả tình trạng hợp lệ/không hợp lệ',
+      parameters: {
+        type: 'object',
+        properties: {
+          originalInputEcho: {
+            type: 'string',
+            description: 'Nguyên văn cụm từ ngày tháng mà người dùng nhập'
+          },
+          normalizedDate: {
+            type: ['string', 'null'],
+            description: 'Ngày chuẩn hóa dạng YYYY-MM-DD nếu hợp lệ, ngược lại để null'
+          },
+          status: {
+            type: 'string',
+            enum: ['valid', 'ambiguous', 'invalid', 'past'],
+            description: 'Trạng thái diễn giải ngày'
+          },
+          requiresClarification: {
+            type: 'boolean',
+            description: 'true nếu cần hỏi lại người dùng'
+          },
+          message: {
+            type: 'string',
+            description: 'Giải thích ngắn gọn (tiếng Việt) để trợ lý thông báo lại cho người dùng'
+          }
+        },
+        required: ['originalInputEcho', 'status', 'requiresClarification']
+      }
+    }
+  }
+];
+
+const CONTEXT_STOP_WORDS = new Set([
+  'vao', 'vào', 'ngay', 'ngày', 'hom', 'hôm', 'nay', 'mai',
+  'luc', 'lúc', 'gio', 'giờ', 'buoi', 'buổi', 'sang', 'sáng',
+  'chieu', 'chiều', 'toi', 'tối', 'trua', 'trưa', 'den', 'đến',
+  'tu', 'từ', 'thoi', 'thời', 'khung', 'gio', 'giờ', 'luc', 'lúc',
+  'vao', 'vào', 'khoang', 'khoảng'
+].map(word => word.normalize('NFD').replace(/[\u0300-\u036f]/g, '')));
+
 class AIBookingService {
-  /**
-   * Helper function để lấy workingHours từ database cho một bác sĩ và ngày cụ thể
-   * @param {string|ObjectId} doctorUserId - ID của bác sĩ
-   * @param {Date|string} date - Ngày cần lấy workingHours (Date object hoặc string YYYY-MM-DD)
-   * @returns {Promise<Object|null>} { morningStart, morningEnd, afternoonStart, afternoonEnd } hoặc null nếu không tìm thấy
-   */
+  
+  constructor() {
+    this.serviceKeywordCache = {
+      keywords: [],
+      lastFetched: 0,
+      refreshing: false
+    };
+    
+    this.defaultServiceKeywords = [
+      'khám tổng quát',
+      'bọc răng',
+      'gắn đinh trồng răng',
+      'làm sạch răng',
+      'lấy tủy',
+      'mài răng',
+      'nhổ răng',
+      'trồng răng hàm',
+      'tẩy trắng răng'
+    ];
+    
+    // Load service keywords from DB at startup (non-blocking)
+    this.refreshServiceKeywordCache().catch(err => {
+      console.error('❌ [AI Booking] Failed to warm service keyword cache:', err?.message || err);
+    });
+  }
+  
+  async refreshServiceKeywordCache(force = false) {
+    if (this.serviceKeywordCache.refreshing) {
+      return;
+    }
+    
+    this.serviceKeywordCache.refreshing = true;
+    try {
+      const services = await Service.find({ status: 'Active' })
+        .select('serviceName name aliases keywords displayName')
+        .lean();
+      
+      const keywordSet = new Set();
+      services.forEach(service => {
+        const candidateNames = [
+          service.serviceName,
+          service.name,
+          service.displayName,
+          ...(Array.isArray(service.aliases) ? service.aliases : []),
+          ...(Array.isArray(service.keywords) ? service.keywords : [])
+        ];
+        
+        candidateNames.forEach(name => {
+          if (typeof name === 'string' && name.trim().length > 0) {
+            keywordSet.add(name.trim().toLowerCase());
+          }
+        });
+      });
+      
+      if (keywordSet.size > 0) {
+        this.serviceKeywordCache.keywords = Array.from(keywordSet);
+        this.serviceKeywordCache.lastFetched = Date.now();
+      }
+    } catch (error) {
+      console.error('❌ [AI Booking] Error refreshing service keyword cache:', error);
+    } finally {
+      this.serviceKeywordCache.refreshing = false;
+    }
+  }
+  
+  getServiceKeywords() {
+    const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    if (
+      !this.serviceKeywordCache.keywords.length ||
+      (now - this.serviceKeywordCache.lastFetched) > CACHE_TTL_MS
+    ) {
+      // Refresh cache in background (non-blocking)
+      this.refreshServiceKeywordCache().catch(err => {
+        console.error('❌ [AI Booking] Error refreshing service keywords:', err);
+      });
+    }
+    
+    return this.serviceKeywordCache.keywords.length > 0
+      ? this.serviceKeywordCache.keywords
+      : this.defaultServiceKeywords;
+  }
+
+  updateServiceKeywordCacheFromList(services = []) {
+    if (!Array.isArray(services) || services.length === 0) {
+      return;
+    }
+    const newKeywords = services
+      .map(service => service?.name || service?.serviceName || service?.displayName || '')
+      .filter(Boolean)
+      .map(name => name.toLowerCase());
+    if (!newKeywords.length) {
+      return;
+    }
+    const keywordSet = new Set([
+      ...this.serviceKeywordCache.keywords,
+      ...newKeywords
+    ]);
+    this.serviceKeywordCache.keywords = Array.from(keywordSet);
+  }
+  
   async getWorkingHoursFromDatabase(doctorUserId, date) {
     if (!doctorUserId || !mongoose.Types.ObjectId.isValid(doctorUserId)) {
       return null;
@@ -245,13 +409,6 @@ class AIBookingService {
     return null;
   }
 
-  /**
-   * Retry helper với exponential backoff
-   * @param {Function} fn - Function cần retry
-   * @param {number} maxRetries - Số lần retry tối đa
-   * @param {number} baseDelay - Base delay (ms)
-   * @returns {Promise} Result của function
-   */
   async retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
     let lastError;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -279,12 +436,6 @@ class AIBookingService {
     throw lastError;
   }
 
-  /**
-   * Validate function arguments trước khi execute
-   * @param {string} functionName - Tên function
-   * @param {Object} functionArgs - Arguments
-   * @returns {Object} Validated arguments
-   */
   validateFunctionArgs(functionName, functionArgs) {
     const validationRules = {
       find_service_by_name: {
@@ -328,11 +479,7 @@ class AIBookingService {
         },
         date: (val) => {
           if (!val || typeof val !== 'string') {
-            throw new Error('date phải là chuỗi format YYYY-MM-DD');
-          }
-          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-          if (!dateRegex.test(val)) {
-            throw new Error('date phải có format YYYY-MM-DD');
+            throw new Error('date phải là chuỗi hợp lệ');
           }
           return val.trim();
         },
@@ -346,11 +493,7 @@ class AIBookingService {
       check_appointment_conflict: {
         date: (val) => {
           if (!val || typeof val !== 'string') {
-            throw new Error('date phải là chuỗi format YYYY-MM-DD');
-          }
-          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-          if (!dateRegex.test(val)) {
-            throw new Error('date phải có format YYYY-MM-DD');
+            throw new Error('date phải là chuỗi hợp lệ');
           }
           return val.trim();
         },
@@ -390,11 +533,7 @@ class AIBookingService {
         },
         date: (val) => {
           if (!val || typeof val !== 'string') {
-            throw new Error('date phải là chuỗi format YYYY-MM-DD');
-          }
-          const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-          if (!dateRegex.test(val)) {
-            throw new Error('date phải có format YYYY-MM-DD');
+            throw new Error('date phải là chuỗi hợp lệ');
           }
           return val.trim();
         },
@@ -701,10 +840,15 @@ class AIBookingService {
                 };
               }
               
-              // Chỉ hiển thị message chi tiết khi conflict với chính xác bác sĩ đã chọn
+              // Conflict với chính bác sĩ đã chọn → không hiển thị message, chỉ yêu cầu chọn giờ khác
               return {
-                hasConflict: true,
-                conflictMessage: `Bạn đã có lịch khám vào ${conflictDateVN} từ ${conflictStartVN} - ${conflictEndVN}. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!`,
+                hasConflict: false,
+                conflictHandled: true,
+                conflictSlot: {
+                  date: conflictDateVN,
+                  startTime: conflictStartVN,
+                  endTime: conflictEndVN
+                },
                 allowContinueWithOtherDoctors: false,
                 workingHours: workingHours // ⭐ QUAN TRỌNG: Trả về workingHours để AI sử dụng
               };
@@ -733,10 +877,56 @@ class AIBookingService {
             query.category = category;
           }
           
-          const services = await Service.find(query)
+          console.log('🔍 [get_services] Querying Service model with query:', JSON.stringify(query));
+          
+          // ⭐ QUAN TRỌNG: Đảm bảo query đúng Service model, không phải User model
+          let services = await Service.find(query)
             .select('_id serviceName category durationMinutes price isPrepaid description')
             .sort({ category: 1, serviceName: 1 })
-        .lean();
+            .lean();
+
+          console.log(`📊 [get_services] Found ${services.length} services from database`);
+          if (services.length > 0) {
+            console.log('📋 [get_services] First 5 service names:', services.slice(0, 5).map(s => s.serviceName));
+          }
+
+          // ⭐ VALIDATE: Kiểm tra xem có phải đang query nhầm collection không
+          // Nếu serviceName chứa "Bác sĩ", "Bac si", "doctor", hoặc các pattern tên bác sĩ → có thể là dữ liệu sai hoặc query nhầm
+          const invalidServices = services.filter(s => {
+            const name = (s.serviceName || '').toLowerCase().trim();
+            // Check các pattern tên bác sĩ
+            const hasDoctorKeyword = name.includes('bác sĩ') || name.includes('bac si') || name.includes('doctor') || name.includes('dr.') || name.includes('bs.');
+            // Check pattern tên người đơn giản (ví dụ: "Bac si M", "Bac si duong", "Bác sĩ A", "Bác sĩ An", "Bác sĩ Hải")
+            // Pattern: bắt đầu bằng "bac si" hoặc "bác sĩ" + tên người (1-3 từ, không có từ khóa dịch vụ)
+            const doctorNamePattern = /^(bac\s*si|bác\s*sĩ|doctor|dr\.?|bs\.?)\s+[a-zà-ỹ]+(\s+[a-zà-ỹ]+){0,2}$/i;
+            const matchesDoctorPattern = doctorNamePattern.test(name);
+            return hasDoctorKeyword || matchesDoctorPattern;
+          });
+
+          if (invalidServices.length > 0) {
+            console.error('❌ [get_services] WARNING: Found services with doctor names:', invalidServices.map(s => s.serviceName));
+            console.error('❌ [get_services] Invalid service IDs:', invalidServices.map(s => s._id));
+            // Filter bỏ các service có tên bác sĩ (có thể là dữ liệu sai)
+            const validServices = services.filter(s => {
+              const name = (s.serviceName || '').toLowerCase().trim();
+              // Check các pattern tên bác sĩ
+              const hasDoctorKeyword = name.includes('bác sĩ') || name.includes('bac si') || name.includes('doctor') || name.includes('dr.') || name.includes('bs.');
+              // Check pattern tên người đơn giản
+              const doctorNamePattern = /^(bac\s*si|bác\s*sĩ|doctor|dr\.?|bs\.?)\s+[a-zà-ỹ]+(\s+[a-zà-ỹ]+){0,2}$/i;
+              const matchesDoctorPattern = doctorNamePattern.test(name);
+              return !hasDoctorKeyword && !matchesDoctorPattern;
+            });
+            
+            if (validServices.length === 0) {
+              console.error('❌ [get_services] ERROR: No valid services found after filtering doctor names');
+              return { 
+                error: 'Không tìm thấy dịch vụ nào trong hệ thống. Vui lòng liên hệ quản trị viên.' 
+              };
+            }
+            
+            console.log(`⚠️ [get_services] Filtered out ${invalidServices.length} invalid services, keeping ${validServices.length} valid services`);
+            services = validServices;
+          }
 
           // ⭐ FILTER DỊCH VỤ THEO THỜI GIAN CÒN LẠI (nếu có maxDurationMinutes)
           let filteredServices = services;
@@ -746,10 +936,16 @@ class AIBookingService {
 
           // ⭐ Tính giá sau khuyến mãi cho mỗi service
           const servicesWithPrice = await Promise.all(filteredServices.map(async (s) => {
+            // ⭐ VALIDATE: Đảm bảo serviceName tồn tại và không phải tên bác sĩ
+            if (!s.serviceName || s.serviceName.trim().length === 0) {
+              console.error('❌ [get_services] ERROR: Service missing serviceName:', s._id);
+              return null;
+            }
+
             const promotionData = await calculateServicePrice(s._id.toString(), s.price);
-          return {
-        id: s._id.toString(),
-        name: s.serviceName,
+            return {
+              id: s._id.toString(),
+              name: s.serviceName,
               category: s.category,
               durationMinutes: s.durationMinutes || 30, // Default 30 phút nếu không có
               price: s.price || 0,
@@ -760,8 +956,36 @@ class AIBookingService {
             };
           }));
 
+          // Filter bỏ các service null (nếu có)
+          const validServicesWithPrice = servicesWithPrice.filter(s => s !== null);
+
+          // ⭐ VALIDATE LẦN CUỐI: Đảm bảo không có tên bác sĩ trong response
+          const finalValidServices = validServicesWithPrice.filter(s => {
+            if (!s || !s.name) return false;
+            const name = s.name.toLowerCase().trim();
+            // Check các pattern tên bác sĩ
+            const hasDoctorKeyword = name.includes('bác sĩ') || name.includes('bac si') || name.includes('doctor') || name.includes('dr.') || name.includes('bs.');
+            // Check pattern tên người đơn giản
+            const doctorNamePattern = /^(bac\s*si|bác\s*sĩ|doctor|dr\.?|bs\.?)\s+[a-zà-ỹ]+(\s+[a-zà-ỹ]+){0,2}$/i;
+            const matchesDoctorPattern = doctorNamePattern.test(name);
+            const isDoctorName = hasDoctorKeyword || matchesDoctorPattern;
+            if (isDoctorName) {
+              console.error('❌ [get_services] FINAL VALIDATION: Found doctor name in service:', s.name, 'ID:', s.id);
+            }
+            return !isDoctorName;
+          });
+
+          if (finalValidServices.length !== validServicesWithPrice.length) {
+            console.error(`❌ [get_services] FINAL VALIDATION: Filtered out ${validServicesWithPrice.length - finalValidServices.length} services with doctor names`);
+          }
+
+          console.log(`✅ [get_services] Returning ${finalValidServices.length} valid services`);
+          if (finalValidServices.length > 0) {
+            console.log('📋 [get_services] Service names being returned:', finalValidServices.map(s => s.name));
+          }
+
           return {
-            services: servicesWithPrice
+            services: finalValidServices
           };
         }
         
@@ -1128,24 +1352,38 @@ class AIBookingService {
             .sort({ fullName: 1 }) // Sort để có thứ tự cố định
             .lean();
           
-          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
-          const doctorStatuses = await Doctor.find({
+          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive" và check workingHours
+          const doctorModels = await Doctor.find({
             doctorUserId: { $in: doctors.map(d => d._id) }
-          }).select('doctorUserId status');
+          }).select('doctorUserId status workingHours');
           
           // Tạo Map để lookup nhanh
           const doctorStatusMap = new Map();
-          doctorStatuses.forEach(doc => {
+          const doctorWorkingHoursMap = new Map();
+          doctorModels.forEach(doc => {
             doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+            doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
           });
           
-          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
+          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive" và không có workingHours
           const availableDoctors = doctors.filter(doctor => {
             const doctorStatus = doctorStatusMap.get(doctor._id.toString());
-            // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
-            if (!doctorStatus) return true;
-            // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
-            return doctorStatus === 'Available' || doctorStatus === 'Busy';
+            const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
+            
+            // Nếu không có trong Doctor model → coi như không có workingHours → filter bỏ
+            if (!doctorStatus && !workingHours) return false;
+            
+            // Check status: chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+            if (doctorStatus && doctorStatus !== 'Available' && doctorStatus !== 'Busy') {
+              return false;
+            }
+            
+            // ⭐ CỰC KỲ QUAN TRỌNG: Chỉ lấy bác sĩ có workingHours
+            if (!workingHours) {
+              return false;
+            }
+            
+            return true;
           });
           
           // Check nếu input là số thứ tự
@@ -1154,6 +1392,41 @@ class AIBookingService {
             const index = parseInt(doctorName) - 1; // Convert to 0-based index
             if (index >= 0 && index < availableDoctors.length) {
               const selectedDoctor = availableDoctors[index];
+              
+              // ⭐ CỰC KỲ QUAN TRỌNG: Validate workingHours ngay khi chọn bác sĩ theo số thứ tự
+              const doctorModelForValidation = await Doctor.findOne({ 
+                doctorUserId: selectedDoctor._id 
+              }).select('workingHours');
+              
+              if (!doctorModelForValidation || !doctorModelForValidation.workingHours) {
+                // Lấy danh sách bác sĩ có workingHours để làm suggestions
+                const doctorModelsForSuggestions = await Doctor.find({
+                  doctorUserId: { $in: availableDoctors.map(d => d._id) }
+                }).select('doctorUserId workingHours').lean();
+
+                const doctorsWithValidWorkingHoursForSuggestions = new Set();
+                doctorModelsForSuggestions.forEach(doc => {
+                  if (doc.workingHours) {
+                    doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
+                  }
+                });
+
+                const validAvailableDoctors = availableDoctors.filter(doc => 
+                  doctorsWithValidWorkingHoursForSuggestions.has(doc._id.toString())
+                );
+
+                return {
+                  error: `Bác sĩ ${selectedDoctor.fullName} chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.`,
+                  suggestions: validAvailableDoctors.slice(0, 5).map(d => ({
+                    id: d._id.toString(),
+                    name: d.fullName,
+                    specialization: d.specialization || '',
+                    email: d.email || '',
+                    phoneNumber: d.phoneNumber || ''
+                  }))
+                };
+              }
+              
               return {
                 found: true,
                 doctor: {
@@ -1172,7 +1445,8 @@ class AIBookingService {
           const inputClean = inputLower.replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
           const inputWords = inputClean.split(/\s+/).filter(w => w.length > 0);
           
-          // ⭐ QUAN TRỌNG: Tìm trong TẤT CẢ bác sĩ (kể cả On Leave) để check xem có tồn tại không
+          // ⭐ QUAN TRỌNG: Tìm trong TẤT CẢ bác sĩ (kể cả On Leave, kể cả không có workingHours) để check xem có tồn tại không
+          // Sau đó sẽ validate workingHours
           let matchedDoctors = [];
           
           // ✅ PRIORITY 1: Exact match (case-insensitive) - Tìm trong TẤT CẢ bác sĩ
@@ -1212,24 +1486,111 @@ class AIBookingService {
           // ✅ PRIORITY 4: Word-based matching (match theo TỪ) - chỉ khi input có nhiều từ
           // Nếu vẫn chưa có match và input có nhiều từ, thử word-based
           if (matchedDoctors.length === 0 && inputWords.length > 1) {
-              const wordMatches = doctors.filter(d => {
-                const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
-                const doctorWords = doctorNameClean.split(/\s+/);
-                
-                // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
-                return inputWords.every(inputWord => 
-                  doctorWords.some(doctorWord => doctorWord === inputWord)
-                );
-              });
+            const wordMatches = doctors.filter(d => {
+              const doctorNameClean = d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '');
+              const doctorWords = doctorNameClean.split(/\s+/);
               
-              // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
-              if (wordMatches.length > 0) {
-                matchedDoctors = wordMatches;
+              // Check xem TẤT CẢ các từ trong input có tồn tại trong tên bác sĩ không
+              return inputWords.every(inputWord => 
+                doctorWords.some(doctorWord => doctorWord === inputWord)
+              );
+            });
+            
+            // Nếu word-based match tìm thấy, dùng kết quả đó (có thể nhiều hơn)
+            if (wordMatches.length > 0) {
+              matchedDoctors = wordMatches;
+            }
+          }
+          
+          // ✅ PRIORITY 5: Fuzzy matching không dấu (sử dụng normalizeString)
+          if (matchedDoctors.length === 0) {
+            // ⭐ Định nghĩa normalizeString function ở đây
+            const normalizeString = (str) => {
+              return str
+                .toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '') // Loại bỏ dấu
+                .replace(/[^\w\s]/g, '') // Loại bỏ ký tự đặc biệt
+                .trim();
+            };
+            
+            const normalizedInput = normalizeString(inputClean);
+            const fuzzyMatches = doctors.filter(d => {
+              const normalizedDoctorName = normalizeString(
+                d.fullName.toLowerCase().replace(/^(bác sĩ|bs|doctor|dr)\s+/i, '')
+              );
+              return normalizedDoctorName.includes(normalizedInput);
+            });
+            
+            if (fuzzyMatches.length > 0) {
+              matchedDoctors = fuzzyMatches;
+            }
+          }
+          
+          // ⭐ CỰC KỲ QUAN TRỌNG: Validate workingHours cho tất cả matched doctors TRƯỚC KHI tiếp tục
+          if (matchedDoctors.length > 0) {
+            console.log(`🔍 [find_doctor_by_name] Found ${matchedDoctors.length} matched doctors. Validating workingHours...`);
+            const matchedDoctorModels = await Doctor.find({
+              doctorUserId: { $in: matchedDoctors.map(d => d._id) }
+            }).select('doctorUserId workingHours').lean();
+
+            console.log(`🔍 [find_doctor_by_name] Fetched ${matchedDoctorModels.length} doctor models from DB`);
+            matchedDoctorModels.forEach(doc => {
+              console.log(`🔍 [find_doctor_by_name] Doctor ${doc.doctorUserId}: has workingHours = ${!!doc.workingHours}`);
+            });
+
+            const matchedDoctorsWithWorkingHours = new Set();
+            matchedDoctorModels.forEach(doc => {
+              if (doc.workingHours) {
+                matchedDoctorsWithWorkingHours.add(doc.doctorUserId.toString());
+              }
+            });
+
+            console.log(`🔍 [find_doctor_by_name] Doctors with workingHours: ${matchedDoctorsWithWorkingHours.size} out of ${matchedDoctors.length}`);
+
+            // Filter bỏ các bác sĩ không có workingHours
+            const beforeFilterCount = matchedDoctors.length;
+            matchedDoctors = matchedDoctors.filter(doc => 
+              matchedDoctorsWithWorkingHours.has(doc._id.toString())
+            );
+            console.log(`🔍 [find_doctor_by_name] After filtering workingHours: ${matchedDoctors.length} out of ${beforeFilterCount}`);
+
+            // ⚠️ Nếu sau khi filter workingHours, không còn bác sĩ nào
+            if (matchedDoctors.length === 0) {
+              console.log(`⚠️ [find_doctor_by_name] No doctors with workingHours found. Returning error.`);
+              // Lấy danh sách bác sĩ có workingHours để làm suggestions
+              const doctorModelsForSuggestions = await Doctor.find({
+                doctorUserId: { $in: availableDoctors.map(d => d._id) }
+              }).select('doctorUserId workingHours').lean();
+
+              const doctorsWithValidWorkingHoursForSuggestions = new Set();
+              doctorModelsForSuggestions.forEach(doc => {
+                if (doc.workingHours) {
+                  doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
+                }
+              });
+
+              const validAvailableDoctors = availableDoctors.filter(doc => 
+                doctorsWithValidWorkingHoursForSuggestions.has(doc._id.toString())
+              );
+
+              console.log(`⚠️ [find_doctor_by_name] Returning error: Bác sĩ "${doctorName}" chưa đi vào hoạt động.`);
+              return {
+                error: `Bác sĩ "${doctorName}" chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.`,
+                suggestions: validAvailableDoctors.slice(0, 5).map(d => ({
+                  id: d._id.toString(),
+                  name: d.fullName,
+                  specialization: d.specialization || '',
+                  email: d.email || '',
+                  phoneNumber: d.phoneNumber || ''
+                }))
+              };
             }
           }
           
           // ❌ Không tìm thấy bác sĩ nào
           if (matchedDoctors.length === 0) {
+            // availableDoctors đã được filter để chỉ có bác sĩ có workingHours
             return { 
               error: 'Không tìm thấy bác sĩ',
               suggestions: availableDoctors.slice(0, 5).map(d => ({
@@ -1259,6 +1620,7 @@ class AIBookingService {
           if (onLeaveDoctors.length === matchedDoctorsWithStatus.length) {
             // Tất cả bác sĩ tìm được đều đang On Leave
             const doctorNameDisplay = onLeaveDoctors[0].fullName;
+            // availableDoctors đã được filter để chỉ có bác sĩ có workingHours
             return {
               error: `Bác sĩ ${doctorNameDisplay} đang trong thời gian nghỉ phép. Vui lòng chọn bác sĩ khác.`,
               suggestions: availableDoctors.slice(0, 5).map(d => ({
@@ -1272,12 +1634,46 @@ class AIBookingService {
           }
           
           // Filter chỉ lấy các bác sĩ available (không On Leave, không Inactive)
-          const availableMatchedDoctors = matchedDoctorsWithStatus.filter(d => 
+          let availableMatchedDoctors = matchedDoctorsWithStatus.filter(d => 
             d.doctorStatus === 'Available' || d.doctorStatus === 'Busy' || !d.doctorStatus
           );
           
           // Nếu sau khi filter chỉ còn 1 bác sĩ available → Auto-select
           if (availableMatchedDoctors.length === 1) {
+            // ⭐ CỰC KỲ QUAN TRỌNG: Validate workingHours ngay khi tìm thấy bác sĩ
+            const doctorModelForValidation = await Doctor.findOne({ 
+              doctorUserId: availableMatchedDoctors[0]._id 
+            }).select('workingHours');
+            
+            if (!doctorModelForValidation || !doctorModelForValidation.workingHours) {
+              // Lấy danh sách bác sĩ có workingHours để làm suggestions
+              const doctorModelsForSuggestions = await Doctor.find({
+                doctorUserId: { $in: availableDoctors.map(d => d._id) }
+              }).select('doctorUserId workingHours').lean();
+
+              const doctorsWithValidWorkingHoursForSuggestions = new Set();
+              doctorModelsForSuggestions.forEach(doc => {
+                if (doc.workingHours) {
+                  doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
+                }
+              });
+
+              const validAvailableDoctors = availableDoctors.filter(doc => 
+                doctorsWithValidWorkingHoursForSuggestions.has(doc._id.toString())
+              );
+
+              return {
+                error: `Bác sĩ ${availableMatchedDoctors[0].fullName} chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.`,
+                suggestions: validAvailableDoctors.slice(0, 5).map(d => ({
+                  id: d._id.toString(),
+                  name: d.fullName,
+                  specialization: d.specialization || '',
+                  email: d.email || '',
+                  phoneNumber: d.phoneNumber || ''
+                }))
+              };
+            }
+            
             return {
               found: true,
               doctor: {
@@ -1291,15 +1687,77 @@ class AIBookingService {
             };
           }
           
-          // ⭐ Nếu có nhiều bác sĩ available match → Trả về danh sách để user chọn
-          // CỰC KỲ QUAN TRỌNG: Phải trả về multiple=true và message rõ ràng để AI hỏi lại
+          // ⭐ Nếu có nhiều bác sĩ available match → Validate workingHours và filter bỏ bác sĩ không có workingHours
           if (availableMatchedDoctors.length > 1) {
+            // ⭐ CỰC KỲ QUAN TRỌNG: Validate workingHours cho tất cả bác sĩ match
+            const doctorModelsForValidation = await Doctor.find({
+              doctorUserId: { $in: availableMatchedDoctors.map(d => d._id) }
+            }).select('doctorUserId workingHours').lean();
+
+            const doctorsWithWorkingHours = new Set();
+            doctorModelsForValidation.forEach(doc => {
+              if (doc.workingHours) {
+                doctorsWithWorkingHours.add(doc.doctorUserId.toString());
+              }
+            });
+
+            // Filter chỉ lấy bác sĩ có workingHours
+            const validMatchedDoctors = availableMatchedDoctors.filter(doc => 
+              doctorsWithWorkingHours.has(doc._id.toString())
+            );
+
+            // Nếu sau khi filter không còn bác sĩ nào → trả về error
+            if (validMatchedDoctors.length === 0) {
+              // Lấy danh sách bác sĩ có workingHours để làm suggestions
+              const doctorModelsForSuggestions = await Doctor.find({
+                doctorUserId: { $in: availableDoctors.map(d => d._id) }
+              }).select('doctorUserId workingHours').lean();
+
+              const doctorsWithValidWorkingHoursForSuggestions = new Set();
+              doctorModelsForSuggestions.forEach(doc => {
+                if (doc.workingHours) {
+                  doctorsWithValidWorkingHoursForSuggestions.add(doc.doctorUserId.toString());
+                }
+              });
+
+              const validAvailableDoctors = availableDoctors.filter(doc => 
+                doctorsWithValidWorkingHoursForSuggestions.has(doc._id.toString())
+              );
+
+              return {
+                error: `Bác sĩ "${doctorName}" chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.`,
+                suggestions: validAvailableDoctors.slice(0, 5).map(d => ({
+                  id: d._id.toString(),
+                  name: d.fullName,
+                  specialization: d.specialization || '',
+                  email: d.email || '',
+                  phoneNumber: d.phoneNumber || ''
+                }))
+              };
+            }
+
+            // Nếu sau khi filter chỉ còn 1 bác sĩ → Auto-select
+            if (validMatchedDoctors.length === 1) {
+              return {
+                found: true,
+                doctor: {
+                  id: validMatchedDoctors[0]._id.toString(),
+                  name: validMatchedDoctors[0].fullName,
+                  specialization: validMatchedDoctors[0].specialization || '',
+                  email: validMatchedDoctors[0].email || '',
+                  phoneNumber: validMatchedDoctors[0].phoneNumber || '',
+                  status: validMatchedDoctors[0].status || 'Active'
+                }
+              };
+            }
+
+            // Nếu vẫn còn nhiều bác sĩ → Trả về danh sách để user chọn
             return {
               found: true,
               multiple: true,
               message: `Có nhiều bác sĩ tên "${doctorName}". Vui lòng chọn bác sĩ cụ thể từ danh sách bên dưới.`,
               requiresUserSelection: true, // ⭐ Flag đặc biệt để AI biết PHẢI hỏi lại
-              doctors: availableMatchedDoctors.map(d => ({
+              doctors: validMatchedDoctors.map(d => ({
                 id: d._id.toString(),
                 name: d.fullName,
                 specialization: d.specialization || '',
@@ -1311,6 +1769,7 @@ class AIBookingService {
           
           // Nếu không có bác sĩ nào available sau khi filter
           // (Trường hợp này đã được xử lý ở trên, nhưng để an toàn)
+          // availableDoctors đã được filter để chỉ có bác sĩ có workingHours
           return {
             error: `Bác sĩ ${matchedDoctors[0].fullName} đang trong thời gian nghỉ phép. Vui lòng chọn bác sĩ khác.`,
             suggestions: availableDoctors.slice(0, 5).map(d => ({
@@ -1451,7 +1910,7 @@ class AIBookingService {
           const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
           if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
             return { valid: false, error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
-        }
+          }
 
         return {
             valid: true, 
@@ -1467,40 +1926,71 @@ class AIBookingService {
         }
         
         case 'get_doctors': {
+          const { date } = validatedArgs;
           // Lấy tất cả bác sĩ Active từ User
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
             .select('_id fullName specialization email phoneNumber status role')
             .lean();
           
-          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive"
-          const doctorStatuses = await Doctor.find({
+          // ⭐ THÊM: Lấy danh sách Doctor model để filter bỏ bác sĩ "On Leave" hoặc "Inactive" và check workingHours
+          const doctorModels = await Doctor.find({
             doctorUserId: { $in: doctors.map(d => d._id) }
-          }).select('doctorUserId status');
+          }).select('doctorUserId status workingHours');
           
           // Tạo Map để lookup nhanh
           const doctorStatusMap = new Map();
-          doctorStatuses.forEach(doc => {
+          const doctorWorkingHoursMap = new Map();
+          doctorModels.forEach(doc => {
             doctorStatusMap.set(doc.doctorUserId.toString(), doc.status);
+            doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
           });
           
-          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive"
-          const availableDoctors = doctors.filter(doctor => {
+          // Filter bỏ các bác sĩ có status "On Leave" hoặc "Inactive" và không có workingHours
+          let availableDoctors = doctors.filter(doctor => {
             const doctorStatus = doctorStatusMap.get(doctor._id.toString());
-            // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
-            if (!doctorStatus) return true;
-            // Chỉ lấy bác sĩ có status "Available" hoặc "Busy"
-            return doctorStatus === 'Available' || doctorStatus === 'Busy';
+            const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
+            
+            // Nếu không có trong Doctor model → coi như không có workingHours → filter bỏ
+            if (!doctorStatus && !workingHours) return false;
+            
+            // Check status: chỉ lấy bác sĩ có status "Available" hoặc "Busy"
+            if (doctorStatus && doctorStatus !== 'Available' && doctorStatus !== 'Busy') {
+              return false;
+            }
+            
+            // ⭐ CỰC KỲ QUAN TRỌNG: Chỉ lấy bác sĩ có workingHours
+            if (!workingHours) {
+              return false;
+            }
+            
+            return true;
           });
+
+          if (availableDoctors.length === 0) {
+            if (date) {
+              const displayDate = this.formatDateForDisplay(date);
+              return {
+                error: `Không có bác sĩ nào có lịch làm việc vào ngày ${displayDate}. Vui lòng chọn ngày khác.`,
+                noDoctorsForDate: true
+              };
+            } else {
+              return {
+                error: `Không có bác sĩ nào khả dụng trong hệ thống.`,
+                noDoctors: true
+              };
+            }
+          }
           
-        return {
+          return {
             doctors: availableDoctors.map(d => ({
-        id: d._id.toString(),
+              id: d._id.toString(),
               name: d.fullName,
               specialization: d.specialization || '',
               email: d.email || '',
               phoneNumber: d.phoneNumber || '',
               status: d.status || 'Active'
-            }))
+            })),
+            date: date || null
           };
         }
         
@@ -1696,10 +2186,15 @@ class AIBookingService {
             };
           }
           
-          // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive) - status tổng quát
-          const doctorStatus = await Doctor.findOne({ doctorUserId: doctor._id }).select('status');
-          if (doctorStatus && (doctorStatus.status === 'On Leave' || doctorStatus.status === 'Inactive')) {
+          // ⭐ THÊM: Kiểm tra Doctor status (On Leave/Inactive) và workingHours
+          const doctorModel = await Doctor.findOne({ doctorUserId: doctor._id }).select('status workingHours');
+          if (doctorModel && (doctorModel.status === 'On Leave' || doctorModel.status === 'Inactive')) {
             return { error: 'Bác sĩ bạn chọn hiện đang nghỉ phép hoặc không khả dụng. Vui lòng chọn bác sĩ khác.' };
+          }
+
+          // ⭐ CỰC KỲ QUAN TRỌNG: Kiểm tra workingHours ngay sau khi validate doctor
+          if (!doctorModel || !doctorModel.workingHours) {
+            return { error: 'Bác sĩ này chưa đi vào hoạt động. Vui lòng chọn bác sĩ khác.' };
           }
           
           // Parse date
@@ -1738,6 +2233,7 @@ class AIBookingService {
           console.log(`📅 [get_available_slots] Found ${schedules.length} existing schedules for doctorId ${doctor._id}, date ${date}`);
           
           // ⭐ TỰ ĐỘNG TẠO SCHEDULE NẾU KHÔNG CÓ (chỉ cho ngày tương lai, và không nghỉ phép)
+          // Lưu ý: workingHours đã được check ở trên, nên ở đây chắc chắn bác sĩ đã có workingHours
           if (schedules.length === 0) {
             // ⭐ So sánh date trong VN timezone
             const todayDateStr = DateHelper.getTodayVN();
@@ -2322,21 +2818,21 @@ class AIBookingService {
                 
                 // Validate date
                 if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2020 || year > 2100) {
-                  return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+                  return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo định dạng DD/MM/YYYY (ví dụ: 05/11/2025).` };
                 }
                 
                 // Chuyển đổi thành YYYY-MM-DD
                 normalizedDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               } else {
                 // Format không hợp lệ
-                return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05). Nếu bạn nhập "5-11-2025" hoặc "5/11/2025", hệ thống sẽ tự động chuyển đổi.` };
+                return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo định dạng DD/MM/YYYY (ví dụ: 05/11/2025). Nếu bạn nhập "5-11-2025" hoặc "5/11/2025", hệ thống sẽ tự động chuyển đổi.` };
               }
             }
             
             // Validate date sau khi normalize
             const appointmentDate = new Date(normalizedDate);
             if (isNaN(appointmentDate.getTime())) {
-              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo định dạng DD/MM/YYYY (ví dụ: 05/11/2025).` };
             }
             
             // Kiểm tra date có hợp lệ không (ví dụ: 31/02/2025 không hợp lệ)
@@ -2346,7 +2842,7 @@ class AIBookingService {
             const month = dateParts[1];
             const day = dateParts[2];
             if (checkDate.getFullYear() !== year || checkDate.getMonth() + 1 !== month || checkDate.getDate() !== day) {
-              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo format YYYY-MM-DD (ví dụ: 2025-11-05).` };
+              return { error: `Ngày không hợp lệ: "${date}". Vui lòng nhập ngày theo định dạng DD/MM/YYYY (ví dụ: 05/11/2025).` };
             }
             
             appointmentDate.setHours(0, 0, 0, 0);
@@ -2627,7 +3123,71 @@ class AIBookingService {
               }
             }
             
-            // 8. Check conflict với timeslots đã có
+            // 8. ⭐ CỰC KỲ QUAN TRỌNG: Validate thời gian có nằm trong available slots không
+            // Kiểm tra xem thời gian user chọn có nằm trong các available gaps không
+            try {
+              const scheduleRangeResult = await availableSlotService.getDoctorScheduleRange({
+                doctorUserId: doctor._id,
+                serviceId: service._id,
+                date: appointmentDate,
+                patientUserId: patientUserId,
+                appointmentFor: 'self'
+              });
+
+              if (scheduleRangeResult && scheduleRangeResult.scheduleRanges) {
+                let isTimeInAvailableSlots = false;
+                
+                for (const range of scheduleRangeResult.scheduleRanges) {
+                  // Kiểm tra availableGaps
+                  if (range.availableGaps && range.availableGaps.length > 0) {
+                    for (const gap of range.availableGaps) {
+                      const gapStart = new Date(gap.start);
+                      const gapEnd = new Date(gap.end);
+                      
+                      // Kiểm tra xem slotStartTime có nằm trong gap không
+                      // Slot phải bắt đầu >= gapStart và kết thúc <= gapEnd
+                      if (slotStartTime >= gapStart && slotEndTime <= gapEnd) {
+                        isTimeInAvailableSlots = true;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  if (isTimeInAvailableSlots) break;
+                }
+                
+                if (!isTimeInAvailableSlots) {
+                  // Thời gian không nằm trong available slots
+                  // Kiểm tra xem có phải do conflict với appointment của patient không
+                  const patientConflictAppointments = await Appointment.find({
+                    patientUserId: patientUserId,
+                    status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
+                    timeslotId: { $exists: true }
+                  }).populate({
+                    path: 'timeslotId',
+                    select: 'startTime endTime'
+                  }).lean();
+                  
+                  const hasPatientConflict = patientConflictAppointments.some(apt => {
+                    if (!apt.timeslotId) return false;
+                    const aptStartTime = new Date(apt.timeslotId.startTime);
+                    const aptEndTime = new Date(apt.timeslotId.endTime);
+                    return slotStartTime < aptEndTime && slotEndTime > aptStartTime;
+                  });
+                  
+                  if (hasPatientConflict) {
+                    return { error: 'Bạn đã có ca khám vào khung giờ này rồi. Vui lòng đặt khung giờ khác.' };
+                  } else {
+                    return { error: 'Khung giờ này không khả dụng. Vui lòng chọn thời gian khác từ danh sách khung giờ khả dụng.' };
+                  }
+                }
+              }
+            } catch (validateError) {
+              console.error('❌ [create_appointment] Error validating available slots:', validateError);
+              // Nếu có lỗi khi validate, vẫn tiếp tục để không block flow
+            }
+            
+            // 9. Check conflict với timeslots đã có
             const conflictingTimeslots = await Timeslot.find({
               doctorUserId: doctor._id, // Dùng doctor._id thay vì doctorId
               startTime: { $lt: slotEndTime },
@@ -2639,7 +3199,7 @@ class AIBookingService {
               return { error: 'Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.' };
             }
             
-            // 9. Check conflict với appointments của patient (BẤT KỲ bác sĩ nào) - không được đặt 2 bác sĩ khác nhau cùng giờ
+            // 10. Check conflict với appointments của patient (BẤT KỲ bác sĩ nào) - không được đặt 2 bác sĩ khác nhau cùng giờ
             const patientConflictAppointments = await Appointment.find({
               patientUserId: patientUserId,
               status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
@@ -2890,15 +3450,1065 @@ class AIBookingService {
     return filtered.slice(-maxMessages);
   }
 
+  formatDateForDisplay(dateStr) {
+    if (!dateStr || typeof dateStr !== 'string') {
+      return dateStr;
+    }
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) {
+      return dateStr;
+    }
+    const [year, month, day] = parts;
+    if (!year || !month || !day) {
+      return dateStr;
+    }
+    return `${day}/${month}/${year}`;
+  }
+
+  collectUserMessages(latestPrompt, history) {
+    const messages = [];
+    if (latestPrompt && typeof latestPrompt === 'string' && latestPrompt.trim().length > 0) {
+      messages.push(latestPrompt);
+    }
+    if (Array.isArray(history)) {
+      history.forEach(msg => {
+        if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.trim().length > 0) {
+          messages.push(msg.content);
+        }
+      });
+    }
+    return messages;
+  }
+
+  normalizeVietnameseText(text) {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    return text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  getCurrentVietnamTimeInfo() {
+    const now = new Date();
+    const hourFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', hour12: false });
+    const minuteFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', minute: '2-digit' });
+    const displayFormatter = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false });
+    const hour = parseInt(hourFormatter.format(now), 10);
+    const minute = parseInt(minuteFormatter.format(now), 10);
+    return {
+      hour,
+      minute,
+      totalMinutes: hour * 60 + minute,
+      display: displayFormatter.format(now)
+    };
+  }
+
+  getTimePeriodRequestInfo(message) {
+    if (!message || typeof message !== 'string') {
+      return null;
+    }
+    const normalized = this.normalizeVietnameseText(message);
+    if (!normalized) {
+      return null;
+    }
+    const periods = [
+      {
+        label: 'buổi sáng hôm nay',
+        endMinutes: 12 * 60,
+        keywords: ['sang nay', 'sang hom nay', 'buoi sang nay', 'buoi sang hom nay']
+      },
+      {
+        label: 'buổi trưa hôm nay',
+        endMinutes: 13 * 60,
+        keywords: ['trua nay', 'trua hom nay', 'buoi trua nay']
+      },
+      {
+        label: 'buổi chiều hôm nay',
+        endMinutes: 18 * 60,
+        keywords: ['chieu nay', 'chieu hom nay', 'buoi chieu nay']
+      },
+      {
+        label: 'buổi tối hôm nay',
+        endMinutes: 22 * 60,
+        keywords: ['toi nay', 'toi hom nay', 'buoi toi nay', 'ban toi nay']
+      }
+    ];
+    for (const period of periods) {
+      if (period.keywords.some(keyword => normalized.includes(keyword))) {
+        return period;
+      }
+    }
+    return null;
+  }
+
+  cleanMentionText(text) {
+    if (!text || typeof text !== 'string') {
+      return '';
+    }
+    const tokens = text
+      .replace(/[\*\[\]\(\)\.,!?:]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    
+    const cleanedTokens = [];
+    for (const token of tokens) {
+      const normalizedToken = this.normalizeVietnameseText(token);
+      if (!normalizedToken) continue;
+      if (CONTEXT_STOP_WORDS.has(normalizedToken)) {
+        break;
+      }
+      cleanedTokens.push(token);
+    }
+    return cleanedTokens.join(' ').trim();
+  }
+
+  hasUserMentionedServiceName(serviceName, latestPrompt, history) {
+    if (!serviceName || typeof serviceName !== 'string') {
+      return false;
+    }
+    const normalizedService = this.normalizeVietnameseText(serviceName);
+    if (!normalizedService) {
+      return false;
+    }
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    return userMessages.some(message => {
+      const normalizedMessage = this.normalizeVietnameseText(message);
+      return normalizedMessage.includes(normalizedService);
+    });
+  }
+
+  userSelectedServiceByNumber(latestPrompt, history) {
+    const numberOnlyRegex = /^\s*\d+(\s*,\s*\d+)*\s*$/;
+    const numberWithKeywordRegex = /(dich\svu|chon|lua\s+chon|option|muon|chon\s+so|chon\s+dich\svu)\s*\d+/;
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    return userMessages.some(message => {
+      if (!message || typeof message !== 'string') return false;
+      if (numberOnlyRegex.test(message.trim())) {
+        return true;
+      }
+      const normalizedMessage = this.normalizeVietnameseText(message);
+      return numberWithKeywordRegex.test(normalizedMessage);
+    });
+  }
+
+  userConfirmedServiceChoice(serviceName, latestPrompt, history) {
+    if (this.userSelectedServiceByNumber(latestPrompt, history)) {
+      return true;
+    }
+    return this.hasUserMentionedServiceName(serviceName, latestPrompt, history);
+  }
+
+  hasServiceInfoInResults(functionResults = []) {
+    if (!Array.isArray(functionResults)) {
+      return false;
+    }
+    return functionResults.some(fr => {
+      if (!fr || !fr.result) return false;
+      if (fr.functionName === 'validate_service' && fr.result.valid) {
+        return true;
+      }
+      if (fr.functionName === 'find_service_by_name' && fr.result.found && !fr.result.multiple) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  hasServiceInfoInHistory(history = []) {
+    if (!Array.isArray(history)) {
+      return false;
+    }
+    
+    // ⭐ KIỂM TRA 1: Assistant messages - xác nhận dịch vụ
+    const servicePatterns = [
+      /dịch vụ bạn chọn/i,
+      /dịch vụ đã được chọn/i,
+      /bạn đã chọn dịch vụ/i,
+      /dịch vụ bạn đã chọn/i
+    ];
+    const hasServiceInAssistant = history.some(msg => {
+      if (!msg || msg.role !== 'assistant' || typeof msg.content !== 'string') {
+        return false;
+      }
+      return servicePatterns.some(pattern => pattern.test(msg.content));
+    });
+    
+    if (hasServiceInAssistant) {
+      return true;
+    }
+    
+    // ⭐ KIỂM TRA 2: User messages - user đã nhập tên dịch vụ (dùng danh sách dịch vụ từ DB)
+    const serviceKeywords = this.getServiceKeywords();
+    
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (!msg || msg.role !== 'user' || typeof msg.content !== 'string') {
+        continue;
+      }
+      const content = msg.content.toLowerCase();
+      const hasServiceKeyword = serviceKeywords.some(keyword => content.includes(keyword));
+      
+                  if (hasServiceKeyword) {
+                    return true;
+      }
+    }
+    
+    return false;
+  }
+
+  hasServiceContext(functionResults, history) {
+    return this.hasServiceInfoInResults(functionResults) || this.hasServiceInfoInHistory(history);
+  }
+
+  hasDoctorContext(functionResults, history) {
+    const hasDoctorInResults = functionResults.some(fr => 
+      (fr.functionName === 'find_doctor_by_name' && fr.result.found && !fr.result.multiple) ||
+      (fr.functionName === 'validate_doctor' && fr.result.valid)
+    );
+    
+    // Check history for doctor mentions
+    if (!Array.isArray(history)) {
+      return hasDoctorInResults;
+    }
+    
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (!msg.content) continue;
+      const content = msg.content.toLowerCase();
+      
+      if (msg.role === 'assistant') {
+        if (content.includes('bác sĩ bạn chọn') || 
+            content.includes('bác sĩ đã được chọn') ||
+            content.includes('bác sĩ bạn muốn')) {
+          return true;
+        }
+      }
+      
+      if (msg.role === 'user') {
+        const doctorKeywords = ['bác sĩ', 'bs', 'doctor', 'dr'];
+        const hasDoctorKeyword = doctorKeywords.some(keyword => content.includes(keyword));
+        if (hasDoctorKeyword) {
+          for (let j = i + 1; j < history.length; j++) {
+            const nextMsg = history[j];
+            if (nextMsg.role === 'assistant' && nextMsg.content) {
+              const nextContent = nextMsg.content.toLowerCase();
+              if (nextContent.includes('bác sĩ') && 
+                  (nextContent.includes('chọn') || nextContent.includes('đã'))) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return hasDoctorInResults;
+  }
+
+  extractDoctorMentionsFromMessage(message) {
+    if (!message || typeof message !== 'string') {
+      return [];
+    }
+    const mentions = [];
+    const regex = /(bác sĩ|bac si|bs|doctor|dr)\s+([a-zà-ỹ\s]{1,40})/gi;
+    let match;
+    while ((match = regex.exec(message)) !== null) {
+      const raw = match[2]
+        .replace(/[,.;:!?]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (raw.length > 0) {
+        const cleaned = this.cleanMentionText(raw);
+        if (cleaned.length > 0) {
+          mentions.push(cleaned);
+        } else {
+          mentions.push(raw.trim());
+        }
+      }
+    }
+    return mentions;
+  }
+
+  extractLastServiceNameFromHistory(history = []) {
+    if (!Array.isArray(history)) return null;
+    const patterns = [
+      /Dịch vụ\s+bạn\s+chọn\s+là\s+\*\*(.+?)\*\*/i,
+      /Dịch vụ\s+(.+?)\s+(?:với|ngày|\.|,|\(|$)/i
+    ];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (!msg || typeof msg.content !== 'string') continue;
+      for (const pattern of patterns) {
+        const match = msg.content.match(pattern);
+        if (match && match[1]) {
+          const cleaned = this.cleanMentionText(match[1]);
+          if (cleaned) {
+            return cleaned;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  extractLastDoctorNameFromHistory(history = []) {
+    if (!Array.isArray(history)) return null;
+    const assistantPatterns = [
+      /Bác sĩ\s+bạn\s+chọn\s+là\s+\*\*(.+?)\*\*/i,
+      /Bác sĩ\s+(.+?)\s+(?:có|sẽ|ngày|\.|,|\(|$)/i
+    ];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (!msg || typeof msg.content !== 'string') continue;
+      if (msg.role === 'assistant') {
+        for (const pattern of assistantPatterns) {
+          const match = msg.content.match(pattern);
+          if (match && match[1]) {
+            const cleaned = this.cleanMentionText(match[1]);
+            if (cleaned) {
+              return cleaned;
+            }
+          }
+        }
+      } else if (msg.role === 'user') {
+        const match = msg.content.match(/(?:bác sĩ|bs|doctor|dr)\s+([a-zà-ỹ\s]+)/i);
+        if (match && match[1]) {
+          const cleaned = this.cleanMentionText(match[1]);
+          if (cleaned) {
+            return cleaned;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  async resolveServiceInfoFromHistory(history, patientUserId) {
+    const serviceName = this.extractLastServiceNameFromHistory(history);
+    if (!serviceName) return null;
+    try {
+      const result = await this.executeFunction(
+        'find_service_by_name',
+        { serviceName },
+        patientUserId
+      );
+      if (result?.found && result.service) {
+        return result.service;
+      }
+    } catch (error) {
+      console.error('❌ [AI Booking] Error resolving service from history:', error?.message || error);
+    }
+    return null;
+  }
+
+  async resolveDoctorInfoFromHistory(history, patientUserId) {
+    const doctorName = this.extractLastDoctorNameFromHistory(history);
+    if (!doctorName) return null;
+    try {
+      const result = await this.executeFunction(
+        'find_doctor_by_name',
+        { doctorName },
+        patientUserId
+      );
+      if (result?.found && result.doctor && !result.multiple) {
+        return result.doctor;
+      }
+    } catch (error) {
+      console.error('❌ [AI Booking] Error resolving doctor from history:', error?.message || error);
+    }
+    return null;
+  }
+
+  findDoctorMention(latestPrompt, history) {
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    for (const message of userMessages) {
+      const mentions = this.extractDoctorMentionsFromMessage(message);
+      if (mentions.length > 0) {
+        return mentions[0];
+      }
+    }
+    return null;
+  }
+
+  hasUserMentionedDoctorName(doctorName, latestPrompt, history) {
+    if (!doctorName || typeof doctorName !== 'string') {
+      return false;
+    }
+    const normalizedDoctor = this.normalizeVietnameseText(doctorName)
+      .replace(/^(bac si|bs|doctor|dr)\s+/, '')
+      .trim();
+    if (!normalizedDoctor) {
+      return false;
+    }
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    return userMessages.some(message => {
+      const normalizedMessage = this.normalizeVietnameseText(message);
+      return normalizedMessage.includes(normalizedDoctor);
+    });
+  }
+
+  userSelectedDoctorByNumber(latestPrompt, history) {
+    const numberOnlyRegex = /^\s*\d+(\s*,\s*\d+)*\s*$/;
+    const numberWithKeywordRegex = /(bác sĩ|bac si|doctor|dr|chon|lua\s+chon|option)\s*\d+/i;
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    return userMessages.some(message => {
+      if (!message || typeof message !== 'string') return false;
+      if (numberOnlyRegex.test(message.trim())) {
+        return true;
+      }
+      return numberWithKeywordRegex.test(message);
+    });
+  }
+
+  userConfirmedDoctorChoice(doctorName, latestPrompt, history) {
+    if (this.userSelectedDoctorByNumber(latestPrompt, history)) {
+      return true;
+    }
+    return this.hasUserMentionedDoctorName(doctorName, latestPrompt, history);
+  }
+
+  shouldAttemptDateParsing(message) {
+    if (!message || typeof message !== 'string') {
+      return false;
+    }
+    const lowerMessage = message.toLowerCase();
+    const relativeKeywords = /(hôm qua|ngày hôm qua|hôm trước|ngày trước|yesterday)/i;
+    const timeOfDayKeywords = /(sáng nay|buổi sáng|trưa nay|buổi trưa|chiều nay|buổi chiều|tối nay|ban tối|đêm nay|sáng mai|chiều mai|tối mai)/i;
+    const explicitDatePattern = /\d{1,2}\s*(\/|-|\s+tháng\s+)\s*\d{1,2}(\s*(\/|-)\s*\d{2,4})?/i;
+    const isoPattern = /\d{4}-\d{2}-\d{2}/;
+    return relativeKeywords.test(lowerMessage) || timeOfDayKeywords.test(lowerMessage) || explicitDatePattern.test(message) || isoPattern.test(message);
+  }
+
+  isInformationalQuery(message) {
+    if (!message || typeof message !== 'string') {
+      return false;
+    }
+    const lowerMessage = message.toLowerCase().trim();
+    
+    // Các pattern cho câu hỏi thông tin về ngày tháng
+    const informationalPatterns = [
+      /^(vậy\s+)?(ngày\s+)?hôm\s+nay\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(vậy\s+)?(ngày\s+)?mai\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(vậy\s+)?(ngày\s+)?hôm\s+nay\s+(là\s+)?(thứ\s+)?(mấy|gì|bao\s+nhiêu)/i,
+      /^(vậy\s+)?(ngày\s+)?mai\s+(là\s+)?(thứ\s+)?(mấy|gì|bao\s+nhiêu)/i,
+      /^(hôm\s+nay|ngày\s+hôm\s+nay)\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(ngày\s+)?mai\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(cho\s+)?(tôi\s+)?(biết\s+)?(ngày\s+)?hôm\s+nay\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(cho\s+)?(tôi\s+)?(biết\s+)?(ngày\s+)?mai\s+(là\s+)?(ngày\s+)?(bao\s+nhiêu|gì|mấy)/i,
+      /^(hôm\s+nay|ngày\s+hôm\s+nay)\s+(là\s+)?(thứ\s+)?(mấy|gì)/i,
+      /^(ngày\s+)?mai\s+(là\s+)?(thứ\s+)?(mấy|gì)/i
+    ];
+    
+    return informationalPatterns.some(pattern => pattern.test(lowerMessage));
+  }
+
+  isOffTopicInput(message) {
+    if (!message || typeof message !== 'string') {
+      return false;
+    }
+    const lowerMessage = message.toLowerCase().trim();
+    
+    // ⭐ CỰC KỲ QUAN TRỌNG: Kiểm tra xem có phải là input về thời gian không (ví dụ: "9 giờ", "8h", "14h30", "09:00")
+    // Pattern cho thời gian: số + "giờ"/"h"/":" hoặc "giờ" + số
+    const timePatterns = [
+      /^\d+\s*(?:giờ|h|hour|hours)/i, // "9 giờ", "8h", "9 hour"
+      /^(?:giờ|h)\s*\d+/i, // "giờ 9", "h 8"
+      /^\d{1,2}:\d{2}/, // "09:00", "9:30", "14:30"
+      /^\d{1,2}h\d{2}/i, // "9h30", "14h30"
+      /^\d{1,2}\s*giờ\s*\d{1,2}/i, // "9 giờ 30"
+      /^(?:sáng|chiều|tối|trưa)/i, // "sáng", "chiều", "tối", "trưa"
+      /^(?:buổi sáng|buổi chiều|buổi tối)/i // "buổi sáng", "buổi chiều"
+    ];
+    
+    const isTimeInput = timePatterns.some(pattern => pattern.test(lowerMessage));
+    if (isTimeInput) {
+      console.log(`✅ [isOffTopicInput] Detected time input: "${message}" → NOT off-topic`);
+      return false; // Input về thời gian → không phải off-topic
+    }
+    
+    // Từ khóa liên quan đến đặt lịch nha khoa (KHÔNG phải off-topic)
+    const dentalKeywords = [
+      'đặt lịch', 'dat lich', 'book', 'appointment', 'khám', 'kham', 'răng', 'rang',
+      'nha khoa', 'nhakhoa', 'dentist', 'bác sĩ', 'bac si', 'doctor', 'bs',
+      'dịch vụ', 'dich vu', 'service', 'làm sạch', 'lam sach', 'nhổ', 'nhổ răng',
+      'bọc răng', 'boc rang', 'tẩy trắng', 'tay trang', 'trồng răng', 'trong rang',
+      'lấy tủy', 'lay tuy', 'mài răng', 'mai rang', 'tư vấn', 'tu van',
+      'khám tổng quát', 'kham tong quat', 'gắn đinh', 'gan dinh', 'amidan'
+    ];
+    
+    // Kiểm tra xem có từ khóa nha khoa không
+    const hasDentalKeyword = dentalKeywords.some(keyword => lowerMessage.includes(keyword));
+    if (hasDentalKeyword) {
+      return false; // Có từ khóa nha khoa → không phải off-topic
+    }
+    
+    // Từ khóa off-topic (đồ ăn, thức uống, du lịch, giải trí, v.v.)
+    const offTopicKeywords = [
+      'bún', 'bun', 'phở', 'pho', 'mắm tôm', 'mam tom', 'cơm', 'com',
+      'bánh', 'banh', 'nước', 'nuoc', 'cà phê', 'ca phe', 'trà', 'tra',
+      'du lịch', 'du lich', 'travel', 'tour', 'đi chơi', 'di choi',
+      'phim', 'movie', 'nhạc', 'nhac', 'music', 'game', 'thể thao', 'the thao',
+      'sport', 'bóng đá', 'bong da', 'football', 'bóng rổ', 'bong ro', 'basketball',
+      'mua sắm', 'mua sam', 'shopping', 'thời trang', 'thoi trang', 'fashion',
+      'chính trị', 'chinh tri', 'politics', 'tin tức', 'tin tuc', 'news',
+      'học tập', 'hoc tap', 'study', 'giáo dục', 'giao duc', 'education',
+      'công việc', 'cong viec', 'work', 'job', 'nghề nghiệp', 'nghe nghiep'
+    ];
+    
+    // Kiểm tra xem có từ khóa off-topic không
+    const hasOffTopicKeyword = offTopicKeywords.some(keyword => lowerMessage.includes(keyword));
+    if (hasOffTopicKeyword) {
+      return true; // Có từ khóa off-topic → là off-topic
+    }
+    
+    // Nếu input quá ngắn (< 3 từ) và không có từ khóa nha khoa → có thể là off-topic
+    const words = lowerMessage.split(/\s+/).filter(w => w.length > 0);
+    if (words.length < 3 && !hasDentalKeyword) {
+      // Kiểm tra xem có phải là greeting/affirmative/rejection không
+      const greetingWords = ['xin chào', 'hello', 'hi', 'chào', 'chao', 'helo'];
+      const affirmativeWords = ['có', 'co', 'được', 'duoc', 'ok', 'oke', 'okie', 'vâng', 'vang', 'dạ', 'da', 'yes', 'sure'];
+      const rejectionWords = ['không', 'khong', 'thôi', 'thoi', 'cancel', 'hủy', 'huy', 'no'];
+      
+      const isGreeting = greetingWords.some(word => lowerMessage.includes(word));
+      const isAffirmative = affirmativeWords.some(word => lowerMessage === word || lowerMessage.startsWith(word + ' '));
+      const isRejection = rejectionWords.some(word => lowerMessage.includes(word));
+      
+      if (!isGreeting && !isAffirmative && !isRejection) {
+        return true; // Ngắn, không có từ khóa nha khoa, không phải greeting/affirmative/rejection → có thể off-topic
+      }
+    }
+    
+    return false; // Mặc định không phải off-topic
+  }
+
+  async detectPastDateIntent(latestPrompt, history) {
+    if (!this.shouldAttemptDateParsing(latestPrompt)) {
+      return null;
+    }
+
+    try {
+      const normalized = await this.normalizeDateArgument(
+        latestPrompt,
+        {
+          latestUserPrompt: latestPrompt,
+          conversationHistory: history,
+          activeFunction: 'past_date_guard'
+        },
+        new Map()
+      );
+
+      if (normalized.status === 'past') {
+        const displayDate = normalized.date ? this.formatDateForDisplay(normalized.date) : normalized.originalInput;
+        const message = normalized.message ||
+          `Không thể đặt lịch trong quá khứ. Ngày bạn chọn là ${displayDate}. Vui lòng chọn ngày trong tương lai.`;
+        return message;
+      }
+
+      const todayStr = DateHelper.getTodayVN();
+      if (normalized.date === todayStr) {
+        const periodInfo = this.getTimePeriodRequestInfo(latestPrompt);
+        if (periodInfo) {
+          const currentTimeInfo = this.getCurrentVietnamTimeInfo();
+          if (currentTimeInfo.totalMinutes >= periodInfo.endMinutes) {
+            const dateDisplay = this.formatDateForDisplay(normalized.date);
+            return `Hiện tại đã ${currentTimeInfo.display} nên ${periodInfo.label} ngày ${dateDisplay} đã qua. Vui lòng chọn thời gian còn lại trong ngày hoặc một ngày khác trong tương lai.`;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ [AI Booking] detectPastDateIntent error:', error);
+    }
+
+    return null;
+  }
+
+  formatServiceListMessage(services = []) {
+    if (!Array.isArray(services) || services.length === 0) {
+      return '';
+    }
+    const items = services.map((s, idx) => {
+      const duration = s.durationMinutes ? ` (${s.durationMinutes} phút)` : '';
+      const description = s.description ? ` - ${s.description}` : '';
+      return `${idx + 1}. ${s.name || s.serviceName || 'Dịch vụ'}${duration}${description}`;
+    });
+    return `Dưới đây là danh sách dịch vụ hiện có:\n${items.join('\n')}\n\nBạn muốn chọn dịch vụ nào? (Nhập tên hoặc số thứ tự)`;
+  }
+
+  async buildServiceSelectionFollowUp(functionResults, filteredHistory, processedPrompt, patientUserId, hasServiceId = false) {
+    if (hasServiceId) {
+      return null;
+    }
+
+    // ⭐ Kiểm tra nếu đây là câu hỏi thông tin (informational query) - chỉ trả lời thông tin, không chuyển sang đặt lịch
+    if (this.isInformationalQuery(processedPrompt)) {
+      try {
+        const todayStr = DateHelper.getTodayVN();
+        const todayDisplay = this.formatDateForDisplay(todayStr);
+        const tomorrowStr = DateHelper.getTomorrowVN();
+        const tomorrowDisplay = this.formatDateForDisplay(tomorrowStr);
+        
+        const lowerPrompt = processedPrompt.toLowerCase();
+        let infoResponse = '';
+        
+        if (lowerPrompt.includes('hôm nay')) {
+          infoResponse = `Hôm nay là ngày ${todayDisplay}.`;
+        } else if (lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai')) {
+          infoResponse = `Ngày mai là ngày ${tomorrowDisplay}.`;
+        } else {
+          infoResponse = `Hôm nay là ngày ${todayDisplay}. Ngày mai là ngày ${tomorrowDisplay}.`;
+        }
+        
+        const updatedHistory = [...filteredHistory,
+          { role: "user", content: processedPrompt },
+          { role: "assistant", content: infoResponse }
+        ];
+
+        return {
+          success: true,
+          needsMoreInfo: false,
+          response: infoResponse,
+          conversationHistory: updatedHistory
+        };
+      } catch (infoError) {
+        console.error('❌ [AI Booking] Error handling informational query in buildServiceSelectionFollowUp:', infoError);
+        // Nếu có lỗi khi xử lý câu hỏi thông tin, trả về lỗi generic thay vì throw
+        return {
+          success: false,
+          needsMoreInfo: false,
+          response: 'Xin lỗi, mình không thể lấy thông tin ngày tháng. Vui lòng thử lại sau.',
+          conversationHistory: filteredHistory || []
+        };
+      }
+    }
+
+    const pastDateMessage = await this.detectPastDateIntent(processedPrompt, filteredHistory);
+    if (pastDateMessage) {
+      const updatedHistory = [...filteredHistory,
+        { role: "user", content: processedPrompt },
+        { role: "assistant", content: pastDateMessage }
+      ];
+
+      return {
+        success: false,
+        needsMoreInfo: true,
+        response: pastDateMessage,
+        conversationHistory: updatedHistory
+      };
+    }
+
+    let listResult = [...functionResults].reverse().find(fr => {
+      if (!fr || !fr.result) return false;
+      if (fr.functionName === 'get_services' && Array.isArray(fr.result.services) && fr.result.services.length > 0) {
+        return true;
+      }
+      if (Array.isArray(fr.result?.services) && fr.result.services.length > 0) {
+        return true;
+      }
+      if (Array.isArray(fr.result?.suggestions) && fr.result.suggestions.length > 0) {
+        return true;
+      }
+      return false;
+    });
+
+    if (!listResult) {
+      const fallbackServices = await this.executeFunction('get_services', {}, patientUserId);
+      listResult = { functionName: 'get_services', result: fallbackServices };
+    }
+
+    const serviceItems = listResult?.result?.services || listResult?.result?.suggestions;
+    this.updateServiceKeywordCacheFromList(serviceItems);
+    const listMessage = this.formatServiceListMessage(serviceItems);
+    const responseMessage = [
+      'Bạn chưa chọn dịch vụ cụ thể cho lịch hẹn này. Vui lòng chọn dịch vụ bằng cách nhập tên hoặc số thứ tự trong danh sách.',
+      listMessage || 'Hiện tại chưa có danh sách dịch vụ để hiển thị. Bạn có thể nhập tên dịch vụ (ví dụ: "Khám tổng quát", "Nhổ răng") để mình hỗ trợ.'
+    ].join('\n\n');
+
+    const updatedHistory = [...filteredHistory,
+      { role: "user", content: processedPrompt },
+      { role: "assistant", content: responseMessage }
+    ];
+
+    return {
+      success: false,
+      needsMoreInfo: true,
+      response: responseMessage,
+      conversationHistory: updatedHistory
+    };
+  }
+
+  getLatestDateFromResults(functionResults = []) {
+    if (!Array.isArray(functionResults)) {
+      return null;
+    }
+    for (let i = functionResults.length - 1; i >= 0; i--) {
+      const fr = functionResults[i];
+      if (!fr) continue;
+      if (fr.functionArgs && fr.functionArgs.date) {
+        return fr.functionArgs.date;
+      }
+      if (fr.result && fr.result.date) {
+        return fr.result.date;
+      }
+    }
+    return null;
+  }
+
+  async extractDateFromConversation(latestPrompt, history, dateValidationCache) {
+    const userMessages = this.collectUserMessages(latestPrompt, history);
+    for (let i = userMessages.length - 1; i >= 0; i--) {
+      const message = userMessages[i];
+      if (!this.shouldAttemptDateParsing(message)) {
+        continue;
+      }
+      const normalized = await this.normalizeDateArgument(
+        message,
+        {
+          latestUserPrompt: message,
+          conversationHistory: history,
+          activeFunction: 'context_date_extract'
+        },
+        dateValidationCache
+      );
+      if (normalized && normalized.success && normalized.date) {
+        return normalized.date;
+      }
+    }
+    return null;
+  }
+
+  formatAvailableSlotsMessage(rangeResult, serviceName, doctorName, dateDisplay) {
+    if (!rangeResult || !Array.isArray(rangeResult.scheduleRanges)) {
+      return `Không thể tải khung giờ của bác sĩ ${doctorName} vào ngày ${dateDisplay}. Vui lòng thử lại sau.`;
+    }
+
+    const lines = [`Dịch vụ ${serviceName} với ${doctorName} ngày ${dateDisplay}.`];
+
+    if (rangeResult.message) {
+      lines.push(rangeResult.message);
+    }
+
+    const formatTime = (isoString) => {
+      if (!isoString) return '--:--';
+      const date = new Date(isoString);
+      const hour = (date.getUTCHours() + 7 + 24) % 24;
+      const minute = date.getUTCMinutes();
+      return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    };
+
+    const hasAvailableSlots = rangeResult.scheduleRanges.some(range => {
+      if (!range) return false;
+      if (range.availableGaps && range.availableGaps.length > 0) return true;
+      const label = (range.displayRange || '').trim();
+      return label && !['đã hết chỗ', 'đã qua thời gian làm việc'].includes(label.toLowerCase());
+    });
+
+    for (const range of rangeResult.scheduleRanges) {
+      const label = (range.displayRange || '').trim();
+      const isUnavailableLabel = label &&
+        ['đã hết chỗ', 'đã qua thời gian làm việc'].includes(label.toLowerCase());
+
+      if (isUnavailableLabel) {
+        lines.push(`\n- ${range.shiftDisplay || ''}: ${label}`);
+        continue;
+      }
+
+      // ⭐ CỰC KỲ QUAN TRỌNG: Nếu có availableGaps hoặc label (các timeslot cụ thể) → CHỈ hiển thị các slots cụ thể
+      // TUYỆT ĐỐI KHÔNG hiển thị "từ 08:00 đến 12:00" khi đã có các slot cụ thể
+      const hasSpecificSlots = (label && label.trim()) || (range.availableGaps && range.availableGaps.length > 0);
+      
+      if (hasSpecificSlots) {
+        // ⭐ CHỈ hiển thị shift name (Buổi sáng/Buổi chiều) và các slots cụ thể, KHÔNG hiển thị "từ ... đến ..."
+        const shiftName = range.shiftDisplay ? 
+          (range.shiftDisplay.includes(':') ? range.shiftDisplay.split(':')[0].trim() : range.shiftDisplay) :
+          (range.shift === 'Morning' ? 'Buổi sáng' : 'Buổi chiều');
+        
+        // Lấy danh sách slots cụ thể
+        let slotsList = [];
+        if (label) {
+          slotsList = label.split(',').map(t => t.trim());
+        } else if (range.availableGaps && range.availableGaps.length > 0) {
+          slotsList = range.availableGaps.map((gap) => {
+            return gap.display || `${formatTime(gap.start)}-${formatTime(gap.end)}`;
+          });
+        }
+        
+        // ⭐ CHỈ hiển thị shift name và các slots cụ thể, KHÔNG có "từ ... đến ..."
+        if (slotsList.length > 0) {
+          lines.push(`\n- ${shiftName}:`);
+          slotsList.forEach(slot => {
+            lines.push(`  - ${slot}`);
+          });
+        } else {
+          // Fallback: Nếu không có slots cụ thể, hiển thị shift name thôi
+          lines.push(`\n- ${shiftName}:`);
+        }
+      } else {
+        // Nếu không có timeslot cụ thể → mới hiển thị khoảng thời gian tổng quát
+        const start = formatTime(range.startTime);
+        const end = formatTime(range.endTime);
+        const shiftName = range.shiftDisplay ? 
+          (range.shiftDisplay.includes(':') ? range.shiftDisplay.split(':')[0].trim() : range.shiftDisplay) :
+          (range.shift === 'Morning' ? 'Buổi sáng' : 'Buổi chiều');
+        lines.push(`\n- ${shiftName}: ${start} - ${end}`);
+      }
+    }
+
+    if (hasAvailableSlots) {
+      lines.push('\nBạn muốn chọn giờ nào trong các khoảng trên?');
+    } else {
+      lines.push('\nBác sĩ không còn khung giờ khả dụng vào ngày này. Bạn có muốn chọn ngày khác không?');
+    }
+
+    return lines.join('\n');
+  }
+
+  async maybeAutoDisplaySlots({
+    hasServiceId,
+    hasDoctorId,
+    functionResults,
+    filteredHistory,
+    processedPrompt,
+    patientUserId,
+    dateValidationCache,
+    getLatestServiceInfo,
+    getLatestDoctorInfo
+  }) {
+    if (!hasServiceId || !hasDoctorId) {
+      return null;
+    }
+    const alreadyFetchedSlots = functionResults.some(fr => fr.functionName === 'get_available_slots');
+    if (alreadyFetchedSlots) {
+      return null;
+    }
+    let latestService = getLatestServiceInfo();
+    if (!latestService) {
+      latestService = await this.resolveServiceInfoFromHistory(filteredHistory, patientUserId);
+    }
+    let latestDoctor = getLatestDoctorInfo();
+    if (!latestDoctor) {
+      latestDoctor = await this.resolveDoctorInfoFromHistory(filteredHistory, patientUserId);
+    }
+    if (!latestService || !latestDoctor) {
+      return null;
+    }
+    let appointmentDate = this.getLatestDateFromResults(functionResults);
+    if (!appointmentDate) {
+      appointmentDate = await this.extractDateFromConversation(
+        processedPrompt,
+        filteredHistory,
+        dateValidationCache
+      );
+    }
+    if (!appointmentDate) {
+      return null;
+    }
+
+    try {
+      const searchDate = new Date(appointmentDate);
+      if (Number.isNaN(searchDate.getTime())) {
+        return null;
+      }
+
+      const scheduleRangeResult = await availableSlotService.getDoctorScheduleRange({
+        doctorUserId: latestDoctor.id,
+        serviceId: latestService.id,
+        date: searchDate,
+        patientUserId
+      });
+
+      if (!scheduleRangeResult || (scheduleRangeResult.message && !scheduleRangeResult.scheduleRanges)) {
+        return null;
+      }
+
+      const dateDisplay = this.formatDateForDisplay(appointmentDate);
+      const responseMessage = this.formatAvailableSlotsMessage(
+        scheduleRangeResult,
+        latestService.name || latestService.serviceName || 'Dịch vụ',
+        latestDoctor.name || latestDoctor.fullName || 'Bác sĩ',
+        dateDisplay
+      );
+
+      const updatedHistory = [
+        ...filteredHistory,
+        { role: 'user', content: processedPrompt },
+        { role: 'assistant', content: responseMessage }
+      ];
+
+      return {
+        success: false,
+        needsMoreInfo: true,
+        response: responseMessage,
+        conversationHistory: updatedHistory
+      };
+    } catch (error) {
+      console.error('❌ [AI Booking] Auto display slots error:', error);
+    }
+
+    return null;
+  }
+
+  formatHistoryForDateValidation(history, limit = 6) {
+    if (!Array.isArray(history) || history.length === 0) {
+      return '';
+    }
+
+    return history
+      .slice(-limit)
+      .map(msg => {
+        const role = msg.role === 'assistant' ? 'Assistant' : 'User';
+        const content = (msg.content || '').replace(/\s+/g, ' ').trim();
+        return `${role}: ${content}`;
+      })
+      .join('\n');
+  }
+
+  async normalizeDateArgument(rawInput, options = {}, cache) {
+    const trimmedInput = typeof rawInput === 'string' ? rawInput.trim() : '';
+    const latestPrompt = options.latestUserPrompt || '';
+    const activeFunction = options.activeFunction || '';
+
+    if (!trimmedInput) {
+      return {
+        success: false,
+        status: 'invalid',
+        originalInput: '',
+        message: 'Ngày không được để trống. Vui lòng cung cấp ngày cụ thể (ví dụ: 05/11/2025).',
+        requiresClarification: true
+      };
+    }
+
+    if (!(cache instanceof Map)) {
+      cache = new Map();
+    }
+
+    const cacheKey = `${trimmedInput.toLowerCase()}|${activeFunction}`;
+    if (cache?.has(cacheKey)) {
+      return cache.get(cacheKey);
+    }
+
+    const payload = {
+      inputText: trimmedInput,
+      latestUserPrompt: latestPrompt,
+      historySnippet: this.formatHistoryForDateValidation(options.conversationHistory || []),
+      timezone: 'Asia/Ho_Chi_Minh',
+      today: DateHelper.getTodayVN(),
+      tomorrow: DateHelper.getTomorrowVN(),
+      dayAfterTomorrow: DateHelper.getDayAfterTomorrowVN(),
+      nextWeekSameDay: DateHelper.getNextWeekSameDayVN(),
+      now: DateHelper.getNowVN().toISOString(),
+      activeFunction
+    };
+
+    let response;
+    try {
+      response = await this.retryWithBackoff(async () => {
+        return await openai.chat.completions.create({
+          model: DATE_VALIDATION_MODEL,
+          messages: [
+            { role: 'system', content: DATE_VALIDATION_SYSTEM_PROMPT },
+            { role: 'user', content: JSON.stringify(payload) }
+          ],
+          tools: DATE_VALIDATION_TOOLS,
+          tool_choice: 'auto',
+          temperature: 0.1,
+          max_tokens: 300
+        });
+      }, 1, 300);
+    } catch (error) {
+      console.error('❌ [DateValidation] OpenAI error:', error);
+      return {
+        success: false,
+        status: 'error',
+        originalInput: trimmedInput,
+        message: 'Không thể xác thực ngày. Vui lòng nhập lại ngày theo định dạng DD/MM/YYYY hoặc diễn tả rõ hơn.',
+        requiresClarification: true
+      };
+    }
+
+    const toolCall = response?.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall) {
+      return {
+        success: false,
+        status: 'error',
+        originalInput: trimmedInput,
+        message: 'Không thể hiểu ngày bạn cung cấp. Vui lòng mô tả rõ hơn.',
+        requiresClarification: true
+      };
+    }
+
+    let parsedArgs;
+    try {
+      parsedArgs = JSON.parse(toolCall.function.arguments || '{}');
+    } catch (parseErr) {
+      console.error('❌ [DateValidation] Cannot parse tool arguments:', parseErr);
+      return {
+        success: false,
+        status: 'error',
+        originalInput: trimmedInput,
+        message: 'Không thể xác thực ngày. Vui lòng nhập lại theo định dạng DD/MM/YYYY.',
+        requiresClarification: true
+      };
+    }
+
+    // ⭐ Kiểm tra nếu input có chứa "tuần sau" hoặc "mỗi tuần sau" mà không có thứ cụ thể
+    const inputLower = trimmedInput.toLowerCase();
+    // Cập nhật regex để bắt cả "tuần sau", "tuần tới", "mỗi tuần sau", "mỗi tuần tới"
+    const hasNextWeekKeyword = /(mỗi\s+)?tuần\s+(sau|tới)/i.test(trimmedInput);
+    const hasSpecificDay = /(thứ\s+[2-7]|chủ\s+nhật|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy)/i.test(trimmedInput);
+    
+    // Nếu có "tuần sau" hoặc "mỗi tuần sau" nhưng không có thứ cụ thể, đảm bảo status là ambiguous
+    if (hasNextWeekKeyword && !hasSpecificDay) {
+      parsedArgs.status = 'ambiguous';
+      parsedArgs.requiresClarification = true;
+      parsedArgs.normalizedDate = null;
+    }
+    
+    // Tạo message phù hợp cho trường hợp "tuần sau" không có thứ
+    let defaultMessage;
+    if (parsedArgs.status === 'ambiguous') {
+      if (hasNextWeekKeyword && !hasSpecificDay) {
+        defaultMessage = 'Bạn muốn đặt lịch vào thứ mấy tuần sau? Vui lòng cho biết cụ thể (ví dụ: "thứ 2 tuần sau", "thứ 5 tuần sau", "chủ nhật tuần sau").';
+      } else {
+        defaultMessage = 'Ngày bạn cung cấp chưa rõ. Vui lòng cho biết cụ thể ngày/thứ.';
+      }
+    } else if (parsedArgs.status === 'past') {
+      defaultMessage = 'Ngày bạn chọn đã nằm trong quá khứ. Vui lòng chọn ngày trong tương lai.';
+    } else {
+      defaultMessage = 'Không thể xác thực ngày. Vui lòng nhập lại.';
+    }
+    
+    const normalizedResult = {
+      success: parsedArgs.status === 'valid' && !!parsedArgs.normalizedDate,
+      status: parsedArgs.status || 'unknown',
+      date: parsedArgs.normalizedDate || null,
+      originalInput: parsedArgs.originalInputEcho || trimmedInput,
+      message: parsedArgs.message || defaultMessage,
+      requiresClarification: Boolean(parsedArgs.requiresClarification)
+    };
+
+    if (cache) {
+      cache.set(cacheKey, normalizedResult);
+    }
+
+    return normalizedResult;
+  }
+
   async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
+    let filteredHistory = Array.isArray(conversationHistory) ? [...conversationHistory] : [];
+    let processedPrompt = typeof userPrompt === 'string' ? userPrompt : '';
     try {
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // ⭐ Preprocess user input để tăng độ chính xác
-      const processedPrompt = this.preprocessUserInput(userPrompt);
+      processedPrompt = this.preprocessUserInput(userPrompt);
       
       // ⭐ Filter conversation history để loại bỏ thông tin không hợp lệ
-      const filteredHistory = this.filterConversationHistory(conversationHistory);
+      filteredHistory = this.filterConversationHistory(conversationHistory);
       
       // ⭐ Log để debug
       console.log(`📝 [AI Booking] Conversation history: ${conversationHistory.length} messages (filtered: ${filteredHistory.length})`);
@@ -2930,11 +4540,101 @@ class AIBookingService {
         .replace('{NEXT_WEEK_MONDAY}', nextWeekMondayStr)
         .replace('{NEXT_WEEK_SAME_DAY}', nextWeekSameDayStr);
       
+      const todayDisplay = this.formatDateForDisplay(todayStr);
+      const tomorrowDisplay = this.formatDateForDisplay(tomorrowStr);
+      const dayAfterTomorrowDisplay = this.formatDateForDisplay(dayAfterTomorrowStr);
+      const nextWeekMondayDisplay = this.formatDateForDisplay(nextWeekMondayStr);
+      const nextWeekSameDayDisplay = this.formatDateForDisplay(nextWeekSameDayStr);
+      
+      const dateDisplayContext = `
+⚠️ QUY ĐỊNH HIỂN THỊ NGÀY: Khi trả lời người dùng, LUÔN trình bày ngày theo định dạng DD/MM/YYYY. KHÔNG bao giờ hiển thị YYYY-MM-DD.
+Ví dụ nhanh:
+- Hôm nay (TODAY): ${todayDisplay}
+- Ngày mai (TOMORROW): ${tomorrowDisplay}
+- Ngày kia (DAY_AFTER_TOMORROW): ${dayAfterTomorrowDisplay}
+- Thứ 2 tuần sau (NEXT_WEEK_MONDAY): ${nextWeekMondayDisplay}
+- Cùng thứ tuần sau (NEXT_WEEK_SAME_DAY): ${nextWeekSameDayDisplay}
+Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xác nhận lịch.
+`.trim();
+      
+      const systemPromptWithDisplay = `${systemPrompt}\n\n${dateDisplayContext}`;
+      
+      // ⭐ CỰC KỲ QUAN TRỌNG: Kiểm tra xem user có đang chọn thời gian sau khi đã hiển thị available slots không
+      // Nếu có, inject instruction message để hướng dẫn AI gọi check_appointment_conflict hoặc create_appointment
+      let additionalInstruction = null;
+      const lowerPrompt = processedPrompt.toLowerCase().trim();
+      // ⭐ CỰC KỲ QUAN TRỌNG: Pattern matching phải tìm trong toàn bộ câu, không chỉ ở đầu
+      // Ví dụ: "Tôi muốn chọn 9 giờ" → phải nhận diện được "9 giờ"
+      const timePatterns = [
+        /\d+\s*(?:giờ|h|hour|hours)/i, // "9 giờ", "8h", "9 hour" (không cần ^)
+        /(?:giờ|h)\s*\d+/i, // "giờ 9", "h 8" (không cần ^)
+        /\d{1,2}:\d{2}/, // "09:00", "9:30", "14:30" (không cần ^)
+        /\d{1,2}h\d{2}/i, // "9h30", "14h30" (không cần ^)
+        /\d{1,2}\s*giờ\s*\d{1,2}/i, // "9 giờ 30" (không cần ^)
+        /(?:^|\s)(?:sáng|chiều|tối|trưa)(?:\s|$)/i, // "sáng", "chiều", "tối", "trưa"
+        /(?:^|\s)(?:buổi sáng|buổi chiều|buổi tối)(?:\s|$)/i // "buổi sáng", "buổi chiều"
+      ];
+      
+      const isTimeInput = timePatterns.some(pattern => pattern.test(lowerPrompt));
+      const hasAvailableSlotsInHistory = filteredHistory.some(msg => {
+        if (msg.role === 'assistant' && msg.content) {
+          return msg.content.includes('khung giờ khả dụng') || 
+                 msg.content.includes('Bạn muốn chọn giờ nào') ||
+                 msg.content.includes('available slots') ||
+                 msg.content.includes('Buổi sáng:') ||
+                 msg.content.includes('Buổi chiều:');
+        }
+        return false;
+      });
+      
+      console.log(`🔍 [AI Booking] Time input detection:`, {
+        prompt: processedPrompt,
+        isTimeInput,
+        hasAvailableSlotsInHistory,
+        shouldCallCheckConflict: isTimeInput && hasAvailableSlotsInHistory
+      });
+      
+      if (isTimeInput && hasAvailableSlotsInHistory) {
+        console.log(`✅ [AI Booking] User is selecting time after available slots displayed. Injecting instruction message.`);
+        
+        // ⭐ Parse thời gian từ user input - tìm trong toàn bộ câu, không chỉ ở đầu
+        let parsedTime = null;
+        const hourMatch = lowerPrompt.match(/(\d+)\s*(?:giờ|h|hour|hours)/i);
+        if (hourMatch) {
+          // "9 giờ", "8h", "Tôi muốn chọn 9 giờ" → "09:00", "08:00"
+          const hour = parseInt(hourMatch[1]);
+          parsedTime = `${String(hour).padStart(2, '0')}:00`;
+        } else {
+          const timeColonMatch = lowerPrompt.match(/(\d{1,2}):(\d{2})/);
+          if (timeColonMatch) {
+            // "09:00", "9:30", "Tôi muốn chọn 09:00" → giữ nguyên format
+            parsedTime = `${String(parseInt(timeColonMatch[1])).padStart(2, '0')}:${timeColonMatch[2]}`;
+          } else {
+            const timeHMatch = lowerPrompt.match(/(\d{1,2})h(\d{2})/i);
+            if (timeHMatch) {
+              // "9h30", "Tôi muốn chọn 9h30" → "09:30"
+              parsedTime = `${String(parseInt(timeHMatch[1])).padStart(2, '0')}:${timeHMatch[2]}`;
+            }
+          }
+        }
+        
+        console.log(`🔍 [AI Booking] Parsed time from user input: "${processedPrompt}" → "${parsedTime}"`);
+        
+        // ⭐ Inject instruction message để hướng dẫn AI
+        if (parsedTime) {
+          additionalInstruction = {
+            role: "user",
+            content: `⚠️ CỰC KỲ QUAN TRỌNG: User đã chọn thời gian "${parsedTime}" sau khi bạn đã hiển thị available slots. Bạn PHẢI gọi check_appointment_conflict(date, time="${parsedTime}", doctorId) HOẶC create_appointment(serviceId, doctorId, date, time="${parsedTime}") để validate thời gian này. Nếu có conflict hoặc thời gian không nằm trong available slots, PHẢI trả về error message. KHÔNG được chỉ hiển thị thông tin lịch hẹn mà không validate!`
+          };
+        }
+      }
+      
       // Build messages array với filtered history
       const messages = [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: systemPromptWithDisplay },
         ...filteredHistory,
-        { role: "user", content: processedPrompt } // ⭐ Dùng processed prompt
+        { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
+        ...(additionalInstruction ? [additionalInstruction] : []) // ⭐ Thêm instruction nếu có
       ];
       
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
@@ -3016,13 +4716,7 @@ class AIBookingService {
       };
       
       
-      // ⭐ Date context để validate
-      const dateContext = {
-        today: todayStr,
-        tomorrow: tomorrowStr,
-        dayAfterTomorrow: dayAfterTomorrowStr,
-        nextWeekSameDay: nextWeekSameDayStr
-      };
+      const dateValidationCache = new Map();
       
       while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0 && iteration < maxIterations) {
         iteration++;
@@ -3031,6 +4725,35 @@ class AIBookingService {
         for (const toolCall of assistantMessage.tool_calls) {
           const functionName = toolCall.function.name;
           let functionArgs;
+          
+          // ⭐ LOGGING: Log tất cả function calls để debug
+          console.log(`🔧 [AI Booking] Iteration ${iteration}: AI wants to call function: ${functionName}`);
+          console.log(`🔧 [AI Booking] User prompt: "${processedPrompt}"`);
+          console.log(`🔧 [AI Booking] Conversation history length: ${filteredHistory.length}`);
+          
+          // ⭐ KIỂM TRA: Nếu AI gọi get_services() nhưng user đã đề cập tên bác sĩ → phải gọi find_doctor_by_name trước
+          if (functionName === 'get_services') {
+            const mentionedDoctorName = this.findDoctorMention(processedPrompt, filteredHistory);
+            console.log(`🔍 [AI Booking] Checking doctor mention in prompt: "${processedPrompt}" → found: "${mentionedDoctorName}"`);
+            if (mentionedDoctorName) {
+              console.log(`⚠️ [AI Booking] BLOCKING get_services() - User already mentioned doctor "${mentionedDoctorName}". Instructing to call find_doctor_by_name first.`);
+              messages.push({
+                role: "assistant",
+                content: null,
+                tool_calls: [toolCall]
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ 
+                  error: `⚠️ CỰC KỲ QUAN TRỌNG: User đã nhắc đến bác sĩ "${mentionedDoctorName}" trong prompt "${processedPrompt}". Bạn PHẢI gọi find_doctor_by_name("${mentionedDoctorName}") TRƯỚC để validate bác sĩ và workingHours. CHỈ sau khi find_doctor_by_name() trả về found=true với bác sĩ có workingHours đầy đủ → mới được gọi get_services()! Nếu find_doctor_by_name() trả về error (bác sĩ không có workingHours hoặc không tồn tại) → PHẢI hiển thị error message đó và danh sách bác sĩ khả dụng, KHÔNG được gọi get_services()!`,
+                  shouldCallFindDoctorByName: true,
+                  doctorNameHint: mentionedDoctorName
+                })
+              });
+              continue;
+            }
+          }
           
           // ⭐ KIỂM TRA: Nếu AI gọi get_doctors() nhưng đã có doctorId trong conversation history → trả về error
           if (functionName === 'get_doctors') {
@@ -3065,6 +4788,25 @@ class AIBookingService {
                 })
               });
               continue; // Skip executing get_doctors
+            }
+            const mentionedDoctorName = this.findDoctorMention(processedPrompt, filteredHistory);
+            if (mentionedDoctorName) {
+              console.log(`⚠️ [AI Booking] AI tried to call get_doctors() but user already mentioned doctor "${mentionedDoctorName}". Instructing to call find_doctor_by_name.`);
+              messages.push({
+                role: "assistant",
+                content: null,
+                tool_calls: [toolCall]
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({ 
+                  error: `User đã nhắc đến bác sĩ "${mentionedDoctorName}". Bạn phải gọi find_doctor_by_name với tên này (hoặc validate_doctor nếu đã có doctorId) trước khi liệt kê danh sách bác sĩ.`,
+                  shouldCallFindDoctorByName: true,
+                  doctorNameHint: mentionedDoctorName
+                })
+              });
+              continue;
             }
           }
           
@@ -3132,159 +4874,65 @@ class AIBookingService {
           try {
             functionArgs = JSON.parse(toolCall.function.arguments);
             
-            // ⭐ VALIDATE DATE: Nếu function có date argument → validate và correct date nếu cần
-            if (functionArgs.date && (functionName === 'get_available_slots' || functionName === 'create_appointment' || functionName === 'check_appointment_conflict')) {
-              // Kiểm tra xem user có nói "tuần sau" trong prompt hoặc conversation history không
-              const userPromptLower = processedPrompt.toLowerCase();
-              
-              // ⭐ QUAN TRỌNG: Kiểm tra xem có "thứ X tuần sau" trong prompt hoặc history không
-              // Nếu có, validate và correct date ngay lập tức
-              const hasNextWeekKeyword = /tuần\s+sau|tuần\s+tới/i.test(userPromptLower);
-              
-              // Kiểm tra trong conversation history gần đây
-              let hasNextWeekInHistory = false;
-              if (!hasNextWeekKeyword) {
-                for (let i = filteredHistory.length - 1; i >= 0 && i >= filteredHistory.length - 5; i--) {
-                  const msg = filteredHistory[i];
-                  if (msg.content && /tuần\s+sau|tuần\s+tới/i.test(msg.content.toLowerCase())) {
-                    hasNextWeekInHistory = true;
-                    break;
-                  }
-                }
+          if (functionName === 'find_service_by_name') {
+            const userMentionedService = this.hasUserMentionedServiceName(
+              functionArgs.serviceName,
+              processedPrompt,
+              filteredHistory
+            );
+            if (!userMentionedService) {
+              console.log(`🚫 [AI Booking] BLOCKED find_service_by_name: User has not mentioned service "${functionArgs.serviceName}"`);
+              messages.push({
+                role: "assistant",
+                content: null,
+                tool_calls: [toolCall]
+              });
+              messages.push({
+                role: "tool",
+                tool_call_id: toolCall.id,
+                content: JSON.stringify({
+                  error: 'User chưa chọn dịch vụ. Bạn PHẢI hiển thị danh sách dịch vụ (gọi get_services) và yêu cầu user chọn (nhập tên dịch vụ hoặc số thứ tự) trước khi gọi find_service_by_name.',
+                  shouldListServices: true
+                })
+              });
+              continue;
+            }
+          }
+
+          // ⭐ DATE VALIDATION VIA LLM
+            if (functionArgs.date && FUNCTIONS_REQUIRING_DATE_VALIDATION.has(functionName)) {
+              const normalizedDate = await this.normalizeDateArgument(
+                functionArgs.date,
+                {
+                  latestUserPrompt: processedPrompt,
+                  conversationHistory: filteredHistory,
+                  activeFunction: functionName
+                },
+                dateValidationCache
+              );
+
+              if (!normalizedDate.success) {
+                console.log(`🚫 [AI Booking] Date validation blocked (${functionName}): ${normalizedDate.message}`);
+                messages.push({
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [toolCall]
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: JSON.stringify({
+                    error: normalizedDate.message,
+                    shouldClarifyDate: true,
+                    status: normalizedDate.status,
+                    originalInput: normalizedDate.originalInput
+                  })
+                });
+                continue;
               }
-              
-              // ⭐ XỬ LÝ "TUẦN SAU": BLOCK function call nếu user chưa chỉ định thứ cụ thể HOẶC date cụ thể
-              // Kiểm tra xem user có chỉ định thứ không (ví dụ: "thứ 3 tuần sau", "tuần sau thứ 5")
-              // HOẶC có date cụ thể không (ví dụ: "20/11", "20 tháng 11", "2025-11-20")
-              if (hasNextWeekKeyword || hasNextWeekInHistory) {
-                const hasSpecificDay = /thứ\s+[0-7]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật/i.test(userPromptLower) ||
-                  filteredHistory.some(msg => msg.content && /thứ\s+[0-7]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật/i.test(msg.content.toLowerCase()));
-                
-                // ⭐ Kiểm tra xem user có cung cấp date cụ thể không (ví dụ: "20/11", "20 tháng 11", "ngày 20", "2025-11-20")
-                const hasSpecificDate = /\d{1,2}\s*\/\s*\d{1,2}|\d{1,2}\s+tháng\s+\d{1,2}|\d{1,2}\s+tháng\s+[a-zà-ỹ]+|ngày\s+\d{1,2}|\d{4}-\d{2}-\d{2}/i.test(userPromptLower) ||
-                  filteredHistory.some(msg => msg.content && /\d{1,2}\s*\/\s*\d{1,2}|\d{1,2}\s+tháng\s+\d{1,2}|\d{1,2}\s+tháng\s+[a-zà-ỹ]+|ngày\s+\d{1,2}|\d{4}-\d{2}-\d{2}/i.test(msg.content));
-                
-                // Nếu user CHỈ nói "tuần sau" mà KHÔNG có thứ cụ thể VÀ KHÔNG có date cụ thể → BLOCK function call
-                if (!hasSpecificDay && !hasSpecificDate) {
-                  console.log(`🚫 [AI Booking] BLOCKED: User said "tuần sau" without specific day or date. Blocking ${functionName} call. AI must ask user to choose day of week first.`);
-                  
-                  // Trả về error để AI hiểu phải hỏi user chọn thứ
-                  messages.push({
-                    role: "assistant",
-                    content: null,
-                    tool_calls: [toolCall]
-                  });
-                  messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    content: JSON.stringify({ 
-                      error: 'User đã nói "tuần sau" nhưng chưa chỉ định thứ cụ thể hoặc date cụ thể. Bạn PHẢI hỏi user: "Bạn muốn đặt lịch vào thứ mấy tuần sau? (Thứ 2, Thứ 3, Thứ 4, Thứ 5, Thứ 6, Thứ 7, Chủ nhật)". KHÔNG được gọi function này cho đến khi user đã chọn thứ cụ thể hoặc cung cấp date cụ thể.',
-                      shouldAskForDay: true
-                    })
-                  });
-                  continue; // Skip executing function
-                } else if (hasSpecificDay && !hasSpecificDate) {
-                  // ⭐ User đã chỉ định thứ (ví dụ: "thứ 3 tuần sau") → validate và correct date
-                  // Parse thứ từ user prompt hoặc conversation history
-                  let targetDayOfWeek = null;
-                  
-                  // Map thứ tiếng Việt sang số (0 = Chủ nhật, 1 = Thứ 2, ..., 6 = Thứ 7)
-                  const dayMap = {
-                    'chủ nhật': 0, 'cn': 0,
-                    'thứ hai': 1, 'thứ 2': 1, 'hai': 1,
-                    'thứ ba': 2, 'thứ 3': 2, 'ba': 2,
-                    'thứ tư': 3, 'thứ 4': 3, 'tư': 3,
-                    'thứ năm': 4, 'thứ 5': 4, 'năm': 4,
-                    'thứ sáu': 5, 'thứ 6': 5, 'sáu': 5,
-                    'thứ bảy': 6, 'thứ 7': 6, 'bảy': 6
-                  };
-                  
-                  // Tìm thứ trong user prompt
-                  for (const [key, value] of Object.entries(dayMap)) {
-                    const regex = new RegExp(`\\b${key}\\b`, 'i');
-                    if (regex.test(userPromptLower)) {
-                      targetDayOfWeek = value;
-                      break;
-                    }
-                  }
-                  
-                  // Nếu không tìm thấy trong prompt, tìm trong conversation history
-                  if (targetDayOfWeek === null) {
-                    for (const msg of filteredHistory) {
-                      if (msg.content) {
-                        const content = msg.content.toLowerCase();
-                        for (const [key, value] of Object.entries(dayMap)) {
-                          const regex = new RegExp(`\\b${key}\\b`, 'i');
-                          if (regex.test(content)) {
-                            targetDayOfWeek = value;
-                            break;
-                          }
-                        }
-                        if (targetDayOfWeek !== null) break;
-                      }
-                    }
-                  }
-                  
-                  // Nếu tìm thấy thứ → tính date đúng
-                  if (targetDayOfWeek !== null) {
-                    const correctDate = DateHelper.getNextWeekDayVN(targetDayOfWeek);
-                    console.log(`📅 [AI Booking] Calculated correct date for "thứ ${targetDayOfWeek === 0 ? 'Chủ nhật' : `Thứ ${targetDayOfWeek + 1}`} tuần sau": ${correctDate}`);
-                    if (functionArgs.date !== correctDate) {
-                      console.log(`⚠️ [AI Booking] User said "thứ ${targetDayOfWeek === 0 ? 'Chủ nhật' : `Thứ ${targetDayOfWeek + 1}`} tuần sau" but AI used date ${functionArgs.date}. Correcting to ${correctDate}`);
-                      functionArgs.date = correctDate;
-                    } else {
-                      console.log(`✅ [AI Booking] AI used correct date: ${functionArgs.date}`);
-                    }
-                  } else {
-                    console.log(`⚠️ [AI Booking] Could not parse day of week from user prompt or history. AI date: ${functionArgs.date}`);
-                  }
-                  
-                  console.log(`📅 [AI Booking] User said "tuần sau" with specific day. Date: ${functionArgs.date}`);
-                } else if (hasSpecificDate) {
-                  // User đã cung cấp date cụ thể → có thể tiếp tục
-                  console.log(`📅 [AI Booking] User said "tuần sau" with specific date. Date: ${functionArgs.date}`);
-                }
-              }
-              
-              // Tương tự cho "ngày mai"
-              const hasTomorrowKeyword = /(?:ngày\s+)?mai|tomorrow/i.test(userPromptLower);
-              let hasTomorrowInHistory = false;
-              if (!hasTomorrowKeyword) {
-                for (let i = filteredHistory.length - 1; i >= 0 && i >= filteredHistory.length - 5; i--) {
-                  const msg = filteredHistory[i];
-                  if (msg.content && /(?:ngày\s+)?mai|tomorrow/i.test(msg.content.toLowerCase())) {
-                    hasTomorrowInHistory = true;
-                    break;
-                  }
-                }
-              }
-              
-              if (hasTomorrowKeyword || hasTomorrowInHistory) {
-                if (functionArgs.date !== tomorrowStr) {
-                  console.log(`⚠️ [AI Booking] User said "ngày mai" but AI used date ${functionArgs.date}. Correcting to TOMORROW=${tomorrowStr}`);
-                  functionArgs.date = tomorrowStr;
-                }
-              }
-              
-              // Tương tự cho "hôm nay"
-              const hasTodayKeyword = /hôm\s+nay|today|nay/i.test(userPromptLower);
-              let hasTodayInHistory = false;
-              if (!hasTodayKeyword) {
-                for (let i = filteredHistory.length - 1; i >= 0 && i >= filteredHistory.length - 5; i--) {
-                  const msg = filteredHistory[i];
-                  if (msg.content && /hôm\s+nay|today|nay/i.test(msg.content.toLowerCase())) {
-                    hasTodayInHistory = true;
-                    break;
-                  }
-                }
-              }
-              
-              if (hasTodayKeyword || hasTodayInHistory) {
-                if (functionArgs.date !== todayStr) {
-                  console.log(`⚠️ [AI Booking] User said "hôm nay" but AI used date ${functionArgs.date}. Correcting to TODAY=${todayStr}`);
-                  functionArgs.date = todayStr;
-                }
-              }
+
+              console.log(`✅ [AI Booking] Normalized date for ${functionName}: ${normalizedDate.originalInput} → ${normalizedDate.date}`);
+              functionArgs.date = normalizedDate.date;
             }
             
           } catch (parseError) {
@@ -3355,13 +5003,75 @@ class AIBookingService {
           }
           
           // Execute function với error handling tốt hơn
+          console.log(`🔧 [AI Booking] Executing function: ${functionName} with args:`, JSON.stringify(functionArgs, null, 2));
           let functionResult;
           try {
             functionResult = await this.executeFunction(functionName, functionArgs, patientUserId);
+            console.log(`✅ [AI Booking] Function ${functionName} executed successfully. Result type:`, functionResult ? (Array.isArray(functionResult) ? 'array' : typeof functionResult) : 'null');
+            if (functionName === 'get_services' && functionResult && functionResult.services) {
+              console.log(`📋 [AI Booking] get_services returned ${functionResult.services.length} services`);
+              if (functionResult.services.length > 0) {
+                console.log(`📋 [AI Booking] First 5 service names from result:`, functionResult.services.slice(0, 5).map(s => s.name));
+              }
+            }
+            if (functionName === 'get_doctors' && functionResult && functionResult.doctors) {
+              console.log(`👨‍⚕️ [AI Booking] get_doctors returned ${functionResult.doctors.length} doctors`);
+              if (functionResult.doctors.length > 0) {
+                console.log(`👨‍⚕️ [AI Booking] First 5 doctor names from result:`, functionResult.doctors.slice(0, 5).map(d => d.name));
+              }
+            }
           } catch (execError) {
             console.error(`❌ [AI] Error executing function ${functionName}:`, execError);
             functionResult = { 
               error: `Lỗi khi thực thi function: ${execError.message || 'Unknown error'}` 
+            };
+          }
+
+          if (functionName === 'validate_service' && functionResult?.valid) {
+            const confirmed = this.userConfirmedServiceChoice(
+              functionResult.service?.name || '',
+              processedPrompt,
+              filteredHistory
+            );
+            if (!confirmed) {
+              console.log('🚫 [AI Booking] BLOCKED validate_service: User has not confirmed any service selection');
+              functionResult = {
+                error: 'User chưa chọn dịch vụ. Bạn PHẢI hiển thị danh sách dịch vụ (gọi get_services) và đợi user chọn cụ thể (nhập tên dịch vụ hoặc số thứ tự). KHÔNG được tự động validate dịch vụ.',
+                shouldListServices: true
+              };
+            }
+          }
+          
+          // ⭐ CỰC KỲ QUAN TRỌNG: Nếu find_doctor_by_name trả về error, PHẢI dừng lại và hiển thị error ngay
+          if (functionName === 'find_doctor_by_name' && functionResult && functionResult.error) {
+            console.log(`⚠️ [AI Booking] find_doctor_by_name returned error. Stopping further function calls and returning error directly.`);
+            
+            functionResults.push({
+              functionName,
+              functionArgs,
+              result: functionResult
+            });
+            
+            // ⭐ TRỰC TIẾP TẠO RESPONSE TỪ ERROR, KHÔNG GỌI AI NỮA
+            const errorResult = functionResult;
+            let errorResponse = errorResult.error;
+            
+            // Nếu có suggestions, thêm vào response
+            if (errorResult.suggestions && errorResult.suggestions.length > 0) {
+              errorResponse = `${errorResult.error}\n\nDưới đây là danh sách bác sĩ có sẵn:\n${errorResult.suggestions.map((d, idx) => `${idx + 1}. ${d.name}${d.specialization ? ` - ${d.specialization}` : ''}`).join('\n')}\n\nBạn muốn chọn bác sĩ nào?`;
+            }
+            
+            const updatedHistory = [
+              ...filteredHistory,
+              { role: 'user', content: processedPrompt },
+              { role: 'assistant', content: errorResponse }
+            ];
+            
+            return {
+              success: false,
+              needsMoreInfo: true,
+              response: errorResponse,
+              conversationHistory: updatedHistory
             };
           }
           
@@ -3476,29 +5186,16 @@ class AIBookingService {
                     
                     // ⭐ KIỂM TRA 2: Trong user messages - user đã đề cập tên bác sĩ
                     if (msg.role === 'user') {
-                      // Kiểm tra xem user có đề cập tên bác sĩ không (ví dụ: "bác sĩ huy", "huy", "bác sĩ thu")
-                      const doctorKeywords = ['bác sĩ', 'bs', 'doctor', 'dr'];
-                      const hasDoctorKeyword = doctorKeywords.some(keyword => content.includes(keyword));
+                      const normalizedContent = this.normalizeVietnameseText(msg.content);
+                      if (!normalizedContent) continue;
+                      const doctorKeywords = ['bac si', 'bs', 'doctor', 'dr'];
+                      const hasDoctorKeyword = doctorKeywords.some(keyword => normalizedContent.includes(keyword));
                       
-                      if (hasDoctorKeyword || /(?:^|\s)(huy|thu|hiếu|lò|thuu|nguyễn\s+huy)(?:\s|$)/i.test(content)) {
-                        // Tìm tên bác sĩ trong message
-                        const doctorMatch = msg.content.match(/(?:bác sĩ|bs|doctor|dr)\s*([a-zà-ỹ\s]+)/i) ||
-                                          msg.content.match(/\b(huy|thu|hiếu|lò|thuu|nguyễn\s+huy)\b/i);
+                      if (hasDoctorKeyword) {
+                        const doctorMatch = msg.content.match(/(?:bác sĩ|bs|doctor|dr)\s*([a-zà-ỹ\s]+)/i);
                         if (doctorMatch) {
                           console.log(`✅ [AI Booking] Found doctor mention in user message: "${doctorMatch[1]}"`);
-                          // Kiểm tra xem có assistant message sau đó xác nhận không
-                          // Nếu có assistant message sau đó, có thể đã được xác nhận
-                          for (let j = i + 1; j < history.length; j++) {
-                            const nextMsg = history[j];
-                            if (nextMsg.role === 'assistant' && nextMsg.content) {
-                              const nextContent = nextMsg.content.toLowerCase();
-                              if (nextContent.includes('bác sĩ') && 
-                                  (nextContent.includes('chọn') || nextContent.includes('đã'))) {
-                                console.log(`✅ [AI Booking] Doctor was confirmed after user mention`);
-                                return true;
-                              }
-                            }
-                          }
+                          return true;
                         }
                       }
                     }
@@ -3508,25 +5205,88 @@ class AIBookingService {
               };
               
               const extractServiceIdFromHistory = (history) => {
-                // Tìm trong assistant messages xem có xác nhận dịch vụ không
+                // ⭐ Tìm trong TẤT CẢ messages (cả user và assistant) xem có dịch vụ đã được chọn không
                 for (let i = history.length - 1; i >= 0; i--) {
                   const msg = history[i];
-                  if (msg.role === 'assistant' && msg.content) {
-                    const content = msg.content.toLowerCase();
+                  if (!msg.content) continue;
+                  const content = msg.content.toLowerCase();
+                  
+                  // ⭐ KIỂM TRA 1: Trong assistant messages - xác nhận dịch vụ
+                  if (msg.role === 'assistant') {
                     // Kiểm tra xem có xác nhận dịch vụ không (ví dụ: "Dịch vụ bạn chọn là")
-                    if (content.includes('dịch vụ bạn chọn') || content.includes('dịch vụ đã được chọn')) {
+                    if (content.includes('dịch vụ bạn chọn') || 
+                        content.includes('dịch vụ đã được chọn') ||
+                        content.includes('dịch vụ bạn muốn') ||
+                        /dịch vụ\s+[a-zà-ỹ\s]+(?:đã|được|bạn)/i.test(msg.content)) {
+                      console.log(`✅ [AI Booking] Found service confirmation in history: "${msg.content.substring(0, 100)}"`);
                       return true; // Đã có dịch vụ được xác nhận
+                    }
+                  }
+                  
+                  // ⭐ KIỂM TRA 2: Trong user messages - user đã nhập tên dịch vụ
+                  if (msg.role === 'user') {
+                    // Danh sách các dịch vụ phổ biến để check
+                    const serviceKeywords = [
+                      'khám tổng quát', 'bọc răng', 'gắn đinh trồng răng', 'làm sạch răng',
+                      'lấy tủy', 'mài răng', 'nhổ răng', 'trồng răng hàm', 'tẩy trắng răng'
+                    ];
+                    
+                    const hasServiceKeyword = serviceKeywords.some(keyword => content.includes(keyword));
+                    
+                    if (hasServiceKeyword) {
+                      console.log(`✅ [AI Booking] Found service mention in user message: "${msg.content}"`);
+                      // Kiểm tra xem có assistant message sau đó xác nhận không
+                      for (let j = i + 1; j < history.length; j++) {
+                        const nextMsg = history[j];
+                        if (nextMsg.role === 'assistant' && nextMsg.content) {
+                          const nextContent = nextMsg.content.toLowerCase();
+                          // Nếu assistant message sau đó có đề cập dịch vụ hoặc không có lỗi
+                          if (nextContent.includes('dịch vụ') || 
+                              nextContent.includes('bác sĩ') ||
+                              !nextContent.includes('chưa chọn dịch vụ')) {
+                            console.log(`✅ [AI Booking] Service was likely confirmed after user mention`);
+                            return true;
+                          }
+                        }
+                      }
                     }
                   }
                 }
                 return false;
               };
               
+              const getLatestServiceInfo = () => {
+                for (let i = functionResults.length - 1; i >= 0; i--) {
+                  const fr = functionResults[i];
+                  if (!fr || !fr.result) continue;
+                  if (fr.functionName === 'validate_service' && fr.result.service) {
+                    return fr.result.service;
+                  }
+                  if (fr.functionName === 'find_service_by_name' && fr.result.service) {
+                    return fr.result.service;
+                  }
+                }
+                return null;
+              };
+              
+              const getLatestDoctorInfo = () => {
+                for (let i = functionResults.length - 1; i >= 0; i--) {
+                  const fr = functionResults[i];
+                  if (!fr || !fr.result) continue;
+                  if (fr.functionName === 'validate_doctor' && fr.result.doctor) {
+                    return fr.result.doctor;
+                  }
+                  if (fr.functionName === 'find_doctor_by_name' && fr.result.doctor && !fr.result.multiple) {
+                    return fr.result.doctor;
+                  }
+                }
+                return null;
+              };
+              
               // ⭐ Kiểm tra xem đã có thông tin gì trong function results (lần gọi hiện tại)
               const hasServiceIdInResults = functionResults.some(fr => 
                 (fr.functionName === 'find_service_by_name' && fr.result.found && !fr.result.multiple) ||
-                (fr.functionName === 'validate_service' && fr.result.valid) ||
-                (fr.functionName === 'get_services' && fr.result.services && fr.result.services.length > 0)
+                (fr.functionName === 'validate_service' && fr.result.valid)
               );
               const hasDoctorIdInResults = functionResults.some(fr => 
                 (fr.functionName === 'find_doctor_by_name' && fr.result.found && !fr.result.multiple) ||
@@ -3544,20 +5304,92 @@ class AIBookingService {
               
               console.log(`📝 [AI Booking] Checking info: hasServiceId=${hasServiceId} (results: ${hasServiceIdInResults}, history: ${hasServiceIdInHistory}), hasDoctorId=${hasDoctorId} (results: ${hasDoctorIdInResults}, history: ${hasDoctorIdInHistory})`);
               
+              const ensureServiceSelected = async () => {
+                return this.buildServiceSelectionFollowUp(
+                  functionResults,
+                  filteredHistory,
+                  processedPrompt,
+                  patientUserId,
+                  hasServiceId
+                );
+              };
+
+              const promptForNextStep = async () => {
+                if (!hasServiceId) {
+                  return ensureServiceSelected();
+                }
+                if (!hasDoctorId) {
+                  const response = 'Dịch vụ đã được chọn. Bạn muốn chọn bác sĩ nào? (Nhập tên hoặc số thứ tự)';
+                  const updatedHistory = [
+                    ...filteredHistory,
+                    { role: 'user', content: processedPrompt },
+                    { role: 'assistant', content: response }
+                  ];
+                  return {
+                    success: false,
+                    needsMoreInfo: true,
+                    response,
+                    conversationHistory: updatedHistory
+                  };
+                }
+                const response = 'Bạn muốn đặt lịch vào ngày và giờ nào? (VD: "hôm nay 9 giờ" hoặc "ngày mai 15h30")';
+                const updatedHistory = [
+                    ...filteredHistory,
+                    { role: 'user', content: processedPrompt },
+                    { role: 'assistant', content: response }
+                ];
+                return {
+                  success: false,
+                  needsMoreInfo: true,
+                  response,
+                  conversationHistory: updatedHistory
+                };
+              };
+
+              if (!hasServiceId) {
+                const followUp = await ensureServiceSelected();
+                if (followUp) {
+                  return followUp;
+                }
+              }
+              
+              const autoSlotResponse = await this.maybeAutoDisplaySlots({
+                hasServiceId,
+                hasDoctorId,
+                functionResults,
+                filteredHistory,
+                processedPrompt,
+                patientUserId,
+                dateValidationCache,
+                getLatestServiceInfo,
+                getLatestDoctorInfo
+              });
+              if (autoSlotResponse) {
+                return autoSlotResponse;
+              }
+              
               // Tạo response dựa trên function đã gọi, nhưng CHỈ hỏi thông tin còn thiếu
               if (functionName === 'find_service_by_name' || functionName === 'validate_service') {
                 // Đã chọn dịch vụ → kiểm tra xem còn thiếu gì
+                const latestService = getLatestServiceInfo();
+                const servicePrefix = latestService
+                  ? `Dịch vụ bạn chọn là ${latestService.name}. `
+                  : 'Dịch vụ đã được chọn. ';
                 if (!hasDoctorId) {
-                  finalResponse = 'Dịch vụ đã được chọn. Bạn muốn chọn bác sĩ nào?';
+                  finalResponse = `${servicePrefix}Bạn muốn chọn bác sĩ nào?`;
                 } else {
-                  finalResponse = 'Dịch vụ đã được chọn. Bạn muốn đặt lịch vào ngày và giờ nào?';
+                  finalResponse = `${servicePrefix}Bạn muốn đặt lịch vào ngày và giờ nào?`;
                 }
               } else if (functionName === 'find_doctor_by_name' || functionName === 'validate_doctor') {
                 // Đã chọn bác sĩ → kiểm tra xem còn thiếu gì
+                const latestDoctor = getLatestDoctorInfo();
+                const doctorPrefix = latestDoctor
+                  ? `Bác sĩ bạn chọn là ${latestDoctor.name}. `
+                  : 'Bác sĩ đã được chọn. ';
                 if (!hasServiceId) {
-                  finalResponse = 'Bác sĩ đã được chọn. Bạn muốn chọn dịch vụ nào?';
+                  finalResponse = `${doctorPrefix}Bạn muốn chọn dịch vụ nào?`;
                 } else {
-                  finalResponse = 'Bác sĩ đã được chọn. Bạn muốn đặt lịch vào ngày và giờ nào?';
+                  finalResponse = `${doctorPrefix}Bạn muốn đặt lịch vào ngày và giờ nào?`;
                 }
               } else if (functionName === 'get_services') {
                 // Đã hiển thị danh sách dịch vụ → chỉ hỏi nếu chưa có serviceId
@@ -3587,7 +5419,10 @@ class AIBookingService {
                 // Đã hiển thị slots → hỏi user chọn giờ
                 finalResponse = 'Dưới đây là khung giờ khả dụng. Bạn muốn chọn giờ nào?';
               } else {
-                // Fallback: Tạo response từ kết quả function
+                const nextStep = await promptForNextStep();
+                if (nextStep) {
+                  return nextStep;
+                }
                 finalResponse = 'Đã xử lý yêu cầu của bạn. Vui lòng tiếp tục.';
               }
           } else {
@@ -3598,6 +5433,135 @@ class AIBookingService {
       }
       
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
+      
+      // ⭐ QUAN TRỌNG: Kiểm tra nếu đây là input không liên quan (off-topic) - nhắc nhở người dùng về mục đích
+      // ⭐ LƯU Ý: isOffTopicInput() đã được sửa để không coi input về thời gian là off-topic
+      if (this.isOffTopicInput(processedPrompt)) {
+        console.log(`🚫 [AI Booking] Detected off-topic input: "${processedPrompt}"`);
+        const offTopicResponse = 'Xin lỗi, mình chỉ hỗ trợ đặt lịch khám răng và các dịch vụ nha khoa thôi ạ. Bạn có cần đặt lịch khám răng không?';
+        const updatedHistory = [...filteredHistory,
+          { role: "user", content: processedPrompt },
+          { role: "assistant", content: offTopicResponse }
+        ];
+        
+        return {
+          success: true,
+          needsMoreInfo: false,
+          response: offTopicResponse,
+          conversationHistory: updatedHistory
+        };
+      }
+      
+      // ⭐ QUAN TRỌNG: Kiểm tra nếu đây là câu hỏi thông tin (informational query) - trả lời ngay, không chuyển sang đặt lịch
+      if (this.isInformationalQuery(processedPrompt)) {
+        try {
+          const todayStr = DateHelper.getTodayVN();
+          const todayDisplay = this.formatDateForDisplay(todayStr);
+          const tomorrowStr = DateHelper.getTomorrowVN();
+          const tomorrowDisplay = this.formatDateForDisplay(tomorrowStr);
+          
+          const lowerPrompt = processedPrompt.toLowerCase();
+          let infoResponse = '';
+          
+          if (lowerPrompt.includes('hôm nay')) {
+            infoResponse = `Hôm nay là ngày ${todayDisplay}.`;
+          } else if (lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai')) {
+            infoResponse = `Ngày mai là ngày ${tomorrowDisplay}.`;
+          } else {
+            infoResponse = `Hôm nay là ngày ${todayDisplay}. Ngày mai là ngày ${tomorrowDisplay}.`;
+          }
+          
+          const updatedHistory = [...filteredHistory,
+            { role: "user", content: processedPrompt },
+            { role: "assistant", content: infoResponse }
+          ];
+
+          return {
+            success: true,
+            needsMoreInfo: false,
+            response: infoResponse,
+            conversationHistory: updatedHistory
+          };
+        } catch (infoError) {
+          console.error('❌ [AI Booking] Error handling informational query:', infoError);
+          // Nếu có lỗi khi xử lý câu hỏi thông tin, trả về lỗi generic thay vì throw
+          return {
+            success: false,
+            needsMoreInfo: false,
+            response: 'Xin lỗi, mình không thể lấy thông tin ngày tháng. Vui lòng thử lại sau.',
+            conversationHistory: filteredHistory || []
+          };
+        }
+      }
+      
+      // ⭐ QUAN TRỌNG: Kiểm tra xem có đủ thông tin (service + doctor + date) để tự động hiển thị slots không
+      const serviceAlreadyChosen = this.hasServiceContext(functionResults, filteredHistory);
+      const doctorAlreadyChosen = this.hasDoctorContext(functionResults, filteredHistory);
+      
+      // ⭐ Nếu có đủ service + doctor, thử tự động hiển thị slots
+      if (serviceAlreadyChosen && doctorAlreadyChosen) {
+        const getLatestServiceInfo = () => {
+          for (let i = functionResults.length - 1; i >= 0; i--) {
+            const fr = functionResults[i];
+            if (!fr || !fr.result) continue;
+            if (fr.functionName === 'validate_service' && fr.result.service) {
+              return fr.result.service;
+            }
+            if (fr.functionName === 'find_service_by_name' && fr.result.service) {
+              return fr.result.service;
+            }
+          }
+          return null;
+        };
+        
+        const getLatestDoctorInfo = () => {
+          for (let i = functionResults.length - 1; i >= 0; i--) {
+            const fr = functionResults[i];
+            if (!fr || !fr.result) continue;
+            if (fr.functionName === 'validate_doctor' && fr.result.doctor) {
+              return fr.result.doctor;
+            }
+            if (fr.functionName === 'find_doctor_by_name' && fr.result.doctor && !fr.result.multiple) {
+              return fr.result.doctor;
+            }
+          }
+          return null;
+        };
+        
+        const autoSlotResponse = await this.maybeAutoDisplaySlots({
+          hasServiceId: serviceAlreadyChosen,
+          hasDoctorId: doctorAlreadyChosen,
+          functionResults,
+          filteredHistory,
+          processedPrompt,
+          patientUserId,
+          dateValidationCache,
+          getLatestServiceInfo,
+          getLatestDoctorInfo
+        });
+        
+        if (autoSlotResponse) {
+          return autoSlotResponse;
+        }
+      }
+      
+      const pendingServiceFollowUp = await this.buildServiceSelectionFollowUp(functionResults, filteredHistory, processedPrompt, patientUserId, serviceAlreadyChosen);
+      if (pendingServiceFollowUp) {
+        return pendingServiceFollowUp;
+      }
+      if (!serviceAlreadyChosen) {
+        const summaryResponse = 'Bạn chưa chọn đầy đủ thông tin để tiếp tục. Nếu đã chọn dịch vụ, hãy cho tôi biết bác sĩ hoặc thời gian bạn muốn đặt lịch.';
+        return {
+          success: false,
+          needsMoreInfo: true,
+          response: summaryResponse,
+          conversationHistory: [
+            ...filteredHistory,
+            { role: 'user', content: processedPrompt },
+            { role: 'assistant', content: summaryResponse }
+          ]
+        };
+      }
       
       // Check if appointment was created
       const appointmentCreated = functionResults.some(fr => 

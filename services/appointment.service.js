@@ -196,6 +196,15 @@ class AppointmentService {
     if (appointmentFor === 'self' || !appointmentFor) {
       console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId}`);
       
+      // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
+      let excludeAppointmentId = null;
+      if (reservedTimeslotId) {
+        const reservedTimeslot = await Timeslot.findById(reservedTimeslotId).select('appointmentId');
+        if (reservedTimeslot && reservedTimeslot.appointmentId) {
+          excludeAppointmentId = reservedTimeslot.appointmentId;
+        }
+      }
+      
       // Lấy tất cả appointments của bệnh nhân này (BẤT KỲ bác sĩ nào) vào cùng thời gian
       const patientConflictAppointments = await Appointment.find({
         patientUserId: patientUserId,
@@ -207,7 +216,13 @@ class AppointmentService {
       });
 
       // Kiểm tra xem có appointment nào của bệnh nhân trùng thời gian không
+      // ⭐ Loại trừ appointment liên kết với reservedTimeslotId (nếu có) để tránh conflict với chính appointment đang được tạo
       const hasConflict = patientConflictAppointments.some(apt => {
+        // ⭐ Loại trừ appointment đang được tạo (nếu có reservedTimeslotId)
+        if (excludeAppointmentId && apt._id.toString() === excludeAppointmentId.toString()) {
+          return false;
+        }
+        
         if (!apt.timeslotId) return false;
         
         const aptStartTime = new Date(apt.timeslotId.startTime);
@@ -320,6 +335,15 @@ class AppointmentService {
     const slotStart = new Date(selectedSlot.startTime);
     const slotEnd = new Date(selectedSlot.endTime);
     
+    // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
+    let excludeAppointmentId = null;
+    if (reservedTimeslotId) {
+      const reservedTimeslot = await Timeslot.findById(reservedTimeslotId).select('appointmentId');
+      if (reservedTimeslot && reservedTimeslot.appointmentId) {
+        excludeAppointmentId = reservedTimeslot.appointmentId;
+      }
+    }
+    
     // Lấy appointments của user với bác sĩ hiện tại trong cùng ngày
     const sameDayAppointments = await Appointment.find({
       patientUserId,
@@ -333,7 +357,13 @@ class AppointmentService {
     });
 
     // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
+    // ⭐ Loại trừ appointment liên kết với reservedTimeslotId (nếu có) để tránh conflict với chính appointment đang được tạo
     for (const apt of sameDayAppointments) {
+      // ⭐ Loại trừ appointment đang được tạo (nếu có reservedTimeslotId)
+      if (excludeAppointmentId && apt._id.toString() === excludeAppointmentId.toString()) {
+        continue;
+      }
+      
       if (!apt.timeslotId) continue;
 
       const aptStart = new Date(apt.timeslotId.startTime);

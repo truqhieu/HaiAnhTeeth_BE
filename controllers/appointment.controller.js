@@ -910,6 +910,86 @@ const requestReschedule = async (req, res) => {
         });
       }
 
+      // ⭐ FIX: Validate với schedule ranges để đảm bảo thời gian nằm trong working hours
+      // Extract date từ newStart để validate
+      const rescheduleDate = new Date(newStart);
+      rescheduleDate.setUTCHours(0, 0, 0, 0);
+      
+      try {
+        const scheduleRangeResult = await availableSlotService.getDoctorScheduleRange({
+          doctorUserId: appointment.doctorUserId._id.toString(),
+          serviceId: appointment.serviceId._id.toString(),
+          date: rescheduleDate
+        });
+
+        if (!scheduleRangeResult.scheduleRanges || scheduleRangeResult.scheduleRanges.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Bác sĩ không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.'
+          });
+        }
+
+        // Kiểm tra xem startTime và endTime có nằm trong schedule ranges không
+        const scheduleRanges = scheduleRangeResult.scheduleRanges;
+        const startTimeInRange = scheduleRanges.some(range => {
+          const rangeStart = new Date(range.startTime);
+          const rangeEnd = new Date(range.endTime);
+          return newStart >= rangeStart && newStart < rangeEnd;
+        });
+
+        const isInValidRange = scheduleRanges.some(range => {
+          const rangeStart = new Date(range.startTime);
+          const rangeEnd = new Date(range.endTime);
+          return newStart >= rangeStart && newEnd <= rangeEnd;
+        });
+
+        if (!startTimeInRange) {
+          const rangesText = scheduleRanges.map(r => `${r.shiftDisplay}: ${r.displayRange}`).join(', ');
+          return res.status(400).json({
+            success: false,
+            message: `Thời gian bạn chọn không nằm trong lịch làm việc của bác sĩ. Bác sĩ rảnh: ${rangesText}. Vui lòng chọn thời gian khác.`
+          });
+        }
+
+        if (!isInValidRange) {
+          // Tìm range chứa startTime để lấy thông tin
+          const containingRange = scheduleRanges.find(range => {
+            const rangeStart = new Date(range.startTime);
+            const rangeEnd = new Date(range.endTime);
+            return newStart >= rangeStart && newStart < rangeEnd;
+          });
+
+          if (containingRange) {
+            // Convert endTime sang VN time để hiển thị
+            const endTimeVN = new Date(newEnd);
+            const endHourVN = (endTimeVN.getUTCHours() + 7) % 24;
+            const endMinuteVN = endTimeVN.getUTCMinutes();
+            const endTimeDisplay = `${String(endHourVN).padStart(2, '0')}:${String(endMinuteVN).padStart(2, '0')}`;
+
+            // Convert range end sang VN time
+            const rangeEndVN = new Date(containingRange.endTime);
+            const rangeEndHourVN = (rangeEndVN.getUTCHours() + 7) % 24;
+            const rangeEndMinuteVN = rangeEndVN.getUTCMinutes();
+            const rangeEndDisplay = `${String(rangeEndHourVN).padStart(2, '0')}:${String(rangeEndMinuteVN).padStart(2, '0')}`;
+
+            return res.status(400).json({
+              success: false,
+              message: `Thời gian bạn chọn không đủ để thực hiện dịch vụ. Dịch vụ sẽ kết thúc lúc ${endTimeDisplay}, nhưng bác sĩ chỉ làm việc đến ${rangeEndDisplay} trong ${containingRange.shiftDisplay.toLowerCase()}. Vui lòng chọn thời gian sớm hơn.`
+            });
+          } else {
+            const rangesText = scheduleRanges.map(r => `${r.shiftDisplay}: ${r.displayRange}`).join(', ');
+            return res.status(400).json({
+              success: false,
+              message: `Thời gian bạn chọn không đủ để thực hiện dịch vụ. Bác sĩ rảnh: ${rangesText}. Vui lòng chọn thời gian khác.`
+            });
+          }
+        }
+      } catch (validationError) {
+        console.error('❌ Error validating schedule ranges:', validationError);
+        // Nếu có lỗi khi validate, vẫn cho phép tiếp tục (vì đã có reserved slot)
+        // Nhưng log để debug
+      }
+
       console.log('✅ Using existing reserved timeslot:', reservedTimeslot._id);
     } else {
       // ⭐ Nếu không có reservedTimeslotId, kiểm tra xem có bị trùng với lịch hẹn khác không
