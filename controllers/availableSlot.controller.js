@@ -40,8 +40,8 @@ const generateSlotsByDate = async (req, res) => {
 
     // ⭐⭐⭐ LOGIC:
     // - appointmentFor === 'self': Pass userId để EXCLUDE TẤT CẢ slots user đã đặt (bất kỳ bác sĩ nào)
-    // - appointmentFor === 'other': Pass userId để EXCLUDE CHỈ slots user đã đặt với CÙNG bác sĩ (cho phép đặt cùng thời gian với bác sĩ khác)
-    const patientUserIdForExclusion = userId || null;
+    // - appointmentFor === 'other': Không truyền userId để KHÔNG exclude người dùng
+    const patientUserIdForExclusion = appointmentForValue === 'self' && userId ? userId : null;
     console.log('🔍 [generateSlotsByDate] patientUserIdForExclusion:', patientUserIdForExclusion || 'none (will not exclude slots)');
     console.log('🔍 [generateSlotsByDate] appointmentFor:', appointmentForValue);
 

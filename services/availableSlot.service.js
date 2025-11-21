@@ -8,6 +8,21 @@ const leaveRequestService = require('./leaveRequest.service');
 
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1-minute drift between UI display and actual time
 
+const WORKING_HOUR_FIELDS = [
+  'morningStart',
+  'morningEnd',
+  'afternoonStart',
+  'afternoonEnd'
+];
+
+const hasCompleteWorkingHours = (workingHours) => {
+  if (!workingHours) return false;
+  return WORKING_HOUR_FIELDS.every(field => {
+    const value = workingHours[field];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+};
+
 class AvailableSlotService {
 
   /**
@@ -559,29 +574,31 @@ class AvailableSlotService {
       throw new Error('Dịch vụ bạn chọn hiện không khả dụng. Vui lòng chọn dịch vụ khác.');
     }
 
-    // ⭐ THÊM: Check nếu bệnh nhân hiện tại đã có appointment vào khung giờ này
-    // Chỉ check khi appointmentFor === 'self' (exclude tất cả bác sĩ)
-    // Khi appointmentFor === 'other', không check ở đây (sẽ exclude theo từng bác sĩ ở phần sau)
-    if (patientUserId && appointmentFor === 'self') {
+    let userAppointedDoctorIds = [];
+    if (patientUserId) {
+      console.log(`🔍 [${appointmentFor || 'self'}] Lấy danh sách bác sĩ mà user ${patientUserId} đã đặt vào khung giờ này`);
       const slotStartTime = new Date(startTime);
       const slotEndTime = new Date(endTime);
 
-      const existingPatientAppointment = await Appointment.findOne({
+      const userAppointmentsInSlot = await Appointment.find({
         patientUserId,
         status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
         timeslotId: { $exists: true }
       })
       .populate({
         path: 'timeslotId',
-        select: 'startTime endTime',
+        select: 'startTime endTime doctorUserId appointmentFor',
         match: {
           startTime: { $gte: slotStartTime, $lt: slotEndTime },
           endTime: { $gt: slotStartTime, $lte: slotEndTime }
         }
       });
 
-      if (existingPatientAppointment && existingPatientAppointment.timeslotId) {
-        console.log(`⚠️  Bệnh nhân ${patientUserId} đã có appointment vào khung giờ này (appointmentFor=self)`);
+      const validAppointments = userAppointmentsInSlot.filter(apt => apt.timeslotId);
+      const hasSelfAppointment = validAppointments.some(apt => apt.appointmentFor === 'self');
+
+      if (appointmentFor === 'self' && hasSelfAppointment) {
+        console.log(`⚠️  Bệnh nhân ${patientUserId} đã có appointment cho bản thân vào khung giờ này`);
         return {
           date: new Date(date),
           serviceId,
@@ -595,36 +612,11 @@ class AvailableSlotService {
           message: 'Bạn đã có appointment vào khung giờ này. Vui lòng chọn khung giờ khác.'
         };
       }
-    }
 
-    // ⭐ THÊM: Lấy danh sách bác sĩ mà user (self) đã có appointment vào khung giờ này
-    // (nếu appointmentFor === 'other', sẽ exclude các bác sĩ này khỏi danh sách)
-    let userAppointedDoctorIds = [];
-    if (patientUserId && appointmentFor === 'other') {
-      console.log(`🔍 [${appointmentFor}] Lấy danh sách bác sĩ mà user ${patientUserId} đã đặt vào khung giờ này`);
-      
-      const slotStartTime = new Date(startTime);
-      const slotEndTime = new Date(endTime);
-      
-      const userAppointmentsInSlot = await Appointment.find({
-        patientUserId,
-        status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
-        timeslotId: { $exists: true }
-      })
-      .populate({
-        path: 'timeslotId',
-        select: 'startTime endTime doctorUserId',
-        match: {
-          startTime: { $gte: slotStartTime, $lt: slotEndTime },
-          endTime: { $gt: slotStartTime, $lte: slotEndTime }
-        }
-      });
-      
-      userAppointedDoctorIds = userAppointmentsInSlot
-        .filter(apt => apt.timeslotId)
+      userAppointedDoctorIds = validAppointments
         .map(apt => apt.timeslotId.doctorUserId?.toString())
         .filter(id => id);
-      
+
       console.log(`   - Bác sĩ user đã đặt: ${userAppointedDoctorIds.length}`, userAppointedDoctorIds);
     }
 
@@ -857,12 +849,9 @@ class AvailableSlotService {
         // Bác sĩ này có khung giờ này rảnh
         console.log(`   ✅ AVAILABLE`);
         
-        // ⭐ THÊM: Nếu appointmentFor === 'other', check xem bác sĩ này có trong danh sách user đã đặt không
-        if (appointmentFor === 'other' && userAppointedDoctorIds.length > 0) {
-          if (userAppointedDoctorIds.includes(doctor._id.toString())) {
-            console.log(`   ⭐ EXCLUDE: User đã đặt với bác sĩ này vào khung giờ này`);
-            continue; // Loại bỏ bác sĩ này
-          }
+        if (userAppointedDoctorIds.includes(doctor._id.toString())) {
+          console.log(`   ⭐ EXCLUDE: User đã đặt với bác sĩ này vào khung giờ này (appointmentFor=${appointmentFor})`);
+          continue;
         }
         
         availableDoctors.push({
@@ -1005,9 +994,10 @@ class AvailableSlotService {
       status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] }
     }).populate('timeslotId', 'startTime endTime doctorUserId');
 
-    // 6.5. ⭐ Nếu có patientUserId, lấy TẤT CẢ appointments của user này (BẤT KỲ bác sĩ nào) để exclude
-    // Mục đích: Tránh đặt trùng thời gian với các bác sĩ khác nhau
-    let patientBookedSlots = [];
+    // 6.5. ⭐ Nếu có patientUserId, lấy appointments của user này để exclude
+    // Chia thành appointments đặt cho self và cho người khác
+    let userSelfBookedSlots = [];
+    let userOtherBookedSlots = [];
     if (patientUserId) {
       const patientAppointments = await Appointment.find({
         patientUserId: patientUserId,
@@ -1024,17 +1014,21 @@ class AvailableSlotService {
         }
       });
 
-      patientBookedSlots = patientAppointments
-        .filter(apt => apt.timeslotId) // Chỉ lấy appointments có timeslot hợp lệ
+      const userAppointmentsWithSlots = patientAppointments
+        .filter(apt => apt.timeslotId)
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
           end: new Date(apt.timeslotId.endTime),
-          doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null
+          doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null,
+          appointmentFor: apt.appointmentFor || 'self'
         }));
 
-      console.log(`👤 User ${patientUserId} đã đặt ${patientBookedSlots.length} slots (tất cả bác sĩ) trong ngày ${searchDate.toISOString().split('T')[0]}`);
-      patientBookedSlots.forEach((slot, idx) => {
-        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
+      userSelfBookedSlots = userAppointmentsWithSlots.filter(slot => slot.appointmentFor === 'self');
+      userOtherBookedSlots = userAppointmentsWithSlots.filter(slot => slot.appointmentFor === 'other');
+
+      console.log(`👤 User ${patientUserId} đã đặt ${userAppointmentsWithSlots.length} slots trong ngày ${searchDate.toISOString().split('T')[0]} (self: ${userSelfBookedSlots.length}, other: ${userOtherBookedSlots.length})`);
+      userAppointmentsWithSlots.forEach((slot, idx) => {
+        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'}, appointmentFor: ${slot.appointmentFor})`);
       });
     }
 
@@ -1186,50 +1180,43 @@ class AvailableSlotService {
       });
 
       // ⭐ LOGIC EXCLUDE:
-      // - appointmentFor === 'self': Exclude TẤT CẢ slots user đã đặt (bất kỳ bác sĩ nào) - tránh đặt trùng thời gian
-      // - appointmentFor === 'other': Chỉ exclude slots user đã đặt với CÙNG bác sĩ - cho phép đặt cùng thời gian với bác sĩ khác
-      if (patientUserId && patientBookedSlots.length > 0) {
+      // - appointmentFor === 'self': Exclude TẤT CẢ slots user đã đặt (appointmentFor=self) và slots với cùng bác sĩ nếu trước đó đặt cho người khác
+      // - appointmentFor === 'other': Chỉ exclude slots user đã đặt với CÙNG bác sĩ (nếu có patientUserId được truyền)
+      if (patientUserId && (userSelfBookedSlots.length > 0 || userOtherBookedSlots.length > 0)) {
         const currentDoctorId = doctorId.toString();
-        
-        // Filter slots cần exclude dựa trên appointmentFor
         let slotsToExclude = [];
+
         if (appointmentFor === 'self') {
-          // Exclude tất cả slots của user (bất kỳ bác sĩ nào)
-          slotsToExclude = patientBookedSlots;
-          console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (TẤT CẢ bác sĩ - appointmentFor=self):`);
+          const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          slotsToExclude = [...userSelfBookedSlots, ...sameDoctorOtherSlots];
+          console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (self: ${userSelfBookedSlots.length}, other doctor matches: ${sameDoctorOtherSlots.length})`);
         } else if (appointmentFor === 'other') {
-          // Chỉ exclude slots của user với CÙNG bác sĩ
-          slotsToExclude = patientBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          slotsToExclude = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
           console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (CHỈ bác sĩ ${currentDoctorId} - appointmentFor=other):`);
-          console.log(`   - Total user slots: ${patientBookedSlots.length}, Excluding: ${slotsToExclude.length} (chỉ slots với bác sĩ ${currentDoctorId})`);
+          console.log(`   - Total user slots: ${userOtherBookedSlots.length}, Excluding: ${slotsToExclude.length}`);
         }
-        
+
         if (slotsToExclude.length > 0) {
           console.log(`   - patientUserId: ${patientUserId}`);
           console.log(`   - slotsToExclude count: ${slotsToExclude.length}`);
           slotsToExclude.forEach((booked, idx) => {
             console.log(`   - Booked slot ${idx}: ${booked.start.toISOString()} - ${booked.end.toISOString()} (Doctor: ${booked.doctorId || 'N/A'})`);
           });
-          
+
           console.log(`   - availableSlots BEFORE exclude: ${availableSlots.length}`);
-          
           const slotsBeforeFilter = availableSlots.length;
           availableSlots = availableSlots.filter(slot => {
             const slotStart = new Date(slot.startTime);
             const slotEnd = new Date(slot.endTime);
-            
-            // Exclude slots trùng với appointments của bệnh nhân (theo logic appointmentFor)
-            const isBooked = slotsToExclude.some(booked => {
-              return (slotStart < booked.end && slotEnd > booked.start);
-            });
-            
+            const isBooked = slotsToExclude.some(booked => (slotStart < booked.end && slotEnd > booked.start));
+
             if (isBooked) {
               console.log(`     ❌ EXCLUDED: ${slot.startTime} - ${slot.endTime} (bệnh nhân đã có lịch với bác sĩ ${appointmentFor === 'self' ? 'bất kỳ' : currentDoctorId} vào thời gian này)`);
             }
-            
+
             return !isBooked;
           });
-          
+
           console.log(`   - availableSlots AFTER exclude: ${availableSlots.length} (removed ${slotsBeforeFilter - availableSlots.length})`);
         } else {
           console.log(`\n🟢 [Doctor ${doctor.fullName}] NOT EXCLUDING USER SLOTS (no matching slots to exclude)`);
@@ -1373,12 +1360,23 @@ class AvailableSlotService {
     const doctorProfile = await Doctor.findOne({ doctorUserId })
       .select('workingHours workingHoursUpdatedAt status')
       .lean();
+    const doctorHasWorkingHours = hasCompleteWorkingHours(doctorProfile?.workingHours);
 
     const schedules = await DoctorSchedule.find({
       doctorUserId,
       date: searchDate,
       status: 'Available'
     }).sort({ shift: 1 });
+
+    if (schedules.length === 0 && doctorHasWorkingHours) {
+      console.log(`⚠️ [getDoctorScheduleRange] No schedules for ${doctor.fullName} (${doctorUserId}) on ${searchDate.toISOString().split('T')[0]}. Auto-creating from workingHours...`);
+      await ScheduleHelper.ensureScheduleForDoctor(doctorUserId, searchDate);
+      schedules = await DoctorSchedule.find({
+        doctorUserId,
+        date: searchDate,
+        status: 'Available'
+      }).sort({ shift: 1 });
+    }
 
     if (schedules.length === 0) {
       return {
@@ -1515,6 +1513,8 @@ class AvailableSlotService {
 
     // ⭐ THÊM: Lấy appointments của user trong cùng ngày
     let userBookedSlots = [];
+    let userSelfBookedSlots = [];
+    let userOtherBookedSlots = [];
     if (patientUserId) {
       const userAppointments = await Appointment.find({
         patientUserId,
@@ -1523,7 +1523,7 @@ class AvailableSlotService {
       })
       .populate({
         path: 'timeslotId',
-        select: 'startTime endTime doctorUserId'
+        select: 'startTime endTime doctorUserId appointmentFor'
       });
 
       // Filter appointments vào ngày đang xét
@@ -1533,34 +1533,27 @@ class AvailableSlotService {
         return slotDate.toISOString().split('T')[0] === searchDate.toISOString().split('T')[0];
       });
 
-      // ⭐ LOGIC EXCLUDE:
-      // - appointmentFor === 'self': Exclude TẤT CẢ appointments của user (bất kỳ bác sĩ nào) - tránh đặt trùng thời gian
-      // - appointmentFor === 'other': Chỉ exclude appointments của user với CÙNG bác sĩ - cho phép đặt cùng thời gian với bác sĩ khác
-      const allUserBookedSlots = userAppointmentsOnDate
-        .map(apt => ({
-          start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime),
-          doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null
-        }));
-      
+      const userAppointmentsWithType = userAppointmentsOnDate.map(apt => ({
+        start: new Date(apt.timeslotId.startTime),
+        end: new Date(apt.timeslotId.endTime),
+        doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null,
+        appointmentFor: apt.appointmentFor || 'self'
+      }));
+
+      userSelfBookedSlots = userAppointmentsWithType.filter(slot => slot.appointmentFor === 'self');
+      userOtherBookedSlots = userAppointmentsWithType.filter(slot => slot.appointmentFor === 'other');
+
+      console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} appointments on ${searchDate.toISOString().split('T')[0]} (self: ${userSelfBookedSlots.length}, other: ${userOtherBookedSlots.length})`);
+      userAppointmentsWithType.forEach((slot, idx) => {
+        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'}, appointmentFor: ${slot.appointmentFor})`);
+      });
+
+      const currentDoctorId = doctorUserId.toString();
       if (appointmentFor === 'self') {
-        // Exclude tất cả appointments của user (bất kỳ bác sĩ nào)
-        userBookedSlots = allUserBookedSlots;
-        // ⭐ GIẢM LOG: Comment lại để giảm spam log
-        // console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${userBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=self) - EXCLUDING ALL DOCTORS`);
-        // userBookedSlots.forEach((slot, idx) => {
-        //   console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
-        // });
+        const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+        userBookedSlots = [...userSelfBookedSlots, ...sameDoctorOtherSlots];
       } else if (appointmentFor === 'other') {
-        // Chỉ exclude appointments của user với CÙNG bác sĩ
-        const currentDoctorId = doctorUserId.toString();
-        userBookedSlots = allUserBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
-        // ⭐ GIẢM LOG: Comment lại để giảm spam log
-        // console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} has ${allUserBookedSlots.length} appointments (TẤT CẢ bác sĩ) on this date (appointmentFor=other)`);
-        // console.log(`   - Chỉ exclude ${userBookedSlots.length} appointments với bác sĩ ${currentDoctorId} (cho phép đặt cùng thời gian với bác sĩ khác)`);
-        // userBookedSlots.forEach((slot, idx) => {
-        //   console.log(`   - Excluded slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'})`);
-        // });
+        userBookedSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
       }
     }
 
