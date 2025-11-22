@@ -1,35 +1,36 @@
-const ConsultationInformation = require('../models/consultationInformation.model')
+const Customer = require('../models/customer.model');
 const User = require('../models/user.model');
-const notificationService = require('../services/notification.service')
+const notificationService = require('../services/notification.service');
+const mailService = require('../services/email.service'); 
 
 class consultationInformationService {
 
     // Tạo form mới
     async createForm(data){
         try {
-            const {name, phone, email} = data;
+            const { fullName, phoneNumber, email } = data;
 
-            //Validate name
-            if(!name || typeof name !== 'string' || name.trim().length === 0){
+            // ===== Validate name =====
+            if (!fullName || typeof fullName !== 'string' || fullName.trim().length === 0) {
                 throw new Error('Họ tên không được để trống');
             }
 
-            const cleanName = name.trim();
+            const cleanName = fullName.trim();
 
-            if(!/^[a-zA-ZÀ-ỹ\s]+$/.test(cleanName)){
+            if (!/^[a-zA-ZÀ-ỹ\s]+$/.test(cleanName)) {
                 throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
             }
 
-            if(cleanName.length < 2){
-                throw new Error('Độ dài họ tên không hợp lệ (tối thiểu 2 ký tự)')
+            if (cleanName.length < 2) {
+                throw new Error('Độ dài họ tên không hợp lệ (tối thiểu 2 ký tự)');
             }
 
-            // Validate phoneNumber
-            if (!phone || typeof phone !== 'string' || phone.trim().length === 0) {
+            // ===== Validate phoneNumber =====
+            if (!phoneNumber || typeof phoneNumber !== 'string' || phoneNumber.trim().length === 0) {
                 throw new Error('Số điện thoại không được để trống');
             }
 
-            const cleanPhone = phone.trim();
+            const cleanPhone = phoneNumber.trim();
 
             if (!/^[0-9]+$/.test(cleanPhone)) {
                 throw new Error('Số điện thoại chỉ được chứa chữ số');
@@ -43,7 +44,7 @@ class consultationInformationService {
                 throw new Error('Số điện thoại phải có đủ 10 số');
             }
 
-            // Validate email
+            // ===== Validate email =====
             if (!email || typeof email !== 'string' || email.trim().length === 0) {
                 throw new Error('Email không được để trống');
             }
@@ -54,17 +55,39 @@ class consultationInformationService {
                 throw new Error('Email không đúng định dạng');
             }
 
-            // const checkEmail = await User.findOne({ email });
-            // if (checkEmail) {
-            //     throw new Error('Email đã tồn tại!');
-            // }
-
-            const newForm = new ConsultationInformation({name: cleanName, phone: cleanPhone, email: cleanEmail})
+            // ===== Lưu thông tin khách hàng =====
+            const newForm = new Customer({
+                fullName: cleanName,
+                phoneNumber: cleanPhone,
+                email: cleanEmail
+            });
             await newForm.save();
 
-            // Thông báo cho lễ tân
-            const listStaff = await User.find({role : "Staff"})
+            // ===== Gửi email cho staff =====
             try {
+                // Lấy danh sách staff (hoặc bạn có thể findOne nếu chỉ gửi cho 1 người)
+                const listStaff = await User.find({ role: 'Staff' });
+
+                await Promise.all(
+                    listStaff
+                        .filter(s => !!s.email)
+                        .map(s =>
+                            mailService.sendConsultationFormStaffEmail(s.email, {
+                                fullName: cleanName,
+                                phoneNumber: cleanPhone,
+                                email: cleanEmail,
+                                clinicName: 'Phòng khám Hải An',
+                            })
+                        )
+                );
+            } catch (mailError) {
+                console.warn('⚠️ Lỗi gửi email tư vấn cho staff:', mailError.message);
+            }
+
+            // Nếu muốn vẫn giữ notification trong hệ thống, bật lại đoạn này
+            /*
+            try {
+                const listStaff = await User.find({ role: 'Staff' });
                 await Promise.all(
                     listStaff.map(s =>
                         notificationService.createNotification({
@@ -72,7 +95,7 @@ class consultationInformationService {
                             createdByUserId: null,
                             title: 'Tư vấn',
                             message: `Đã có khách hàng gửi thông tin tư vấn`,
-                            relatedAppointmentId: null, 
+                            relatedAppointmentId: null,
                             link: null,
                         })
                     )
@@ -80,38 +103,15 @@ class consultationInformationService {
             } catch (notifError) {
                 console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
             }
+            */
 
             return {
-                id : newForm._id,
-                name : newForm.name,
-                phone : newForm.phone,
-                email : newForm.email,
-            }
+                id: newForm._id,
+                fullName: newForm.fullName,
+                phoneNumber: newForm.phoneNumber,
+                email: newForm.email,
+            };
 
-        } catch (error) {
-            throw error;
-        }
-    }
-
-    // Lấy tất cả form
-    async listAllForms(){
-        try {
-            const forms = await ConsultationInformation.find().sort({createdAt: -1}); 
-            return forms;
-        } catch (error) {
-            throw error;
-        }
-    }
-
-    // Xóa form theo id
-    async deleteForm(formId){
-        try {
-            const form = await ConsultationInformation.findById(formId);
-            if(!form){
-                throw new Error('Form không tồn tại');
-            }
-            await ConsultationInformation.findByIdAndDelete(formId);
-            return { message: 'Xóa form thành công' };
         } catch (error) {
             throw error;
         }

@@ -1034,6 +1034,94 @@ ${clinicName}
 };
 
 
+// helpers/emailTemplate.js
+
+const getConsultationFormStaffEmailTemplate = (data) => {
+  const {
+    fullName,
+    phoneNumber,
+    email,
+    clinicName = 'Phòng khám Hải An',
+    emailStaff, // email staff lấy từ DB truyền vào
+  } = data;
+
+  const createdAt = new Date().toLocaleString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour12: false,
+  });
+
+  return {
+    subject: `[TƯ VẤN] Khách hàng mới gửi form - ${fullName}`,
+    text: `
+Có một khách hàng mới vừa gửi form tư vấn.
+
+THÔNG TIN KHÁCH HÀNG:
+- Họ tên: ${fullName}
+- Số điện thoại: ${phoneNumber}
+- Email: ${email}
+
+THÔNG TIN HỆ THỐNG:
+- Thời điểm gửi form: ${createdAt}
+- Gửi tới: ${emailStaff || 'Nhân viên phụ trách'}
+- Cơ sở: ${clinicName}
+
+Vui lòng liên hệ khách sớm để tư vấn & chốt lịch.
+    `.trim(),
+    html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; padding: 20px; color: #333; }
+    .email-container { max-width: 650px; margin: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
+    .email-header { background: #17a2b8; color: white; padding: 20px; text-align: center; font-size: 20px; font-weight: bold; }
+    .email-body { padding: 25px; font-size: 15px; line-height: 1.6; }
+    .section-title { font-weight: 600; margin-top: 15px; margin-bottom: 8px; text-transform: uppercase; font-size: 13px; color: #555; }
+    .info-box { background: #f8f9fa; padding: 12px 15px; border-radius: 6px; margin-bottom: 12px; }
+    .info-row { margin-bottom: 4px; }
+    .label { font-weight: 600; }
+    .email-footer { background: #f1f1f1; padding: 12px 15px; text-align: center; font-size: 13px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      Khách hàng mới gửi form tư vấn
+    </div>
+    <div class="email-body">
+      <p>Chào đội ngũ <strong>${clinicName}</strong>,</p>
+      <p>Có một <strong>khách hàng mới</strong> vừa gửi thông tin tư vấn.</p>
+
+      <div class="section-title">Thông tin khách hàng</div>
+      <div class="info-box">
+        <div class="info-row"><span class="label">Họ tên:</span> ${fullName}</div>
+        <div class="info-row"><span class="label">Số điện thoại:</span> ${phoneNumber}</div>
+        <div class="info-row"><span class="label">Email:</span> ${email}</div>
+      </div>
+
+      <div class="section-title">Thông tin hệ thống</div>
+      <div class="info-box">
+        <div class="info-row"><span class="label">Thời điểm gửi form:</span> ${createdAt}</div>
+        <div class="info-row"><span class="label">Cơ sở:</span> ${clinicName}</div>
+        ${emailStaff ? `<div class="info-row"><span class="label">Gửi tới:</span> ${emailStaff}</div>` : ''}
+      </div>
+
+      <p><strong>Gợi ý xử lý:</strong> Vui lòng liên hệ khách sớm để tư vấn chi tiết và đề xuất lịch hẹn phù hợp.</p>
+    </div>
+    <div class="email-footer">
+      Email tự động gửi tới staff${emailStaff ? ` (${emailStaff})` : ''}.
+    </div>
+  </div>
+</body>
+</html>
+    `.trim(),
+  };
+};
+
+
+
+
 
 module.exports = {
   createTransporter,
@@ -1044,7 +1132,8 @@ module.exports = {
   getAppointmentCancelledEmailTemplate,
   getRequestApprovedEmailTemplate,
   getRequestRejectedEmailTemplate,
-  getDoctorAssignedEmailTemplate
+  getDoctorAssignedEmailTemplate,
+  getConsultationFormStaffEmailTemplate
 };
 
 // ⭐ Template: Yêu cầu đã được duyệt (Đổi lịch/Đổi bác sĩ)
