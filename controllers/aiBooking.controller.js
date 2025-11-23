@@ -1,4 +1,8 @@
 const aiBookingService = require('../services/aiBooking.service');
+const aiBookingLangchainService = require('../services/aiBookingLangchain.service');
+
+// Toggle to use LangChain service (set to true to use new implementation)
+const USE_LANGCHAIN = process.env.USE_LANGCHAIN === 'true' || true;
 
 /**
  * POST /api/appointments/ai-create
@@ -36,9 +40,13 @@ const createAppointmentByAI = async (req, res) => {
     console.log('🤖 [AI Booking] Patient ID:', patientUserId);
     console.log('🤖 [AI Booking] Appointment for:', appointmentFor || 'self');
     console.log('🤖 [AI Booking] Conversation history:', conversationHistory ? `${conversationHistory.length} messages` : 'None');
+    console.log('🤖 [AI Booking] Using LangChain:', USE_LANGCHAIN);
 
+    // Chọn service để sử dụng (LangChain hoặc original)
+    const service = USE_LANGCHAIN ? aiBookingLangchainService : aiBookingService;
+    
     // Gọi AI service để tạo appointment
-    const result = await aiBookingService.createAppointmentFromAI(
+    const result = await service.createAppointmentFromAI(
       prompt.trim(),
       patientUserId,
       appointmentFor || 'self',

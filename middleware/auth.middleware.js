@@ -7,11 +7,11 @@ const verifyToken = (req, res, next) => {
     // Lấy token từ header
     const authHeader = req.headers.authorization;
     
-    console.log('🔍 DEBUG verifyToken middleware:');
-    console.log('   - URL:', req.originalUrl);
-    console.log('   - Method:', req.method);
-    console.log('   - Authorization header:', authHeader ? 'EXISTS' : 'MISSING');
-    console.log('   - All headers:', JSON.stringify(req.headers, null, 2));
+    // console.log('🔍 DEBUG verifyToken middleware:');
+    // console.log('   - URL:', req.originalUrl);
+    // console.log('   - Method:', req.method);
+    // console.log('   - Authorization header:', authHeader ? 'EXISTS' : 'MISSING');
+    // console.log('   - All headers:', JSON.stringify(req.headers, null, 2));
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       console.error('❌ No valid Authorization header found');
