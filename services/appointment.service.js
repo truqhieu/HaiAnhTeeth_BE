@@ -900,8 +900,8 @@ class AppointmentService {
 
     // Validate cơ bản
     if (!staffUserId) throw new Error('Thiếu thông tin người tạo (staffUserId)');
-    if (!doctorUserId || !serviceId || !doctorScheduleId || !selectedSlot) {
-      throw new Error('Vui lòng cung cấp đủ: dịch vụ, bác sĩ, lịch làm việc và khung giờ');
+    if (!doctorUserId || !serviceId || !selectedSlot) {
+      throw new Error('Vui lòng cung cấp đủ: dịch vụ, bác sĩ và khung giờ');
     }
     if (!selectedSlot.startTime || !selectedSlot.endTime) {
       throw new Error('Khung giờ không hợp lệ');
@@ -909,6 +909,14 @@ class AppointmentService {
     if (!fullName || !email || !phoneNumber) {
       throw new Error('Vui lòng nhập đầy đủ họ tên, email và số điện thoại của bệnh nhân');
     }
+
+    const requestedStartTime = new Date(selectedSlot.startTime);
+    if (Number.isNaN(requestedStartTime.getTime())) {
+      throw new Error('Thời gian khung giờ không hợp lệ');
+    }
+
+    const scheduleDate = new Date(requestedStartTime);
+    scheduleDate.setUTCHours(0, 0, 0, 0);
 
     // Kiểm tra service
     const service = await Service.findById(serviceId);
@@ -920,18 +928,52 @@ class AppointmentService {
     // Type dựa vào category (mặc định Examination nếu không rõ)
     const appointmentType = service.category === 'Consultation' ? 'Consultation' : 'Examination';
 
-    // Validate doctor schedule
-    const schedule = await DoctorSchedule.findById(doctorScheduleId);
-    if (!schedule) throw new Error('Lịch làm việc của bác sĩ không tồn tại');
-
     // Validate doctor
     const doctor = await User.findById(doctorUserId);
     if (!doctor || doctor.role !== 'Doctor') throw new Error('Bác sĩ không hợp lệ');
     if (doctor.status !== 'Active') throw new Error('Bác sĩ hiện không khả dụng');
 
+    const validationResult = await availableSlotService.validateAppointmentTime({
+      doctorUserId,
+      serviceId,
+      date: scheduleDate,
+      startTime: requestedStartTime
+    });
+
+    const slotStartTime = new Date(validationResult.startTime);
+    const slotEndTime = new Date(validationResult.endTime);
+
+    const startHourVN = (slotStartTime.getUTCHours() + 7 + 24) % 24;
+    const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
+
+    let schedule = null;
+    if (doctorScheduleId) {
+      const requestedSchedule = await DoctorSchedule.findById(doctorScheduleId);
+      if (
+        requestedSchedule &&
+        requestedSchedule.status === 'Available' &&
+        requestedSchedule.doctorUserId.toString() === doctorUserId.toString() &&
+        requestedSchedule.date.getTime() === scheduleDate.getTime() &&
+        requestedSchedule.shift === shift
+      ) {
+        schedule = requestedSchedule;
+      }
+    }
+
+    if (!schedule) {
+      schedule = await DoctorSchedule.findOne({
+        doctorUserId,
+        date: scheduleDate,
+        shift,
+        status: 'Available'
+      });
+    }
+
+    if (!schedule) {
+      throw new Error('Bác sĩ bạn chọn chưa có lịch làm việc phù hợp trong ngày này. Vui lòng chọn ca khác hoặc liên hệ quản lý.');
+    }
+
     // Validate not in the past
-    const slotStartTime = new Date(selectedSlot.startTime);
-    const slotEndTime = new Date(selectedSlot.endTime);
     if (slotStartTime.getTime() < Date.now()) {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }

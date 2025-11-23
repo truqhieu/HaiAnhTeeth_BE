@@ -219,8 +219,8 @@ const createWalkInAppointment = async (req, res) => {
     if (!fullName || !email || !phoneNumber) {
       return res.status(400).json({ success: false, message: 'Vui lòng nhập họ tên, email, số điện thoại' });
     }
-    if (!serviceId || !doctorUserId || !doctorScheduleId || !selectedSlot?.startTime || !selectedSlot?.endTime) {
-      return res.status(400).json({ success: false, message: 'Thiếu thông tin dịch vụ/bác sĩ/lịch làm việc/khung giờ' });
+    if (!serviceId || !doctorUserId || !selectedSlot?.startTime || !selectedSlot?.endTime) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin dịch vụ/bác sĩ/khung giờ' });
     }
 
     const result = await appointmentService.createWalkInAppointment({
@@ -230,7 +230,7 @@ const createWalkInAppointment = async (req, res) => {
       phoneNumber,
       serviceId,
       doctorUserId,
-      doctorScheduleId,
+      doctorScheduleId: doctorScheduleId || null,
       selectedSlot,
       notes
     });

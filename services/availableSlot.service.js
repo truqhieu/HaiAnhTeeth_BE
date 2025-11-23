@@ -1356,6 +1356,9 @@ class AvailableSlotService {
     const searchDate = new Date(date);
     searchDate.setUTCHours(0, 0, 0, 0);
 
+    // ⭐ Auto-refresh schedules giống patient booking
+    await ScheduleHelper.updateExpiredSchedules();
+    await ScheduleHelper.ensureSchedulesForDate(searchDate);
 
     const doctorProfile = await Doctor.findOne({ doctorUserId })
       .select('workingHours workingHoursUpdatedAt status')

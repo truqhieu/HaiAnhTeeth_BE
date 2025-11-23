@@ -3781,6 +3781,32 @@ class AIBookingService {
     return hasDoctorInResults;
   }
 
+  getHistoryAfterBookingConfirmation(history = []) {
+    if (!Array.isArray(history) || history.length === 0) {
+      return history;
+    }
+
+    const confirmationPatterns = [
+      /lịch hẹn/i,
+      /đã được xác nhận/i,
+      /xác nhận/i,
+      /đặt lịch thành công/i
+    ];
+
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (!msg || msg.role !== 'assistant' || typeof msg.content !== 'string') {
+        continue;
+      }
+      const lowerContent = msg.content.toLowerCase();
+      if (confirmationPatterns.some(pattern => pattern.test(lowerContent))) {
+        return history.slice(i + 1);
+      }
+    }
+
+    return history;
+  }
+
   extractDoctorMentionsFromMessage(message) {
     if (!message || typeof message !== 'string') {
       return [];
@@ -4396,11 +4422,13 @@ class AIBookingService {
         return null;
       }
 
+      const serviceName = latestService.name || latestService.serviceName || latestService.displayName || 'Dịch vụ';
+      const doctorName = latestDoctor.name || latestDoctor.fullName || 'Bác sĩ';
       const dateDisplay = this.formatDateForDisplay(appointmentDate);
       const responseMessage = this.formatAvailableSlotsMessage(
         scheduleRangeResult,
-        latestService.name || latestService.serviceName || 'Dịch vụ',
-        latestDoctor.name || latestDoctor.fullName || 'Bác sĩ',
+        serviceName,
+        doctorName,
         dateDisplay
       );
 
@@ -4410,17 +4438,57 @@ class AIBookingService {
         { role: 'assistant', content: responseMessage }
       ];
 
-      return {
+      const bookingContext = {
+        type: 'slotsDisplayed',
+        serviceId: latestService.id || latestService._id?.toString(),
+        serviceName,
+        doctorId: latestDoctor.id || latestDoctor._id?.toString(),
+        doctorName,
+        date: appointmentDate,
+        dateDisplay
+      };
+
+      return this.wrapResponseWithContext({
         success: false,
         needsMoreInfo: true,
         response: responseMessage,
-        conversationHistory: updatedHistory
-      };
+        conversationHistory: updatedHistory,
+        bookingContext
+      }, bookingContext);
     } catch (error) {
       console.error('❌ [AI Booking] Auto display slots error:', error);
     }
 
     return null;
+  }
+
+  /**
+   * Build hidden assistant messages that describe preserved booking context
+   */
+  buildContextMessages(conversationContext = {}) {
+    const bookingContext = conversationContext?.bookingContext;
+    if (!bookingContext) {
+      return [];
+    }
+
+    if (bookingContext.type === 'slotsDisplayed') {
+      const dateDisplay = bookingContext.dateDisplay || this.formatDateForDisplay(bookingContext.date);
+      const serviceName = bookingContext.serviceName || 'dịch vụ';
+      const doctorName = bookingContext.doctorName || 'bác sĩ';
+      return [
+        {
+          role: 'assistant',
+          content: `CONTEXT: Đã hiển thị khung giờ cho ${serviceName} với ${doctorName} vào ngày ${dateDisplay}. Đang chờ user chọn giờ trong những khung giờ này.`
+        }
+      ];
+    }
+
+    return [];
+  }
+
+  wrapResponseWithContext(payload = {}, bookingContext = null) {
+    const context = payload.bookingContext || bookingContext || null;
+    return { ...payload, bookingContext: context };
   }
 
   formatHistoryForDateValidation(history, limit = 6) {
@@ -4569,7 +4637,7 @@ class AIBookingService {
     return normalizedResult;
   }
 
-  async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
+  async chatWithAI(userPrompt, patientUserId, conversationHistory = [], conversationContext = {}) {
     let filteredHistory = Array.isArray(conversationHistory) ? [...conversationHistory] : [];
     let processedPrompt = typeof userPrompt === 'string' ? userPrompt : '';
     try {
@@ -4580,6 +4648,16 @@ class AIBookingService {
       
       // ⭐ Filter conversation history để loại bỏ thông tin không hợp lệ
       filteredHistory = this.filterConversationHistory(conversationHistory);
+      
+      // ⭐ Hoàn thiện context đã lưu từ request trước
+      const contextMessages = this.buildContextMessages(conversationContext);
+      if (contextMessages.length > 0) {
+        filteredHistory = [...contextMessages, ...filteredHistory];
+        console.log(`🧠 [AI Booking] Injected ${contextMessages.length} context message(s) into history.`);
+      }
+      
+      const requestBookingContext = conversationContext?.bookingContext || null;
+      const wrapResponse = (payload = {}) => this.wrapResponseWithContext(payload, requestBookingContext);
       
       // ⭐ Log để debug
       console.log(`📝 [AI Booking] Conversation history: ${conversationHistory.length} messages (filtered: ${filteredHistory.length})`);
@@ -4797,13 +4875,6 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         for (const toolCall of assistantMessage.tool_calls) {
           const functionName = toolCall.function.name;
           let functionArgs;
-
-          const appointmentPreviouslyCreated = functionResults.some(fr => fr.functionName === 'create_appointment' && fr.result?.success);
-          if (functionName === 'get_available_slots' && appointmentPreviouslyCreated) {
-            console.log('⚠️ [AI Booking] Skipping get_available_slots after successful appointment creation');
-            stopAfterIteration = true;
-            break;
-          }
           
           // ⭐ LOGGING: Log tất cả function calls để debug
           console.log(`🔧 [AI Booking] Iteration ${iteration}: AI wants to call function: ${functionName}`);
@@ -5174,8 +5245,19 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
           });
           
           if (functionName === 'create_appointment' && functionResult?.success) {
-            stopAfterIteration = true;
-            break;
+            const finalResponse = this.buildAppointmentConfirmationMessage(functionResult);
+            const updatedHistory = [
+              ...filteredHistory,
+              { role: "user", content: processedPrompt },
+              { role: "assistant", content: finalResponse }
+            ];
+
+            return {
+              success: true,
+              appointment: functionResult,
+              response: finalResponse,
+              conversationHistory: updatedHistory
+            };
           }
         }
         
@@ -5452,9 +5534,9 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
                 getLatestServiceInfo,
                 getLatestDoctorInfo
               });
-              if (autoSlotResponse) {
-                return autoSlotResponse;
-              }
+        if (autoSlotResponse) {
+          return wrapResponse(autoSlotResponse);
+        }
               
               // Tạo response dựa trên function đã gọi, nhưng CHỈ hỏi thông tin còn thiếu
               if (functionName === 'find_service_by_name' || functionName === 'validate_service') {
@@ -5509,7 +5591,7 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
               } else {
                 const nextStep = await promptForNextStep();
                 if (nextStep) {
-                  return nextStep;
+                  return wrapResponse(nextStep);
                 }
                 finalResponse = 'Đã xử lý yêu cầu của bạn. Vui lòng tiếp tục.';
               }
@@ -5532,12 +5614,12 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
           { role: "assistant", content: offTopicResponse }
         ];
         
-        return {
+        return wrapResponse({
           success: true,
           needsMoreInfo: false,
           response: offTopicResponse,
           conversationHistory: updatedHistory
-        };
+        });
       }
       
       // ⭐ QUAN TRỌNG: Kiểm tra nếu đây là câu hỏi thông tin (informational query) - trả lời ngay, không chuyển sang đặt lịch
@@ -5564,35 +5646,32 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
             { role: "assistant", content: infoResponse }
           ];
 
-          return {
+          return wrapResponse({
             success: true,
             needsMoreInfo: false,
             response: infoResponse,
             conversationHistory: updatedHistory
-          };
+          });
         } catch (infoError) {
           console.error('❌ [AI Booking] Error handling informational query:', infoError);
           // Nếu có lỗi khi xử lý câu hỏi thông tin, trả về lỗi generic thay vì throw
-          return {
+          return wrapResponse({
             success: false,
             needsMoreInfo: false,
             response: 'Xin lỗi, mình không thể lấy thông tin ngày tháng. Vui lòng thử lại sau.',
             conversationHistory: filteredHistory || []
-          };
+          });
         }
       }
       
       // ⭐ QUAN TRỌNG: Kiểm tra xem có đủ thông tin (service + doctor + date) để tự động hiển thị slots không
-      const serviceAlreadyChosen = this.hasServiceContext(functionResults, filteredHistory);
-      const doctorAlreadyChosen = this.hasDoctorContext(functionResults, filteredHistory);
-
-      const appointmentCreated = functionResults.some(fr => 
-        fr.functionName === 'create_appointment' && fr.result?.success
-      );
-      console.log(`🔍 [AI Booking] appointmentCreated=${appointmentCreated}`);
+      const relevantHistory = this.getHistoryAfterBookingConfirmation(filteredHistory);
+      console.log('🔍 [AI Booking] relevantHistory length after trimming for confirmation:', relevantHistory.length);
+      const serviceAlreadyChosen = this.hasServiceContext(functionResults, relevantHistory);
+      const doctorAlreadyChosen = this.hasDoctorContext(functionResults, relevantHistory);
       
       // ⭐ Nếu có đủ service + doctor, thử tự động hiển thị slots
-      if (!appointmentCreated && serviceAlreadyChosen && doctorAlreadyChosen) {
+      if (serviceAlreadyChosen && doctorAlreadyChosen) {
         const getLatestServiceInfo = () => {
           for (let i = functionResults.length - 1; i >= 0; i--) {
             const fr = functionResults[i];
@@ -5638,15 +5717,13 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         }
       }
       
-      if (!appointmentCreated) {
-        const pendingServiceFollowUp = await this.buildServiceSelectionFollowUp(functionResults, filteredHistory, processedPrompt, patientUserId, serviceAlreadyChosen);
-        if (pendingServiceFollowUp) {
-          return pendingServiceFollowUp;
-        }
+      const pendingServiceFollowUp = await this.buildServiceSelectionFollowUp(functionResults, relevantHistory, processedPrompt, patientUserId, serviceAlreadyChosen);
+      if (pendingServiceFollowUp) {
+        return wrapResponse(pendingServiceFollowUp);
       }
       if (!serviceAlreadyChosen) {
         const summaryResponse = 'Bạn chưa chọn đầy đủ thông tin để tiếp tục. Nếu đã chọn dịch vụ, hãy cho tôi biết bác sĩ hoặc thời gian bạn muốn đặt lịch.';
-        return {
+        return wrapResponse({
           success: false,
           needsMoreInfo: true,
           response: summaryResponse,
@@ -5655,8 +5732,13 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
             { role: 'user', content: processedPrompt },
             { role: 'assistant', content: summaryResponse }
           ]
-        };
+        });
       }
+      
+      // Check if appointment was created
+      const appointmentCreated = functionResults.some(fr => 
+        fr.functionName === 'create_appointment' && fr.result.success
+      );
       
       if (appointmentCreated) {
         const appointmentResult = functionResults.find(fr => fr.functionName === 'create_appointment').result;
@@ -5666,12 +5748,12 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
           { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
           { role: "assistant", content: finalResponse }
         ];
-        return {
+        return wrapResponse({
           success: true,
           appointment: appointmentResult,
           response: finalResponse,
           conversationHistory: updatedHistory
-        };
+        });
       }
       
       // Continuing conversation
@@ -5680,36 +5762,35 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         { role: "user", content: processedPrompt }, // ⭐ Dùng processed prompt
         { role: "assistant", content: finalResponse }
       ];
-      console.log('⚠️ [AI Booking] Returning needsMoreInfo after loop; finalResponse=', finalResponse);
-      return {
+      return wrapResponse({
         success: false,
         needsMoreInfo: true,
         response: finalResponse,
         conversationHistory: updatedHistory
-      };
+      });
       
     } catch (error) {
       console.error('❌ [AI Function Calling] Error:', error);
       // Trả về response lỗi thay vì throw để frontend có thể xử lý
       // ⭐ Giữ lại filteredHistory để không mất thông tin đã có
-      return {
+      return wrapResponse({
         success: false,
         response: 'Xin lỗi, mình gặp lỗi khi xử lý yêu cầu của bạn. Vui lòng thử lại sau.',
         conversationHistory: filteredHistory || [],
         needsMoreInfo: false
-      };
+      });
     }
   }
 
   /**
    * Tạo appointment từ AI với Function Calling (mới)
    */
-  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
+  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = [], conversationContext = {}) {
     try {
       // ⚡ Tối ưu tốc độ: bỏ logging không cần thiết
       
       // 🆕 Sử dụng chatWithAI với Function Calling - AI HOÀN TOÀN TỰ DO!
-      const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory);
+      const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory, conversationContext);
       
       // Trả về kết quả đơn giản
       return {
@@ -5717,7 +5798,10 @@ Luôn giữ định dạng DD/MM/YYYY khi nhắc lại, giải thích hoặc xá
         appointment: result.appointment || null,
         needsMoreInfo: result.needsMoreInfo || false,
         followUpQuestion: result.response,
-        parsedData: { conversationHistory: result.conversationHistory }
+        parsedData: {
+          conversationHistory: result.conversationHistory,
+          bookingContext: result.bookingContext || conversationContext?.bookingContext || null
+        }
       };
       
     } catch (error) {

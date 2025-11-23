@@ -12,7 +12,7 @@ const createAppointmentByAI = async (req, res) => {
     console.log('📋 User:', JSON.stringify(req.user || null, null, 2));
     console.log('📋 Origin:', req.headers.origin || 'No origin header');
     
-    const { prompt, appointmentFor, conversationHistory } = req.body;
+    const { prompt, appointmentFor, conversationHistory, conversationContext } = req.body;
     const patientUserId = req.user?.userId;
 
     if (!patientUserId) {
@@ -42,7 +42,8 @@ const createAppointmentByAI = async (req, res) => {
       prompt.trim(),
       patientUserId,
       appointmentFor || 'self',
-      conversationHistory || [] // Pass conversation history
+      conversationHistory || [], // Pass conversation history
+      conversationContext || {}
     );
 
     // Check if appointment was successfully created
