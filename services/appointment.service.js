@@ -3218,31 +3218,11 @@ async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpN
   console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
   console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
 
-  const dateStr = startTime.toISOString().split('T')[0];
-  console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
-  
-  const { doctorSchedule, scheduleInfo } = await this._getDoctorScheduleForFollowUp(
-    doctorUserId,
-    finalServiceId,
-    dateStr,
-    'self',
-    startTime
-  );
-  
-  console.log('🔍 [createFollowUpAppointment] scheduleInfo:', scheduleInfo);
+  const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(doctorUserId, startTime);
 
   if (!doctorSchedule) {
-    throw new Error('Không tìm thấy lịch làm việc của bác sĩ cho thời gian tái khám');
+    throw new Error('Bác sĩ không có lịch làm việc vào thời gian đã chọn');
   }
-
-  console.log('✅ [createFollowUpAppointment] doctorSchedule validated:', {
-    scheduleId: doctorSchedule._id,
-    shift: doctorSchedule.shift,
-    startTime: scheduleInfo?.startTime || null,
-    endTime: scheduleInfo?.endTime || null
-  });
-
-  // ⭐ FIX: Extract date từ startTime để check appointments trong cùng ngày
   const startTimeDate = new Date(startTime);
   startTimeDate.setUTCHours(0, 0, 0, 0);
   const startTimeDateEnd = new Date(startTimeDate);
@@ -3851,8 +3831,10 @@ async getServiceRevenueReport(startDate, endDate) {
 
   console.log('📌 [getServiceRevenueReport] Range:', start, end);
 
-
-  // ====== 2. VISIT TICKET (Examination) ======
+  // ====== 2. VISIT TICKET (Examination / Consultation) ======
+  // Ở đây dùng giá trong VisitTicket:
+  // - service.price  => giá gốc lúc khám
+  // - service.total  => giá sau giảm (thanh toán)
   const ticketAgg = await VisitTicket.aggregate([
     {
       $addFields: {
@@ -3866,42 +3848,38 @@ async getServiceRevenueReport(startDate, endDate) {
     },
     { $unwind: "$service" },
     {
-      $group: {
-        _id: "$service.serviceId",
-        price: { $first: "$service.price" },
-        count: { $sum: 1 }
-      }
-    },
-    {
-      $lookup: {
-        from: "services",
-        localField: "_id",
-        foreignField: "_id",
-        as: "serviceInfo"
-      }
-    },
-    { $unwind: "$serviceInfo" },
-    {
       $project: {
-        serviceId: "$_id",
-        serviceName: "$serviceInfo.serviceName",
+        serviceId: "$service.serviceId",
+        serviceName: "$service.serviceName",
         category: {
           $switch: {
             branches: [
-              { case: { $eq: ["$serviceInfo.category", "Examination"] }, then: "Khám trực tiếp" },
-              { case: { $eq: ["$serviceInfo.category", "Consultation"] }, then: "Tư vấn online" }
+              { case: { $eq: ["$service.category", "Examination"] }, then: "Khám trực tiếp" },
+              { case: { $eq: ["$service.category", "Consultation"] }, then: "Tư vấn online" }
             ],
             default: "—"
           }
         },
-        price: 1,
-        count: 1
+        originalUnitPrice: "$service.price",   // giá gốc 1 lần
+        paidUnitPrice: "$service.total"        // giá đã giảm 1 lần
+      }
+    },
+    {
+      $group: {
+        _id: "$serviceId",
+        serviceName: { $first: "$serviceName" },
+        category: { $first: "$category" },
+        // tổng doanh thu theo giá gốc (chưa giảm)
+        totalOriginal: { $sum: "$originalUnitPrice" },
+        // tổng doanh thu thực thu (sau giảm)
+        totalPaid: { $sum: "$paidUnitPrice" },
+        count: { $sum: 1 }
       }
     }
   ]);
 
-
-  // ====== 3. CONSULTATION COMPLETED ======
+  // ====== 3. CONSULTATION COMPLETED (Appointment) ======
+  // Không có discount riêng, tạm coi giá gốc = giá thanh toán
   const consultationAgg = await Appointment.aggregate([
     {
       $match: {
@@ -3912,15 +3890,9 @@ async getServiceRevenueReport(startDate, endDate) {
       }
     },
     {
-      $group: {
-        _id: "$serviceId",
-        count: { $sum: 1 }
-      }
-    },
-    {
       $lookup: {
         from: "services",
-        localField: "_id",
+        localField: "serviceId",
         foreignField: "_id",
         as: "serviceInfo"
       }
@@ -3928,50 +3900,90 @@ async getServiceRevenueReport(startDate, endDate) {
     { $unwind: "$serviceInfo" },
     {
       $project: {
-        serviceId: "$_id",
+        serviceId: "$serviceId",
         serviceName: "$serviceInfo.serviceName",
-        category: "$serviceInfo.category", // Consultation
-        price: "$serviceInfo.price",
-        count: 1
+        category: "Tư vấn online",
+        originalUnitPrice: "$serviceInfo.price" // giá chuẩn của dịch vụ tư vấn
+        // nếu sau này có field giảm giá/giá thực tế trong Appointment thì chỉnh thêm ở đây
+      }
+    },
+    {
+      $group: {
+        _id: "$serviceId",
+        serviceName: { $first: "$serviceName" },
+        category: { $first: "$category" },
+        totalOriginal: { $sum: "$originalUnitPrice" },
+        totalPaid: { $sum: "$originalUnitPrice" }, // hiện tại = giá gốc (chưa giảm)
+        count: { $sum: 1 }
       }
     }
   ]);
-
 
   // ====== 4. MERGE 2 NGUỒN ======
   const map = new Map();
 
   // Merge VisitTicket
   ticketAgg.forEach(sv => {
-    map.set(sv.serviceId.toString(), {
-      ...sv,
-      totalRevenue: sv.price * sv.count
+    const key = sv._id.toString();
+    map.set(key, {
+      serviceId: sv._id,
+      serviceName: sv.serviceName,
+      category: sv.category,
+      totalOriginal: sv.totalOriginal,
+      totalPaid: sv.totalPaid,
+      count: sv.count
     });
   });
 
   // Merge Consultation
   consultationAgg.forEach(sv => {
-    const key = sv.serviceId.toString();
+    const key = sv._id.toString();
     if (!map.has(key)) {
       map.set(key, {
-        ...sv,
-        totalRevenue: sv.price * sv.count
+        serviceId: sv._id,
+        serviceName: sv.serviceName,
+        category: sv.category,
+        totalOriginal: sv.totalOriginal,
+        totalPaid: sv.totalPaid,
+        count: sv.count
       });
     } else {
       const existing = map.get(key);
+      existing.totalOriginal += sv.totalOriginal;
+      existing.totalPaid += sv.totalPaid;
       existing.count += sv.count;
-      existing.totalRevenue += sv.price * sv.count;
     }
   });
 
-  const services = Array.from(map.values());
+  // Map ra format FE cần: có giá gốc & giá thanh toán
+  const services = Array.from(map.values()).map(s => {
+    const avgOriginalPrice = s.count > 0 ? s.totalOriginal / s.count : 0;
+    const avgPaidPrice = s.count > 0 ? s.totalPaid / s.count : 0;
+
+    return {
+      serviceId: s.serviceId,
+      serviceName: s.serviceName,
+      category: s.category,
+      // đơn giá
+      originalPrice: avgOriginalPrice, // giá gốc trung bình 1 lần
+      paidPrice: avgPaidPrice,         // giá thanh toán trung bình 1 lần
+      // số lượng
+      count: s.count,
+      // doanh thu
+      totalOriginalRevenue: s.totalOriginal, // tổng nếu không giảm
+      totalPaidRevenue: s.totalPaid,         // tổng thực thu
+      totalRevenue: s.totalPaid              // backward-compatible
+    };
+  });
 
   // ====== 5. SUMMARY ======
-  let totalRevenue = 0;
+  let totalOriginalRevenue = 0;
+  let totalPaidRevenue = 0;
   let totalCount = 0;
 
   services.forEach(s => {
-    totalRevenue += s.totalRevenue;
+    totalOriginalRevenue += s.totalOriginalRevenue;
+    totalPaidRevenue += s.totalPaidRevenue;
     totalCount += s.count;
   });
 
@@ -3979,12 +3991,15 @@ async getServiceRevenueReport(startDate, endDate) {
     filterRange: { startDate: start, endDate: end },
     summary: {
       totalServices: services.length,
-      totalRevenue,
+      totalOriginalRevenue,
+      totalPaidRevenue,
+      totalRevenue: totalPaidRevenue, // cho FE dùng như cũ
       totalCount
     },
     services
   };
 }
+
 
 
 async getRevenueServicePDF(startDate, endDate, res) {
@@ -4004,39 +4019,57 @@ async getRevenueServicePDF(startDate, endDate, res) {
       }).format(price || 0);
     }
 
-    // ==== BẢNG DỊCH VỤ (mới) ====
+    // ⭐ SẮP XẾP DỊCH VỤ THEO SỐ LẦN SỬ DỤNG (count) GIẢM DẦN
+    const sortedServices = [...services].sort((a, b) => {
+      const countA = a.count || 0;
+      const countB = b.count || 0;
+      return countB - countA; // dùng nhiều nhất đứng trên
+    });
+
+    // ==== BẢNG DỊCH VỤ (mới: có giá gốc & giá thanh toán) ====
     const serviceTableBody = [
       [
         { text: 'STT', style: 'tableHeader', alignment: 'center' },
         { text: 'Dịch vụ', style: 'tableHeader' },
         { text: 'Loại', style: 'tableHeader', alignment: 'center' },
         { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
-        { text: 'Giá tại thời điểm khám', style: 'tableHeader', alignment: 'right' },
-        { text: 'Tổng doanh thu', style: 'tableHeader', alignment: 'right' }
+        { text: 'Giá gốc', style: 'tableHeader', alignment: 'right' },
+        { text: 'Giá thanh toán', style: 'tableHeader', alignment: 'right' },
+        { text: 'Tổng doanh thu (thực thu)', style: 'tableHeader', alignment: 'right' }
       ]
     ];
 
-    services.forEach((sv, index) => {
+    // ⭐ DÙNG sortedServices THAY VÌ services
+    sortedServices.forEach((sv, index) => {
+      let displayCategory = '—';
+      if (sv.category === 'Examination') {
+        displayCategory = 'Khám trực tiếp';
+      } else if (sv.category === 'Consultation') {
+        displayCategory = 'Tư vấn online';
+      } else if (sv.category) {
+        displayCategory = sv.category;
+      }
+
       serviceTableBody.push([
         { text: (index + 1).toString(), alignment: 'center' },
         { text: sv.serviceName || '—' },
-    
-        {
-          text:
-            sv.category === 'Examination'
-              ? 'Khám trực tiếp'
-              : sv.category === 'Consultation'
-              ? 'Tư vấn online'
-              : '—',
-          alignment: 'center'
-        },
-    
+        { text: displayCategory, alignment: 'center' },
         { text: (sv.count || 0).toString(), alignment: 'right' },
-        { text: formatPrice(sv.price), alignment: 'right' },
-        { text: formatPrice(sv.totalRevenue), alignment: 'right', bold: true }
+
+        { text: formatPrice(sv.originalPrice || 0), alignment: 'right' },
+        { text: formatPrice(sv.paidPrice || 0), alignment: 'right' },
+
+        {
+          text: formatPrice(
+            sv.totalPaidRevenue != null
+              ? sv.totalPaidRevenue
+              : sv.totalRevenue || 0
+          ),
+          alignment: 'right',
+          bold: true
+        }
       ]);
     });
-    
 
     const docDefinition = {
       pageSize: 'A4',
@@ -4089,7 +4122,9 @@ async getRevenueServicePDF(startDate, endDate, res) {
           ul: [
             `Tổng số dịch vụ có doanh thu: ${summary.totalServices}`,
             `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
-            `Tổng doanh thu: ${formatPrice(summary.totalRevenue)}`
+            `Tổng doanh thu (giá gốc, chưa giảm): ${formatPrice(summary.totalOriginalRevenue || 0)}`,
+            `Tổng doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
+            `Danh sách dịch vụ được sắp xếp theo số lần sử dụng giảm dần.`
           ],
           margin: [0, 0, 0, 10]
         },
@@ -4100,7 +4135,7 @@ async getRevenueServicePDF(startDate, endDate, res) {
         {
           table: {
             headerRows: 1,
-            widths: ['5%', '28%', '15%', '15%', '19%', '18%'],
+            widths: ['5%', '21%', '15%', '9%', '14%', '14%', '22%'],
             body: serviceTableBody
           },
           layout: {
@@ -4115,7 +4150,11 @@ async getRevenueServicePDF(startDate, endDate, res) {
 
         {
           text:
-            'Ghi chú:\n- Giá lấy từ phiếu khám bệnh tại thời điểm dịch vụ được sử dụng',
+            'Ghi chú:\n' +
+            '- Giá gốc: giá dịch vụ theo bảng giá tại thời điểm khám (chưa áp dụng khuyến mãi).\n' +
+            '- Giá thanh toán: số tiền khách hàng thực tế phải trả sau khi áp dụng khuyến mãi/giảm giá.\n' +
+            '- Doanh thu thực thu được tính theo giá thanh toán.\n' +
+            '- Bảng trên được sắp xếp theo số lần sử dụng dịch vụ (cao đến thấp).',
           fontSize: 8,
           color: '#666',
           margin: [0, 8, 0, 0]
@@ -4163,8 +4202,6 @@ async getRevenueServicePDF(startDate, endDate, res) {
     throw error;
   }
 }
-
-
 
 }
 
