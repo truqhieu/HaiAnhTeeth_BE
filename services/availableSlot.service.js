@@ -2277,6 +2277,7 @@ const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 const ScheduleHelper = require('../utils/scheduleHelper');
 const leaveRequestService = require('./leaveRequest.service');
+const LeaveRequest = require('../models/leaveRequest.model');
 
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1-minute drift between UI display and actual time
 
@@ -3627,6 +3628,23 @@ class AvailableSlotService {
     // 3. Lấy doctor schedule (DoctorSchedule) của ngày đó
     const searchDate = new Date(date);
     searchDate.setUTCHours(0, 0, 0, 0);
+
+    // ⭐ THÊM: Kiểm tra bác sĩ có đang nghỉ phép vào ngày này không
+    // Tạo một Date object với giờ 12:00 để kiểm tra nghỉ phép (isDoctorOnLeave cần startTime)
+    const checkLeaveDate = new Date(searchDate);
+    checkLeaveDate.setUTCHours(12, 0, 0, 0);
+    const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctorUserId, checkLeaveDate);
+    
+    if (isOnLeave) {
+      // Bác sĩ đang nghỉ phép vào ngày này
+      return {
+        doctorId: doctorUserId,
+        doctorName: doctor.fullName,
+        date: searchDate,
+        scheduleRanges: [],
+        message: 'Bạn đang xin nghỉ phép vào ngày này. Vui lòng chọn ngày khác.'
+      };
+    }
 
 
     const doctorProfile = await Doctor.findOne({ doctorUserId })
