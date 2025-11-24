@@ -22,7 +22,11 @@ const doctorSchema = new mongoose.Schema({
   },
   certificate: {
     type: String,
-    trim: true
+    default: null
+  },
+  summary: {
+    type: String,
+    default: null
   },
   status: {
     type: String,
