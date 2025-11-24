@@ -475,6 +475,106 @@ static async ensureScheduleForDoctor(doctorUserId, searchDate) {
   }
 }
 
+
+    /**
+   * ⭐ HELPER: Tạo schedule cho một bác sĩ cụ thể vào một ngày cho tái khám
+   * @static
+   */
+  static async ensureScheduleForDoctorFollowUp(doctorUserId, searchDate) {
+  try {
+    // Chuẩn hoá ngày
+    const dayStart = new Date(searchDate);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+
+    // Kiểm tra đã có schedule trong ngày chưa
+    const existingSchedule = await DoctorSchedule.findOne({
+      doctorUserId: doctorUserId,
+      date: { $gte: dayStart, $lte: dayEnd }
+    });
+
+    if (existingSchedule) {
+      console.log(
+        `✅ Bác sĩ ${doctorUserId} đã có schedule cho ngày ${dayStart
+          .toISOString()
+          .split('T')[0]}`
+      );
+      return;
+    }
+
+    // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có)
+    const workingHours = await this.getDoctorWorkingHours(doctorUserId, dayStart);
+
+    if (
+      !workingHours ||
+      !workingHours.morningStart ||
+      !workingHours.morningEnd ||
+      !workingHours.afternoonStart ||
+      !workingHours.afternoonEnd
+    ) {
+      console.log(
+        `⚠️  Bác sĩ ${doctorUserId} chưa có workingHours (chưa được manager tạo lịch làm việc), không tạo schedule`
+      );
+      return;
+    }
+
+    const now = new Date(); // UTC
+
+    const morningStart = new Date(dayStart);
+    const [morningStartHour, morningStartMinute] = workingHours.morningStart.split(':').map(Number);
+    morningStart.setUTCHours(morningStartHour - 7, morningStartMinute, 0, 0);
+
+    const morningEnd = new Date(dayStart);
+    const [morningEndHour, morningEndMinute] = workingHours.morningEnd.split(':').map(Number);
+    morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
+
+    const afternoonStart = new Date(dayStart);
+    const [afternoonStartHour, afternoonStartMinute] = workingHours.afternoonStart.split(':').map(Number);
+    afternoonStart.setUTCHours(afternoonStartHour - 7, afternoonStartMinute, 0, 0);
+
+    const afternoonEnd = new Date(dayStart);
+    const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
+    afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
+
+    const morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
+    const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+
+    const schedulesToCreate = [
+      {
+        doctorUserId: doctorUserId,
+        date: dayStart, // normalize về 00:00 UTC
+        shift: 'Morning',
+        status: morningStatus,
+        maxSlots: 4,
+        workingHours: workingHours
+      },
+      {
+        doctorUserId: doctorUserId,
+        date: dayStart,
+        shift: 'Afternoon',
+        status: afternoonStatus,
+        maxSlots: 4,
+        workingHours: workingHours
+      }
+    ];
+
+    await DoctorSchedule.insertMany(schedulesToCreate, { ordered: false });
+    console.log(
+      `✅ Đã tạo schedule cho bác sĩ ${doctorUserId} vào ngày ${dayStart
+        .toISOString()
+        .split('T')[0]}`
+    );
+  } catch (error) {
+    if (error.code === 11000 || error.name === 'BulkWriteError') {
+      console.log(`⚠️  Schedule đã tồn tại cho bác sĩ ${doctorUserId}`);
+    } else {
+      console.error(`❌ Lỗi tạo schedule cho bác sĩ ${doctorUserId}:`, error.message);
+    }
+  }
+}
+
+
   /**
    * ⭐ HELPER: Tự động tạo schedule cho một ngày nếu chưa có
    * Đảm bảo mỗi bác sĩ chỉ có 1 Morning và 1 Afternoon schedule

@@ -6,6 +6,7 @@ const {
   getAvailableDoctors,
   getAvailableDoctorsForTimeSlot,
   getDoctorScheduleRange,
+  getDoctorScheduleRangeForFollowUp,
   validateAppointmentTime
 } = require('../controllers/availableSlot.controller');
 const { optionalAuth } = require('../middleware/auth.middleware');
@@ -29,6 +30,10 @@ router.get('/doctors/time-slot', getAvailableDoctorsForTimeSlot);
 // ⭐ NEW: Lấy khoảng thời gian khả dụng của một bác sĩ cụ thể
 // GET /api/available-slots/doctor-schedule?doctorUserId=xxx&serviceId=xxx&date=2025-10-25
 router.get('/doctor-schedule', optionalAuth, getDoctorScheduleRange);
+
+// ⭐ NEW: Endpoint dành riêng cho bác sĩ tạo lịch tái khám
+// GET /api/available-slots/doctor-schedule/follow-up?doctorUserId=xxx&serviceId=xxx&date=2025-10-25
+router.get('/doctor-schedule/follow-up', optionalAuth, getDoctorScheduleRangeForFollowUp);
 
 // ⭐ NEW: Validate appointment time
 // GET /api/available-slots/validate-appointment-time?doctorUserId=xxx&serviceId=xxx&date=2025-10-25&startTime=2025-10-25T09:20:00Z

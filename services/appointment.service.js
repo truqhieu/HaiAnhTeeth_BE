@@ -18,6 +18,7 @@ const path = require('path')
 const VisitTicket = require('../models/visitTicket.model')
 const availableSlotService = require('./availableSlot.service');
 const ScheduleHelper = require('../utils/scheduleHelper');
+const LeaveRequest = require('../models/leaveRequest.model');
 
 const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1 minute drift for "past" validation
@@ -2758,32 +2759,381 @@ async getVisitTicketPDF(appointmentId, res) {
 }
 
 
-async _getDoctorScheduleForFollowUp(doctorUserId, startTime) {
-  // ⭐ FIX: Extract date từ startTime (UTC) một cách chính xác
-  // startTime là UTC date, cần extract date (YYYY-MM-DD) để tìm schedule
-  const scheduleDate = new Date(startTime);
-  scheduleDate.setUTCHours(0, 0, 0, 0);
 
-  await ScheduleHelper.ensureScheduleForDoctor(doctorUserId, scheduleDate);
 
-  // ⭐ FIX: Tính startHourVN từ UTC hours (đã được frontend convert đúng)
-  // startTime.getUTCHours() là UTC hours, cộng 7 để có VN hours
-  const startHourVN = (startTime.getUTCHours() + 7 + 24) % 24;
-  const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
-
-  const doctorSchedule = await DoctorSchedule.findOne({
-    doctorUserId,
-    // date: scheduleDate,
-    shift
-  });
-
-  if (!doctorSchedule) {
-    throw new Error('Không tìm thấy lịch làm việc của bác sĩ cho ngày tái khám này');
+async _getDoctorScheduleForFollowUp(
+  doctorUserId,
+  serviceId,
+  dateStr,
+  appointmentFor = 'self',
+  startTime = null
+) {
+  // ⭐ VALIDATION
+  if (!doctorUserId || !serviceId || !dateStr) {
+    throw new Error('Thiếu thông tin: doctorUserId, serviceId, hoặc dateStr');
   }
 
-  return { doctorSchedule };
+  // =========================
+  // 1. Parse ngày tái khám
+  // =========================
+  let dayStart, dayEnd;
+
+  try {
+    const [yearStr, monthStr, dayStr] = dateStr.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const day = parseInt(dayStr, 10);
+
+    if (!year || !month || !day) {
+      throw new Error('Invalid date format');
+    }
+
+    dayStart = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+    dayEnd   = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+  } catch (err) {
+    console.error('❌ [_getDoctorScheduleForFollowUp] Error parsing date:', err);
+    throw new Error(`Ngày không hợp lệ: ${dateStr}`);
+  }
+
+  console.log('🔍 [_getDoctorScheduleForFollowUp] Input params:', {
+    doctorUserId: doctorUserId.toString(),
+    serviceId: serviceId.toString(),
+    dateStr,
+    appointmentFor,
+    startTime: startTime instanceof Date ? startTime.toISOString() : startTime,
+    dayStart: dayStart.toISOString(),
+    dayEnd: dayEnd.toISOString()
+  });
+
+  // =========================
+  // 2. Lấy service
+  // =========================
+  const service = await Service.findById(serviceId).select('durationMinutes category serviceName');
+  if (!service) {
+    throw new Error('Dịch vụ không tồn tại');
+  }
+  const durationMinutes = service.durationMinutes || 30;
+
+  // =========================
+  // 3. Ensure schedule tồn tại
+  // =========================
+  await ScheduleHelper.ensureScheduleForDoctorFollowUp(doctorUserId, dayStart);
+
+  // =========================
+  // 4. Check nghỉ phép
+  // =========================
+  const leaveRequests = await LeaveRequest.find({
+    userId: doctorUserId,
+    status: 'Approved',
+    startDate: { $lte: dayEnd },
+    endDate: { $gte: dayStart }
+  });
+
+  console.log('🔍 [_getDoctorScheduleForFollowUp] Leave requests found:', {
+    count: leaveRequests.length,
+    leaves: leaveRequests.map(l => ({
+      _id: l._id,
+      startDate: l.startDate ? l.startDate.toISOString() : null,
+      endDate: l.endDate ? l.endDate.toISOString() : null,
+      reason: l.reason
+    }))
+  });
+
+  if (leaveRequests.length > 0) {
+    const leaveInfo = leaveRequests[0];
+    return {
+      success: true,
+      data: {
+        doctorId: doctorUserId.toString(),
+        doctorName: 'Bác sĩ',
+        date: dayStart.toISOString(),
+        scheduleRanges: [],
+        message: `Bác sĩ đang nghỉ phép từ ${new Date(leaveInfo.startDate).toLocaleDateString('vi-VN')} đến ${new Date(leaveInfo.endDate).toLocaleDateString('vi-VN')}. Vui lòng chọn ngày khác.`,
+        userReservedSlots: []
+      }
+    };
+  }
+
+  // =========================
+  // 5. Lấy DoctorSchedule theo khoảng ngày
+  // =========================
+  const schedules = await DoctorSchedule.find({
+    doctorUserId,
+    date: { $gte: dayStart, $lte: dayEnd },
+    status: { $ne: 'Unavailable' } // chỉ lấy lịch còn hiệu lực
+  })
+    .select('_id shift date status workingHours')
+    .sort({ shift: 1 });
+
+  console.log('🔍 [_getDoctorScheduleForFollowUp] DoctorSchedule found:', {
+    count: schedules.length,
+    dayStart: dayStart.toISOString(),
+    dayEnd: dayEnd.toISOString(),
+    schedules: schedules.map(s => ({
+      _id: s._id,
+      shift: s.shift,
+      date: s.date ? s.date.toISOString() : null,
+      status: s.status,
+      workingHours: s.workingHours
+    }))
+  });
+
+  if (schedules.length === 0) {
+    console.warn(`⚠️ [_getDoctorScheduleForFollowUp] No schedules found for doctor ${doctorUserId} on ${dateStr}`);
+
+    return {
+      success: true,
+      data: {
+        doctorId: doctorUserId.toString(),
+        doctorName: 'Bác sĩ',
+        date: dayStart.toISOString(),
+        scheduleRanges: [],
+        message: 'Bác sĩ không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.',
+        userReservedSlots: []
+      }
+    };
+  }
+
+  // =========================
+  // helper tính giờ ca làm việc từ workingHours
+  // =========================
+  const buildShiftRangeUTC = (schedule) => {
+    const wh = schedule.workingHours || {};
+    const baseDate = new Date(schedule.date || dayStart);
+
+    let startVN, endVN;
+    if (schedule.shift === 'Morning') {
+      startVN = wh.morningStart;
+      endVN = wh.morningEnd;
+    } else {
+      startVN = wh.afternoonStart;
+      endVN = wh.afternoonEnd;
+    }
+
+    if (!startVN || !endVN) return {};
+
+    const [sh, sm] = startVN.split(':').map(Number);
+    const [eh, em] = endVN.split(':').map(Number);
+
+    const startUTC = new Date(baseDate);
+    startUTC.setUTCHours(sh - 7, sm, 0, 0);
+
+    const endUTC = new Date(baseDate);
+    endUTC.setUTCHours(eh - 7, em, 0, 0);
+
+    return { startUTC, endUTC };
+  };
+
+  // =========================
+  // 6. Nếu có startTime → chỉ validate (approve)
+  // =========================
+  if (startTime) {
+    const startTimeDate = startTime instanceof Date ? startTime : new Date(startTime);
+    if (Number.isNaN(startTimeDate.getTime())) {
+      throw new Error('Thời gian tái khám không hợp lệ');
+    }
+
+    const startHourVN = (startTimeDate.getUTCHours() + 7 + 24) % 24;
+    const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
+
+    const doctorSchedule = schedules.find(s => s.shift === shift);
+    if (!doctorSchedule) {
+      throw new Error(
+        `Bác sĩ không có lịch làm việc ${shift === 'Morning' ? 'buổi sáng' : 'buổi chiều'} vào ngày này`
+      );
+    }
+
+    const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
+      buildShiftRangeUTC(doctorSchedule);
+
+    if (!scheduleStartTime || !scheduleEndTime) {
+      throw new Error('Lịch làm việc của bác sĩ đang thiếu thông tin workingHours');
+    }
+
+    if (startTimeDate < scheduleStartTime || startTimeDate >= scheduleEndTime) {
+      const shiftDisplay = shift === 'Morning' ? 'buổi sáng' : 'buổi chiều';
+
+      const scheduleStartVN = new Date(scheduleStartTime.getTime() + 7 * 60 * 60 * 1000);
+      const scheduleEndVN = new Date(scheduleEndTime.getTime() + 7 * 60 * 60 * 1000);
+
+      const startVNHour = String(scheduleStartVN.getUTCHours()).padStart(2, '0');
+      const startVNMin = String(scheduleStartVN.getUTCMinutes()).padStart(2, '0');
+      const endVNHour = String(scheduleEndVN.getUTCHours()).padStart(2, '0');
+      const endVNMin = String(scheduleEndVN.getUTCMinutes()).padStart(2, '0');
+
+      throw new Error(
+        `Thời gian tái khám không nằm trong ca làm việc ${shiftDisplay} (${startVNHour}:${startVNMin} - ${endVNHour}:${endVNMin})`
+      );
+    }
+
+    console.log('✅ [_getDoctorScheduleForFollowUp] startTime validation passed');
+
+    return {
+      doctorSchedule,
+      scheduleInfo: {
+        shift: doctorSchedule.shift,
+        startTime: scheduleStartTime.toISOString(),
+        endTime: scheduleEndTime.toISOString(),
+        date: dayStart.toISOString()
+      }
+    };
+  }
+
+  // =========================
+  // 7. Không có startTime → build các khoảng trống cho UI
+  // =========================
+  const scheduleRanges = [];
+
+  for (const schedule of schedules) {
+    const shift = schedule.shift;
+    const shiftDisplay =
+      shift === 'Morning'
+        ? 'Buổi sáng'
+        : shift === 'Afternoon'
+        ? 'Buổi chiều'
+        : shift;
+
+    const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
+      buildShiftRangeUTC(schedule);
+
+    if (!scheduleStartTime || !scheduleEndTime) {
+      console.warn('⚠️ DoctorSchedule thiếu workingHours cho shift:', {
+        scheduleId: schedule._id.toString(),
+        shift: schedule.shift,
+        workingHours: schedule.workingHours
+      });
+      continue;
+    }
+
+    console.log(`🔍 [_getDoctorScheduleForFollowUp] Processing ${shift}:`, {
+      scheduleStartTime: scheduleStartTime.toISOString(),
+      scheduleEndTime: scheduleEndTime.toISOString(),
+      durationMinutes
+    });
+
+    const bookedTimeslots = await Timeslot.find({
+      doctorUserId,
+      doctorScheduleId: schedule._id,
+      status: { $in: ['Booked', 'Reserved'] },
+      startTime: { $gte: scheduleStartTime, $lt: scheduleEndTime }
+    })
+      .select('startTime endTime status reservedUntil')
+      .sort({ startTime: 1 });
+
+    console.log(`🔍 [_getDoctorScheduleForFollowUp] Booked timeslots in ${shift}:`, {
+      count: bookedTimeslots.length,
+      timeslots: bookedTimeslots.map(t => ({
+        startTime: t.startTime ? t.startTime.toISOString() : null,
+        endTime: t.endTime ? t.endTime.toISOString() : null,
+        status: t.status
+      }))
+    });
+
+    const availableGaps = [];
+    let currentTime = new Date(scheduleStartTime);
+
+    for (const bookedSlot of bookedTimeslots) {
+      const bookedStart = new Date(bookedSlot.startTime);
+      const bookedEnd = new Date(bookedSlot.endTime);
+
+      if (currentTime < bookedStart) {
+        const gapDurationMinutes = (bookedStart - currentTime) / 60000;
+        if (gapDurationMinutes >= durationMinutes) {
+          availableGaps.push({
+            startTime: new Date(currentTime),
+            endTime: new Date(bookedStart),
+            durationMinutes: gapDurationMinutes
+          });
+        }
+      }
+
+      currentTime = new Date(Math.max(currentTime.getTime(), bookedEnd.getTime()));
+    }
+
+    if (currentTime < scheduleEndTime) {
+      const gapDurationMinutes = (scheduleEndTime - currentTime) / 60000;
+      if (gapDurationMinutes >= durationMinutes) {
+        availableGaps.push({
+          startTime: new Date(currentTime),
+          endTime: new Date(scheduleEndTime),
+          durationMinutes: gapDurationMinutes
+        });
+      }
+    }
+
+    console.log(`🔍 [_getDoctorScheduleForFollowUp] Available gaps in ${shift}:`, {
+      count: availableGaps.length,
+      gaps: availableGaps.map(g => ({
+        startTime: g.startTime ? g.startTime.toISOString() : null,
+        endTime: g.endTime ? g.endTime.toISOString() : null,
+        durationMinutes: g.durationMinutes
+      }))
+    });
+
+    let displayRange = '';
+    if (availableGaps.length === 0) {
+      displayRange = 'Đã hết chỗ';
+    } else {
+      displayRange = availableGaps
+        .map(gap => {
+          const startHourVN = (gap.startTime.getUTCHours() + 7) % 24;
+          const startMinVN = gap.startTime.getUTCMinutes();
+          const endHourVN = (gap.endTime.getUTCHours() + 7) % 24;
+          const endMinVN = gap.endTime.getUTCMinutes();
+
+          return (
+            `${String(startHourVN).padStart(2, '0')}:${String(startMinVN).padStart(2, '0')}-` +
+            `${String(endHourVN).padStart(2, '0')}:${String(endMinVN).padStart(2, '0')}`
+          );
+        })
+        .join(', ');
+    }
+
+    scheduleRanges.push({
+      shift,
+      shiftDisplay,
+      startTime: scheduleStartTime.toISOString(),
+      endTime: scheduleEndTime.toISOString(),
+      availableGaps,
+      displayRange,
+      doctorScheduleId: schedule._id.toString()
+    });
+  }
+
+  const doctor = await User.findById(doctorUserId).select('fullName');
+  const doctorName = doctor?.fullName || 'Bác sĩ';
+
+  console.log('✅ [_getDoctorScheduleForFollowUp] Success:', {
+    date: dayStart.toISOString(),
+    scheduleRangesCount: scheduleRanges.length,
+    message: scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
+      ? 'Có lịch khả dụng'
+      : 'Không có lịch khả dụng'
+  });
+
+  return {
+    success: true,
+    data: {
+      doctorId: doctorUserId.toString(),
+      doctorName,
+      date: dayStart.toISOString(),
+      serviceName: service?.serviceName || 'N/A',
+      serviceDuration: durationMinutes,
+      scheduleRanges,
+      totalSchedules: scheduleRanges.length,
+      message:
+        scheduleRanges.length === 0
+          ? 'Bác sĩ không có lịch vào ngày này'
+          : scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
+          ? 'Có lịch khả dụng'
+          : 'Tất cả lịch đã hết chỗ',
+      userReservedSlots: []
+    }
+  };
 }
 
+
+// ⭐ Cập nhật createFollowUpAppointment để sử dụng hàm mới
 async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
   if (!originalAppointmentId) {
     throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
@@ -2870,7 +3220,33 @@ async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpN
 
   const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(doctorUserId, startTime);
 
-  // ⭐ FIX: Extract date từ startTime để chỉ check appointments trong cùng ngày
+  console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
+
+  // ⭐ FIX: Gọi _getDoctorScheduleForFollowUp với đầy đủ params + startTime để validate
+  const validateResult = await this._getDoctorScheduleForFollowUp(
+    doctorUserId,
+    finalServiceId,    // serviceId
+    dateStr,           // dateStr
+    'self',            // appointmentFor
+    startTime          // startTime để trigger validation mode
+  );
+
+  console.log('🔍 [createFollowUpAppointment] validateResult:', validateResult);
+
+  // ⭐ Extract doctorSchedule từ result
+
+  if (!doctorSchedule) {
+    throw new Error('Không tìm thấy lịch làm việc của bác sĩ cho thời gian tái khám');
+  }
+
+  console.log('✅ [createFollowUpAppointment] doctorSchedule validated:', {
+    scheduleId: doctorSchedule._id,
+    shift: doctorSchedule.shift,
+    startTime: scheduleInfo?.startTime || null,
+    endTime: scheduleInfo?.endTime || null
+  });
+
+  // ⭐ FIX: Extract date từ startTime để check appointments trong cùng ngày
   const startTimeDate = new Date(startTime);
   startTimeDate.setUTCHours(0, 0, 0, 0);
   const startTimeDateEnd = new Date(startTimeDate);
@@ -3459,6 +3835,336 @@ async getMonthlyRevenue(startDate, endDate) {
   } catch (error) {
     console.error("❌ Lỗi khi tính toán doanh thu theo tháng:", error);
     res.status(500).json({ message: "Đã có lỗi xảy ra khi tính toán doanh thu." });
+  }
+}
+
+async getServiceRevenueReport(startDate, endDate) {
+  let start, end;
+
+  // ====== 1. Range ======
+  if (!startDate || !endDate) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    start = new Date(year, month, 1, 0, 0, 0, 0);
+    end   = new Date(year, month + 1, 0, 23, 59, 59, 999);
+  } else {
+    start = new Date(startDate);
+    end   = new Date(endDate);
+  }
+
+  console.log('📌 [getServiceRevenueReport] Range:', start, end);
+
+
+  // ====== 2. VISIT TICKET (Examination) ======
+  const ticketAgg = await VisitTicket.aggregate([
+    {
+      $addFields: {
+        effectiveDate: { $ifNull: ["$date", "$createdAt"] }
+      }
+    },
+    {
+      $match: {
+        effectiveDate: { $gte: start, $lte: end }
+      }
+    },
+    { $unwind: "$service" },
+    {
+      $group: {
+        _id: "$service.serviceId",
+        price: { $first: "$service.price" },
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $lookup: {
+        from: "services",
+        localField: "_id",
+        foreignField: "_id",
+        as: "serviceInfo"
+      }
+    },
+    { $unwind: "$serviceInfo" },
+    {
+      $project: {
+        serviceId: "$_id",
+        serviceName: "$serviceInfo.serviceName",
+        category: {
+          $switch: {
+            branches: [
+              { case: { $eq: ["$serviceInfo.category", "Examination"] }, then: "Khám trực tiếp" },
+              { case: { $eq: ["$serviceInfo.category", "Consultation"] }, then: "Tư vấn online" }
+            ],
+            default: "—"
+          }
+        },
+        price: 1,
+        count: 1
+      }
+    }
+  ]);
+
+
+  // ====== 3. CONSULTATION COMPLETED ======
+  const consultationAgg = await Appointment.aggregate([
+    {
+      $match: {
+        createdAt: { $gte: start, $lte: end },
+        status: "Completed",
+        type: "Consultation",
+        serviceId: { $ne: null }
+      }
+    },
+    {
+      $group: {
+        _id: "$serviceId",
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $lookup: {
+        from: "services",
+        localField: "_id",
+        foreignField: "_id",
+        as: "serviceInfo"
+      }
+    },
+    { $unwind: "$serviceInfo" },
+    {
+      $project: {
+        serviceId: "$_id",
+        serviceName: "$serviceInfo.serviceName",
+        category: "$serviceInfo.category", // Consultation
+        price: "$serviceInfo.price",
+        count: 1
+      }
+    }
+  ]);
+
+
+  // ====== 4. MERGE 2 NGUỒN ======
+  const map = new Map();
+
+  // Merge VisitTicket
+  ticketAgg.forEach(sv => {
+    map.set(sv.serviceId.toString(), {
+      ...sv,
+      totalRevenue: sv.price * sv.count
+    });
+  });
+
+  // Merge Consultation
+  consultationAgg.forEach(sv => {
+    const key = sv.serviceId.toString();
+    if (!map.has(key)) {
+      map.set(key, {
+        ...sv,
+        totalRevenue: sv.price * sv.count
+      });
+    } else {
+      const existing = map.get(key);
+      existing.count += sv.count;
+      existing.totalRevenue += sv.price * sv.count;
+    }
+  });
+
+  const services = Array.from(map.values());
+
+  // ====== 5. SUMMARY ======
+  let totalRevenue = 0;
+  let totalCount = 0;
+
+  services.forEach(s => {
+    totalRevenue += s.totalRevenue;
+    totalCount += s.count;
+  });
+
+  return {
+    filterRange: { startDate: start, endDate: end },
+    summary: {
+      totalServices: services.length,
+      totalRevenue,
+      totalCount
+    },
+    services
+  };
+}
+
+
+async getRevenueServicePDF(startDate, endDate, res) {
+  try {
+    const report = await this.getServiceRevenueReport(startDate, endDate);
+    const { filterRange, summary, services } = report;
+    const { startDate: s, endDate: e } = filterRange;
+
+    if (!services || services.length === 0) {
+      throw new Error('Không có dịch vụ nào phát sinh doanh thu trong khoảng thời gian này');
+    }
+
+    function formatPrice(price) {
+      return new Intl.NumberFormat('vi-VN', {
+        style: 'currency',
+        currency: 'VND'
+      }).format(price || 0);
+    }
+
+    // ==== BẢNG DỊCH VỤ (mới) ====
+    const serviceTableBody = [
+      [
+        { text: 'STT', style: 'tableHeader', alignment: 'center' },
+        { text: 'Dịch vụ', style: 'tableHeader' },
+        { text: 'Loại', style: 'tableHeader', alignment: 'center' },
+        { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
+        { text: 'Giá tại thời điểm khám', style: 'tableHeader', alignment: 'right' },
+        { text: 'Tổng doanh thu', style: 'tableHeader', alignment: 'right' }
+      ]
+    ];
+
+    services.forEach((sv, index) => {
+      serviceTableBody.push([
+        { text: (index + 1).toString(), alignment: 'center' },
+        { text: sv.serviceName || '—' },
+    
+        {
+          text:
+            sv.category === 'Examination'
+              ? 'Khám trực tiếp'
+              : sv.category === 'Consultation'
+              ? 'Tư vấn online'
+              : '—',
+          alignment: 'center'
+        },
+    
+        { text: (sv.count || 0).toString(), alignment: 'right' },
+        { text: formatPrice(sv.price), alignment: 'right' },
+        { text: formatPrice(sv.totalRevenue), alignment: 'right', bold: true }
+      ]);
+    });
+    
+
+    const docDefinition = {
+      pageSize: 'A4',
+      pageOrientation: 'portrait',
+      pageMargins: [25, 40, 25, 50],
+      defaultStyle: {
+        font: 'Roboto',
+        fontSize: 10,
+        lineHeight: 1.3
+      },
+
+      header: {
+        margin: [25, 15, 25, 0],
+        columns: [
+          {
+            text: 'NHA KHOA HẢI ANH',
+            style: 'clinicName',
+            alignment: 'left'
+          },
+          {
+            text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+            fontSize: 8,
+            alignment: 'right',
+            color: '#555'
+          }
+        ]
+      },
+
+      content: [
+        {
+          text: 'BÁO CÁO DOANH THU THEO DỊCH VỤ',
+          style: 'header',
+          alignment: 'center',
+          margin: [0, 10, 0, 12]
+        },
+
+        {
+          text: `Khoảng thời gian: ${new Date(s).toLocaleDateString('vi-VN')} - ${new Date(e).toLocaleDateString('vi-VN')}`,
+          fontSize: 9,
+          color: '#555',
+          margin: [0, 0, 0, 12]
+        },
+
+        {
+          text: 'TỔNG QUAN',
+          style: 'subheader',
+          margin: [0, 0, 0, 4]
+        },
+        {
+          ul: [
+            `Tổng số dịch vụ có doanh thu: ${summary.totalServices}`,
+            `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
+            `Tổng doanh thu: ${formatPrice(summary.totalRevenue)}`
+          ],
+          margin: [0, 0, 0, 10]
+        },
+
+        '\n',
+
+        { text: 'CHI TIẾT THEO DỊCH VỤ', style: 'subheader', margin: [0, 0, 0, 4] },
+        {
+          table: {
+            headerRows: 1,
+            widths: ['5%', '28%', '15%', '15%', '19%', '18%'],
+            body: serviceTableBody
+          },
+          layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: () => 0.5,
+            hLineColor: () => '#aaa',
+            vLineColor: () => '#aaa'
+          }
+        },
+
+        '\n',
+
+        {
+          text:
+            'Ghi chú:\n- Giá lấy từ phiếu khám bệnh tại thời điểm dịch vụ được sử dụng',
+          fontSize: 8,
+          color: '#666',
+          margin: [0, 8, 0, 0]
+        }
+      ],
+
+      styles: {
+        clinicName: {
+          fontSize: 13,
+          bold: true,
+          color: '#d32f2f'
+        },
+        header: {
+          fontSize: 18,
+          bold: true,
+          color: '#1a5eaa'
+        },
+        subheader: {
+          fontSize: 11,
+          bold: true,
+          color: '#333',
+          margin: [0, 8, 0, 4]
+        },
+        tableHeader: {
+          bold: true,
+          fontSize: 9,
+          fillColor: '#f0f0f0',
+          color: '#333'
+        }
+      }
+    };
+
+    const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=revenue-service-report.pdf'
+    );
+
+    pdfDoc.pipe(res);
+    pdfDoc.end();
+  } catch (error) {
+    console.error('❌ Lỗi PDF báo cáo dịch vụ:', error);
+    throw error;
   }
 }
 

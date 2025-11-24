@@ -26,7 +26,9 @@ const {
   getDashboardDetails,
   getMyRelatives,
   reserveTimeslot,
-  releaseReservedTimeslot
+  releaseReservedTimeslot,
+  getServiceRevenueReport,
+  getRevenueServicePDF
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -120,6 +122,12 @@ router.get('/dashboard', verifyToken, verifyRole('Manager'), managerDashboard);
 
 // ⭐ So sánh doanh thu từng tháng theo 1 năm
 router.get('/dashboard/monthly-revenue', verifyToken, verifyRole('Manager'), getMonthlyRevenue);
+
+// ⭐ So sánh doanh thu các dịch vụ theo từng tháng
+router.get('/dashboard/service-revenue-report', verifyToken, verifyRole('Manager'), getServiceRevenueReport);
+
+// ⭐ Lấy báo cáo doanh thu trong 1 dịch vụ dưới dạng PDF
+router.get('/dashboard/service-revenue-report/pdf', verifyToken, verifyRole('Manager'), getRevenueServicePDF);
 
 
 module.exports = router;

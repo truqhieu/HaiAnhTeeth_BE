@@ -20,6 +20,10 @@ const doctorSchema = new mongoose.Schema({
   yearsOfExperience: {
     type: Number,
   },
+  certificate: {
+    type: String,
+    trim: true
+  },
   status: {
     type: String,
     enum: ['Available', 'Busy', 'On Leave', 'Inactive'],

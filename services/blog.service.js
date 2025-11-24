@@ -34,10 +34,9 @@ class BlogService {
       throw new Error('Tiêu đề blog không được để trống');
     }
     const cleanTitle = title.trim();
-    if (cleanTitle.length < 3) {
-      throw new Error('Tiêu đề blog phải có ít nhất 3 ký tự');
+    if (cleanTitle.length < 3 || cleanTitle.length > 200) {
+      throw new Error('Tiêu đề blog phải từ 3 đến 200 ký tự');
     }
-    // simple: chỉ chặn < >
     if (/[<>]/.test(cleanTitle)) {
       throw new Error('Tiêu đề blog không được chứa ký tự < hoặc >');
     }
@@ -337,8 +336,8 @@ class BlogService {
   
         // Validate theo từng field
         if (field === 'title') {
-          if (cleanValue.length < 3) {
-            throw new Error('Tiêu đề phải có ít nhất 3 ký tự');
+          if (cleanValue.length < 3 || cleanValue.length > 200) {
+            throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
           }
           if (/[<>]/.test(cleanValue)) {
             throw new Error('Tiêu đề không được chứa ký tự < hoặc >');
