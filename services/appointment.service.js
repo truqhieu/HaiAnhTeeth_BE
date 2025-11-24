@@ -3218,22 +3218,18 @@ async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpN
   console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
   console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
 
-  const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(doctorUserId, startTime);
-
+  const dateStr = startTime.toISOString().split('T')[0];
   console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
-
-  // ⭐ FIX: Gọi _getDoctorScheduleForFollowUp với đầy đủ params + startTime để validate
-  const validateResult = await this._getDoctorScheduleForFollowUp(
+  
+  const { doctorSchedule, scheduleInfo } = await this._getDoctorScheduleForFollowUp(
     doctorUserId,
-    finalServiceId,    // serviceId
-    dateStr,           // dateStr
-    'self',            // appointmentFor
-    startTime          // startTime để trigger validation mode
+    finalServiceId,
+    dateStr,
+    'self',
+    startTime
   );
-
-  console.log('🔍 [createFollowUpAppointment] validateResult:', validateResult);
-
-  // ⭐ Extract doctorSchedule từ result
+  
+  console.log('🔍 [createFollowUpAppointment] scheduleInfo:', scheduleInfo);
 
   if (!doctorSchedule) {
     throw new Error('Không tìm thấy lịch làm việc của bác sĩ cho thời gian tái khám');
