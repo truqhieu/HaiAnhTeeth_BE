@@ -1,3 +1,4 @@
+
 const DoctorSchedule = require('../models/doctorSchedule.model');
 const Appointment = require('../models/appointment.model');
 const Service = require('../models/service.model');
@@ -5,6 +6,7 @@ const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 const ScheduleHelper = require('../utils/scheduleHelper');
 const leaveRequestService = require('./leaveRequest.service');
+const LeaveRequest = require('../models/leaveRequest.model');
 
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1-minute drift between UI display and actual time
 
@@ -1330,7 +1332,7 @@ class AvailableSlotService {
   /**
    * ⭐ NEW: Lấy khoảng thời gian khả dụng của một bác sĩ cụ thể vào 1 ngày
    */
-  async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = null, appointmentFor = 'self' }) {
+async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = null, appointmentFor = 'self' }) {
     // 1. Validate doctor
     const doctor = await User.findById(doctorUserId);
     if (!doctor) {
@@ -1511,7 +1513,7 @@ class AvailableSlotService {
         mergedBookedSlots.push({ ...slot });
       }
     }
-    
+
     const uniqueBookedSlots = mergedBookedSlots;
 
     // ⭐ THÊM: Lấy appointments của user trong cùng ngày
@@ -1761,40 +1763,40 @@ class AvailableSlotService {
     const morningShiftPassed = isShiftPassed(morningStart, morningEnd);
 
     if (morningSchedules.length > 0) {
-      if (morningShiftPassed) {
-        scheduleRanges.push({
-          shift: 'Morning',
-          shiftDisplay: 'Buổi sáng',
-          startTime: morningStart.toISOString(),
-          endTime: morningEnd.toISOString(),
-          availableGaps: [],
-          displayRange: 'Đã qua thời gian làm việc'
-        });
+    if (morningShiftPassed) {
+      scheduleRanges.push({
+        shift: 'Morning',
+        shiftDisplay: 'Buổi sáng',
+        startTime: morningStart.toISOString(),
+        endTime: morningEnd.toISOString(),
+        availableGaps: [],
+        displayRange: 'Đã qua thời gian làm việc'
+      });
+    } else {
+      const rawGaps = calculateAvailableGaps(morningStart, morningEnd, bookedSlots);
+      const availableGaps = filterRealTimeGaps(rawGaps);
+
+      let displayMessage = '';
+      if (availableGaps.length === 0) {
+        displayMessage = 'Đã hết chỗ';
       } else {
-        const rawGaps = calculateAvailableGaps(morningStart, morningEnd, bookedSlots);
-        const availableGaps = filterRealTimeGaps(rawGaps);
+        displayMessage = availableGaps
+          .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
+          .join(', ');
+      }
 
-        let displayMessage = '';
-        if (availableGaps.length === 0) {
-          displayMessage = 'Đã hết chỗ';
-        } else {
-          displayMessage = availableGaps
-            .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
-            .join(', ');
-        }
-
-        scheduleRanges.push({
-          shift: 'Morning',
-          shiftDisplay: 'Buổi sáng',
-          startTime: morningStart.toISOString(),
-          endTime: morningEnd.toISOString(),
-          availableGaps: availableGaps.map((gap) => ({
-            start: gap.start.toISOString(),
-            end: gap.end.toISOString(),
-            display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
-          })),
-          displayRange: displayMessage
-        });
+      scheduleRanges.push({
+        shift: 'Morning',
+        shiftDisplay: 'Buổi sáng',
+        startTime: morningStart.toISOString(),
+        endTime: morningEnd.toISOString(),
+        availableGaps: availableGaps.map((gap) => ({
+          start: gap.start.toISOString(),
+          end: gap.end.toISOString(),
+          display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
+        })),
+        displayRange: displayMessage
+      });
       }
     } else {
       scheduleRanges.push({
@@ -1819,40 +1821,40 @@ class AvailableSlotService {
     const afternoonShiftPassed = isShiftPassed(afternoonStart, afternoonEnd);
 
     if (afternoonSchedules.length > 0) {
-      if (afternoonShiftPassed) {
-        scheduleRanges.push({
-          shift: 'Afternoon',
-          shiftDisplay: 'Buổi chiều',
-          startTime: afternoonStart.toISOString(),
-          endTime: afternoonEnd.toISOString(),
-          availableGaps: [],
-          displayRange: 'Đã qua thời gian làm việc'
-        });
+    if (afternoonShiftPassed) {
+      scheduleRanges.push({
+        shift: 'Afternoon',
+        shiftDisplay: 'Buổi chiều',
+        startTime: afternoonStart.toISOString(),
+        endTime: afternoonEnd.toISOString(),
+        availableGaps: [],
+        displayRange: 'Đã qua thời gian làm việc'
+      });
+    } else {
+      const rawGaps = calculateAvailableGaps(afternoonStart, afternoonEnd, bookedSlots);
+      const availableGaps = filterRealTimeGaps(rawGaps);
+
+      let displayMessage = '';
+      if (availableGaps.length === 0) {
+        displayMessage = 'Đã hết chỗ';
       } else {
-        const rawGaps = calculateAvailableGaps(afternoonStart, afternoonEnd, bookedSlots);
-        const availableGaps = filterRealTimeGaps(rawGaps);
+        displayMessage = availableGaps
+          .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
+          .join(', ');
+      }
 
-        let displayMessage = '';
-        if (availableGaps.length === 0) {
-          displayMessage = 'Đã hết chỗ';
-        } else {
-          displayMessage = availableGaps
-            .map((gap) => `${formatTime(gap.start)}-${formatTime(gap.end)}`)
-            .join(', ');
-        }
-
-        scheduleRanges.push({
-          shift: 'Afternoon',
-          shiftDisplay: 'Buổi chiều',
-          startTime: afternoonStart.toISOString(),
-          endTime: afternoonEnd.toISOString(),
-          availableGaps: availableGaps.map((gap) => ({
-            start: gap.start.toISOString(),
-            end: gap.end.toISOString(),
-            display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
-          })),
-          displayRange: displayMessage
-        });
+      scheduleRanges.push({
+        shift: 'Afternoon',
+        shiftDisplay: 'Buổi chiều',
+        startTime: afternoonStart.toISOString(),
+        endTime: afternoonEnd.toISOString(),
+        availableGaps: availableGaps.map((gap) => ({
+          start: gap.start.toISOString(),
+          end: gap.end.toISOString(),
+          display: `${formatTime(gap.start)}-${formatTime(gap.end)}`
+        })),
+        displayRange: displayMessage
+      });
       }
     } else {
       scheduleRanges.push({
@@ -1920,6 +1922,46 @@ class AvailableSlotService {
       message: message, // ⭐ Trả về message nếu không có gaps khả dụng
       userReservedSlots: userReservedSlots // ⭐ Trả về reserved slots của user để FE hiển thị
     };
+  }
+
+  /**
+   * Lấy khoảng thời gian khả dụng dành riêng cho luồng bác sĩ tạo lịch tái khám.
+   * Ưu tiên kiểm tra trạng thái nghỉ phép trước khi tính toán lịch.
+   */
+  async getDoctorScheduleRangeForFollowUp({ doctorUserId, serviceId, date, patientUserId = null, appointmentFor = 'self' }) {
+    const checkLeaveDate = new Date(date);
+    checkLeaveDate.setUTCHours(12, 0, 0, 0);
+
+    const approvedLeave = await LeaveRequest.findOne({
+      userId: doctorUserId,
+      status: 'Approved',
+      startDate: { $lte: checkLeaveDate },
+      endDate: { $gte: checkLeaveDate }
+    }).select('startDate endDate');
+
+    if (approvedLeave) {
+      const doctor = await User.findById(doctorUserId).select('fullName');
+      const leaveStart = new Date(approvedLeave.startDate);
+      const leaveEnd = new Date(approvedLeave.endDate);
+
+      const formatDate = (d) => d.toLocaleDateString('vi-VN');
+      const message = `Bác sĩ đang nghỉ phép từ ${formatDate(leaveStart)} đến ${formatDate(leaveEnd)}. Vui lòng chọn ngày khác.`;
+
+      return {
+        doctorId: doctorUserId,
+        doctorName: doctor?.fullName || 'Bác sĩ',
+        date: checkLeaveDate,
+        serviceName: null,
+        serviceDuration: null,
+        doctorScheduleId: null,
+        scheduleRanges: [],
+        totalSchedules: 0,
+        message,
+        userReservedSlots: []
+      };
+    }
+
+    return this.getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId, appointmentFor });
   }
 
   /**
@@ -2229,5 +2271,6 @@ class AvailableSlotService {
     };
   }
 }
+
 
 module.exports = new AvailableSlotService();

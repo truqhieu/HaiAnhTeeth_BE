@@ -354,6 +354,61 @@ const getDoctorScheduleRange = async (req, res) => {
 };
 
 /**
+ * ⭐ NEW: Lấy khoảng thời gian khả dụng dành cho luồng bác sĩ tạo lịch tái khám
+ * GET /api/available-slots/doctor-schedule/follow-up?doctorUserId=xxx&serviceId=xxx&date=2025-10-25
+ */
+const getDoctorScheduleRangeForFollowUp = async (req, res) => {
+  try {
+    const { doctorUserId, serviceId, date, appointmentFor = 'self' } = req.query;
+    const patientUserId = req.query.patientUserId || null;
+
+    if (!doctorUserId || !serviceId || !date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng cung cấp đầy đủ doctorUserId, serviceId và date'
+      });
+    }
+
+    const searchDate = new Date(date);
+    if (isNaN(searchDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Định dạng ngày không hợp lệ. Vui lòng sử dụng format: YYYY-MM-DD'
+      });
+    }
+
+    const result = await availableSlotService.getDoctorScheduleRangeForFollowUp({
+      doctorUserId,
+      serviceId,
+      date: searchDate,
+      patientUserId,
+      appointmentFor
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Lỗi lấy doctor schedule range (follow-up):', error);
+
+    if (error.message.includes('Không tìm thấy') ||
+        error.message.includes('không hoạt động')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Hệ thống đang bận. Vui lòng thử lại sau ít phút.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * ⭐ NEW: Validate thời gian nhập có nằm trong doctor schedule và có bác sĩ khả dụng không
  * GET /api/available-slots/validate-appointment-time?doctorUserId=xxx&serviceId=xxx&date=2025-10-25&startTime=2025-10-25T09:20:00Z
  */
@@ -427,6 +482,7 @@ module.exports = {
   getAvailableDoctors,
   getAvailableDoctorsForTimeSlot,
   getDoctorScheduleRange,
+  getDoctorScheduleRangeForFollowUp,
   validateAppointmentTime
 };
 

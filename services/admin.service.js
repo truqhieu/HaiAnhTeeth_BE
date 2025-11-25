@@ -290,7 +290,7 @@ class AdminService {
       throw new Error('Không thể cập nhật tài khoản bệnh nhân');
     }
 
-    const updateFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'status'];
+    const updateFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'status', 'email'];
     const updates = {};
 
     for (const key of Object.keys(data)) {
@@ -356,6 +356,17 @@ class AdminService {
           throw new Error('Người dùng phải đủ 18 tuổi trở lên');
         }
         updates[key] = value;
+      }
+
+      // Validate email
+      if (key === 'email') {
+        const email = value.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          throw new Error('Email không hợp lệ');
+        }
+        const taken = await User.findOne({ email, _id: { $ne: id } });
+        if (taken) throw new Error('Email đã tồn tại');
+        updates[key] = email;
       }
 
       // Gender & Status

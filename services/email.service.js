@@ -7,7 +7,9 @@ const {
   getAppointmentCancelledEmailTemplate,
   getRequestApprovedEmailTemplate,
   getRequestRejectedEmailTemplate,
-  getDoctorAssignedEmailTemplate
+  getDoctorAssignedEmailTemplate,
+  getConsultationFormStaffEmailTemplate,
+  getReExaminationEmailTemplate
 } = require('../config/emailConfig');
 
 // Import SendGrid
@@ -238,6 +240,55 @@ class EmailService {
     html: template.html,
   });
 }
+
+async sendConsultationFormStaffEmail(staffEmail, data) {
+  if (!staffEmail) {
+    // Có thể chỉ warn, không throw để không làm fail flow
+    console.warn('⚠️ Không có email staff để gửi tư vấn');
+    return;
+  }
+
+  const template = getConsultationFormStaffEmailTemplate({
+    fullName: data.fullName,
+    phoneNumber: data.phoneNumber,
+    email: data.email,
+    clinicName: data.clinicName || 'Phòng khám Hải An',
+    emailStaff: staffEmail, // truyền vào để hiển thị trong nội dung mail
+  });
+
+  if (this.useSendGrid) {
+    return this._sendViaSendGrid(
+      staffEmail,
+      template.subject,
+      template.text,
+      template.html
+    );
+  }
+
+  const transporter = createTransporter();
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER || 'noreply@haianteeth.com',
+    to: staffEmail,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+  });
+}
+async sendReExaminationEmail(email, data) {
+    // Giả sử bạn đã có hàm getReExaminationEmailTemplate trong emailConfig.js
+    const template = getReExaminationEmailTemplate(data); 
+    if (this.useSendGrid) {
+      return this._sendViaSendGrid(email, template.subject, template.text, template.html);
+    }
+    const transporter = createTransporter();
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER || 'noreply@haianteeth.com',
+      to: email,
+      subject: template.subject,
+      text: template.text,
+      html: template.html,
+    });
+  }
 }
 
 module.exports = new EmailService();

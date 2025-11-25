@@ -1713,6 +1713,42 @@ const getMyRelatives = async (req, res) => {
   }
 };
 
+const getServiceRevenueReport = async(req,res) =>{
+
+  try {
+    const {startDate, endDate} = req.query
+    const result = await appointmentService.getServiceRevenueReport(startDate, endDate);
+    return res.status(200).json({
+      success: true,
+      message: 'Lấy báo cáo doanh thu dịch vụ thành công',
+      result
+    });
+  } catch (error) {
+    console.error('❌ Error in getServiceRevenueReport:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
+  }
+}
+
+const getRevenueServicePDF = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query; // có thể để trống để dùng default trong service
+
+    await appointmentService.getRevenueServicePDF(startDate, endDate, res);
+
+  } catch (error) {
+    console.error('❌ Error in getRevenueServicePDF:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createConsultationAppointment,
   createWalkInAppointment,
@@ -1739,5 +1775,7 @@ module.exports = {
   getMyRelatives,
   markAppointmentNoTreatment,
   reserveTimeslot,
-  releaseReservedTimeslot
+  releaseReservedTimeslot,
+  getServiceRevenueReport,
+  getRevenueServicePDF
 };

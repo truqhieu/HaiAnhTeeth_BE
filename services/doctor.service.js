@@ -4,8 +4,22 @@ const Patient = require('../models/patient.model');
 const MedicalRecord = require('../models/medicalRecord.model');
 const Customer = require('../models/customer.model');
 const leaveRequestService = require('./leaveRequest.service');
-
+const Doctor = require('../models/doctor.model');
+const { cloudinary } = require('../config/cloudinary');
+const fs = require('fs');
 class DoctorService {
+
+  async uploadCertificateImage(filePath) {
+    const result = await cloudinary.uploader.upload(filePath, {
+      folder: 'doctor-certificates',
+      resource_type: 'image',
+      transformation: [
+        { width: 800, height: 800, crop: 'limit' },
+        { quality: 'auto' },
+      ],
+    });
+    return result;
+  }
 
   /**
    * Lấy danh sách appointments của một patient với doctor này
@@ -321,6 +335,113 @@ class DoctorService {
       status: user.status,
       emergencyContact: patientRecord?.emergencyContact || 'Trống'
     };
+  }
+
+  async updateDoctorInfo(doctorUserId, data, certificateFile) {
+    const doctor = await Doctor.findOne({doctorUserId: doctorUserId});
+    if (!doctor) {
+      throw new Error('Bác sĩ không tồn tại');
+    }
+
+    const {
+      specialization,
+      yearsOfExperience,
+      certificate,
+      summary,
+    } = data;
+
+    const ensureValidText = (value, fieldLabel) => {
+      if (typeof value !== 'string') {
+        throw new Error(`${fieldLabel} phải là chuỗi.`);
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        throw new Error(`${fieldLabel} không được để trống.`);
+      }
+      return trimmed;
+    };
+
+    if (typeof specialization !== 'undefined') {
+      doctor.specialization = ensureValidText(specialization, 'Chuyên môn');
+    }
+
+    if (typeof yearsOfExperience !== 'undefined') {
+      const parsedYears =
+        typeof yearsOfExperience === 'number'
+          ? yearsOfExperience
+          : Number(yearsOfExperience);
+      if (Number.isNaN(parsedYears) || parsedYears < 0) {
+        throw new Error('Số năm kinh nghiệm không hợp lệ.');
+      }
+      doctor.yearsOfExperience = parsedYears;
+    }
+
+    if (certificateFile) {
+      const uploadResult = await this.uploadCertificateImage(certificateFile.path);
+      doctor.certificate = uploadResult.secure_url;
+      if (certificateFile.path && fs.existsSync(certificateFile.path)) {
+        fs.unlinkSync(certificateFile.path);
+      }
+    } else if (typeof certificate !== 'undefined') {
+      if (certificate === null) {
+        doctor.certificate = null;
+      } else {
+        const certificateValue = ensureValidText(certificate, 'Ảnh chứng chỉ');
+        const isHttpUrl = /^https?:\/\//.test(certificateValue);
+        if (!isHttpUrl) {
+          throw new Error('Ảnh chứng chỉ phải là đường dẫn hình ảnh hợp lệ.');
+        }
+        doctor.certificate = certificateValue;
+      }
+    }
+
+    if (typeof summary !== 'undefined') {
+      doctor.summary = ensureValidText(summary, 'Tóm tắt kinh nghiệm');
+    }
+
+    await doctor.save();
+    return doctor;
+  }
+
+  async getAllDoctorInfo() {
+    const doctors = await Doctor.find()
+      .select('doctorUserId specialization yearsOfExperience certificate summary')
+      .populate({
+        path: 'doctorUserId',
+        select: 'fullName avatar'
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return doctors.map(doc => ({
+      doctorUserId: doc.doctorUserId?._id || doc.doctorUserId,
+      fullName: doc.doctorUserId?.fullName || 'Chưa cập nhật',
+      avatar: doc.doctorUserId?.avatar || null,
+      specialization: doc.specialization || null,
+      yearsOfExperience: doc.yearsOfExperience ?? null,
+      certificate: doc.certificate || null,
+      summary: doc.summary || null,
+    }));
+  }
+
+  async getDoctorInfoDetail(doctorUserId) {
+    if (!doctorUserId) {
+      throw new Error('Thiếu thông tin doctorUserId');
+    }
+
+    const doctor = await Doctor.findOne({ doctorUserId })
+      .select('doctorUserId specialization yearsOfExperience certificate summary')
+      .populate({
+        path: 'doctorUserId',
+        select: 'fullName avatar'
+      })
+      .lean();
+
+    if (!doctor) {
+      throw new Error('Không tìm thấy bác sĩ');
+    }
+
+    return doctor;
   }
 }
 

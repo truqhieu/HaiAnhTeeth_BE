@@ -26,11 +26,11 @@ class PromotionService {
       throw new Error('Tiêu đề giảm giá không được để trống');
     }
     const cleanTitle = title.trim();
-    if (!/^[\p{L}0-9\s\-%()]+$/u.test(cleanTitle)) {
-      throw new Error('Tiêu đề chỉ được chứa chữ, số, khoảng trắng và ký tự: % - ( )');
+    if (cleanTitle.length < 3 || cleanTitle.length > 200) {
+      throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
     }
-    if (cleanTitle.length < 5 || cleanTitle.length > 100) {
-      throw new Error('Tiêu đề phải từ 5 đến 100 ký tự');
+    if (/[<>]/.test(cleanTitle)) {
+      throw new Error('Tiêu đề không được chứa ký tự < hoặc >');
     }
   
     // =========================
@@ -40,11 +40,11 @@ class PromotionService {
       throw new Error('Mô tả giảm giá không được để trống');
     }
     const cleanDescription = description.trim();
-    if (!/^[\p{L}0-9\s\.,!?\-%()]+$/u.test(cleanDescription)) {
-      throw new Error('Mô tả chỉ được chứa chữ, số, khoảng trắng và ký tự: . , ! ? - % ( )');
-    }
     if (cleanDescription.length < 10) {
       throw new Error('Mô tả phải có ít nhất 10 ký tự');
+    }
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả không được chứa ký tự < hoặc >');
     }
   
     // =========================
@@ -367,11 +367,11 @@ class PromotionService {
         throw new Error('Tiêu đề không được để trống');
       }
       cleanTitle = title.trim();
-      if (!/^[\p{L}0-9\s\-%()]+$/u.test(cleanTitle)) {
-        throw new Error('Tiêu đề chỉ được chứa chữ, số, khoảng trắng và ký tự: % - ( )');
+      if (cleanTitle.length < 3 || cleanTitle.length > 200) {
+        throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
       }
-      if (cleanTitle.length < 5 || cleanTitle.length > 100) {
-        throw new Error('Tiêu đề phải từ 5 đến 100 ký tự');
+      if (/[<>]/.test(cleanTitle)) {
+        throw new Error('Tiêu đề không được chứa ký tự < hoặc >');
       }
     }
 
@@ -382,11 +382,11 @@ class PromotionService {
         throw new Error('Mô tả không được để trống');
       }
       cleanDescription = description.trim();
-      if (!/^[\p{L}0-9\s\.,!?\-%()]+$/u.test(cleanDescription)) {
-        throw new Error('Mô tả chỉ được chứa chữ, số, khoảng trắng và ký tự: . , ! ? - % ( )');
-      }
       if (cleanDescription.length < 10) {
         throw new Error('Mô tả phải có ít nhất 10 ký tự');
+      }
+      if (/[<>]/.test(cleanDescription)) {
+        throw new Error('Mô tả không được chứa ký tự < hoặc >');
       }
     }
 
