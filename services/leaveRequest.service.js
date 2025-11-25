@@ -68,18 +68,12 @@ class LeaveRequestService {
       throw new Error('Bạn đã có đơn nghỉ được duyệt trong khoảng thời gian này');
     }
 
-    // Format real time
-
-    const rightNow = new Date();
-    
+    // Format dates to UTC midnight to avoid timezone shift
     const startToSave = new Date(start);
-    startToSave.setHours(
-      rightNow.getHours(),
-      rightNow.getMinutes(),
-    )
+    startToSave.setUTCHours(0, 0, 0, 0); // UTC midnight
 
     const endToSave = new Date(end);
-    endToSave.setHours(23, 59, 59, 999);
+    endToSave.setUTCHours(23, 59, 59, 999); // UTC end of day
 
     const newRequest = new LeaveRequest({
       userId,
@@ -229,9 +223,6 @@ class LeaveRequestService {
 
   /**
    * Helper: Restore DoctorSchedule về Available sau khi hết thời gian nghỉ
-   * @param {string} doctorUserId - ID của bác sĩ
-   * @param {Date} startDate - Ngày bắt đầu nghỉ
-   * @param {Date} endDate - Ngày kết thúc nghỉ
    */
   async _restoreDoctorSchedule(doctorUserId, startDate, endDate) {
     const today = new Date();
@@ -246,7 +237,7 @@ class LeaveRequestService {
       return; // Chưa đến ngày restore
     }
 
-    console.log(`🔄 [_restoreDoctorSchedule] Restoring schedules for doctor ${doctorUserId.toString()} after leave ended (${leaveStart.toLocaleDateString('vi-VN')} - ${leaveEnd.toLocaleDateString('vi-VN')})`);
+    console.log(`🔄 [_restoreDoctorSchedule] Restoring schedules for doctor ${doctorUserId.toString()} after leave ended`);
 
     // Restore schedules trong khoảng thời gian leave đã hết hạn
     const updatePromises = [];
@@ -262,18 +253,7 @@ class LeaveRequestService {
           status: 'Unavailable'
         },
         { $set: { status: 'Available' } }
-      )
-        .then(result => {
-          if (result.modifiedCount > 0) {
-            console.log(`✅ [_restoreDoctorSchedule] Restored ${result.modifiedCount} schedules for ${shift} shift (${leaveStart.toLocaleDateString('vi-VN')} - ${leaveEnd.toLocaleDateString('vi-VN')})`);
-          }
-          return result;
-        })
-        .catch(err => {
-          console.error(`❌ Lỗi restore schedule ca ${shift}:`, err.message);
-          return null;
-        });
-
+      );
       updatePromises.push(updatePromise);
     }
 
@@ -289,37 +269,15 @@ class LeaveRequestService {
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
-    console.log(`🔍 [_updateDoctorSchedule] Updating schedule for doctor:`, {
-      doctorUserId: doctorUserId.toString(),
-      startDate: start.toISOString(),
-      endDate: end.toISOString(),
-      startDateStr: start.toLocaleDateString('vi-VN'),
-      endDateStr: end.toLocaleDateString('vi-VN')
-    });
-
-    // Loop qua từng ngày trong khoảng thời gian
     const currentDate = new Date(start);
     const lastDate = new Date(end);
     const updatePromises = [];
-    let totalUpdated = 0;
 
     while (currentDate <= lastDate) {
-      // Normalize date để so sánh chính xác (chỉ lấy ngày, bỏ giờ)
       const dateToMatch = new Date(currentDate);
       dateToMatch.setHours(0, 0, 0, 0);
       const dateToMatchEnd = new Date(currentDate);
       dateToMatchEnd.setHours(23, 59, 59, 999);
-
-      // Kiểm tra xem có schedules nào tồn tại không
-      const existingSchedules = await DoctorSchedule.find({
-        doctorUserId: doctorUserId,
-        date: {
-          $gte: dateToMatch,
-          $lte: dateToMatchEnd
-        }
-      });
-
-      console.log(`🔍 [_updateDoctorSchedule] Found ${existingSchedules.length} existing schedules for ${dateToMatch.toLocaleDateString('vi-VN')}`);
 
       for (const shift of ['Morning', 'Afternoon']) {
         const updatePromise = DoctorSchedule.updateMany(
@@ -332,42 +290,18 @@ class LeaveRequestService {
             shift: shift
           },
           { $set: { status: 'Unavailable' } }
-        )
-          .then(result => {
-            console.log(`📊 [_updateDoctorSchedule] Update result for ${dateToMatch.toLocaleDateString('vi-VN')} - ${shift}:`, {
-              matchedCount: result.matchedCount,
-              modifiedCount: result.modifiedCount,
-              acknowledged: result.acknowledged
-            });
-            if (result.modifiedCount > 0) {
-              console.log(`✅ [_updateDoctorSchedule] Updated ${result.modifiedCount} schedules for ${dateToMatch.toLocaleDateString('vi-VN')} - ${shift}`);
-              totalUpdated += result.modifiedCount;
-            } else if (result.matchedCount === 0) {
-              console.log(`⚠️ [_updateDoctorSchedule] No schedules found for ${dateToMatch.toLocaleDateString('vi-VN')} - ${shift} (may need to create schedules first)`);
-            } else {
-              console.log(`ℹ️ [_updateDoctorSchedule] Schedules already updated for ${dateToMatch.toLocaleDateString('vi-VN')} - ${shift}`);
-            }
-            return result;
-          })
-          .catch(err => {
-            console.error(`❌ Lỗi cập nhật schedule ${dateToMatch.toLocaleDateString('vi-VN')} ca ${shift}:`, err.message);
-            return null;
-          });
-
+        );
         updatePromises.push(updatePromise);
       }
 
-      // Tăng ngày lên 1
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
     await Promise.all(updatePromises);
-    console.log(`✅ [_updateDoctorSchedule] Đã đánh dấu ${totalUpdated} schedules thành Unavailable từ ${start.toLocaleDateString('vi-VN')} đến ${end.toLocaleDateString('vi-VN')}`);
   }
 
   /**
    * Xử lý leave request (approve/reject)
-   * Khi approve: Tìm appointments bị ảnh hưởng, tạo notifications cho staff, đánh dấu bác sĩ unavailable
    */
   async handleLeaveRequest(requestId, managerId, status) {
     const handleRequest = await LeaveRequest.findByIdAndUpdate(
@@ -383,42 +317,32 @@ class LeaveRequestService {
       throw new Error('Không tìm thấy yêu cầu nghỉ phép');
     }
 
-    // Xử lý khi reject - restore status nếu không còn leave active
+    // Xử lý khi reject
     if (status === 'Rejected' && handleRequest.userId) {
       try {
         const doctorUserId = handleRequest.userId._id || handleRequest.userId;
         
-        // Check xem có còn leave active nào không
         const activeLeaves = await LeaveRequest.countDocuments({
           userId: doctorUserId,
           status: 'Approved',
-          endDate: { $gte: new Date() } // Chỉ count leaves chưa hết hạn
+          endDate: { $gte: new Date() }
         });
 
         if (activeLeaves === 0) {
-          // Không còn leave active, restore về Available
           await Doctor.updateOne(
             { doctorUserId: doctorUserId },
             { $set: { status: 'Available' } }
           );
-          console.log(`✅ Đã restore status của bác sĩ về 'Available' sau khi reject leave request`);
         }
 
-         // ✅ Gửi notification cho bác sĩ khi từ chối đơn nghỉ
-          try {
-            await notificationService.createNotification({
-              userId: managerId,
-              createdByUserId: doctorUserId,
-              title: 'Đơn xin nghỉ của bạn đã bị từ chối',
-              message: `Lý do ${handleRequest.reason}`,
-              relatedAppointmentId: null,
-              link:  null,
-            });
-          } catch (notifError) {
-            console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
-          }    
-
-
+        await notificationService.createNotification({
+          userId: doctorUserId,
+          createdByUserId: managerId,
+          title: 'Đơn xin nghỉ của bạn đã bị từ chối',
+          message: `Lý do: ${handleRequest.reason}`,
+          relatedAppointmentId: null,
+          link: null,
+        });
       } catch (error) {
         console.error('❌ Lỗi xử lý khi reject leave request:', error);
       }
@@ -432,9 +356,6 @@ class LeaveRequestService {
         const startDate = new Date(handleRequest.startDate);
         const endDate = new Date(handleRequest.endDate);
 
-        // 1. Tìm appointments bị ảnh hưởng
-        // ⭐ Chỉ hiển thị vắng mặt cho các ca đang chờ duyệt, đã approved, hoặc đã check-in
-        // KHÔNG hiển thị cho các ca đã hoàn thành (Completed) hoặc đang tiến hành (InProgress)
         const affectedAppointments = await Appointment.find({
           doctorUserId: doctorUserId,
           status: { $in: ['Pending', 'Approved', 'CheckedIn'] },
@@ -453,75 +374,23 @@ class LeaveRequestService {
           .lean();
 
         const validAppointments = affectedAppointments.filter(apt => apt.timeslotId !== null);
-        console.log(`📋 Tìm thấy ${validAppointments.length} appointments bị ảnh hưởng cho bác sĩ ${doctorName}`);
 
-        // 2. Tạo notifications cho staff
         if (validAppointments.length > 0) {
           await this._notifyStaffAboutAffectedAppointments(validAppointments, doctorName, startDate, endDate, managerId, requestId);
         }
 
-        // 3. Đánh dấu DoctorSchedule thành Unavailable
         await this._updateDoctorSchedule(doctorUserId, startDate, endDate);
 
-        // ⭐ FIX: KHÔNG update Doctor status global thành 'On Leave'
-        // Vì status global sẽ ảnh hưởng đến TẤT CẢ appointments, kể cả appointments ngoài khoảng nghỉ phép
-        // Logic kiểm tra leave request đã được sửa để kiểm tra theo ngày của từng appointment
-        // Nên không cần status global nữa
-        
-        // ⭐ Clear status global 'On Leave' nếu có (để đảm bảo không ảnh hưởng đến appointments tương lai)
-        // Logic kiểm tra leave request theo ngày sẽ tự động xử lý việc hiển thị "Vắng mặt" cho appointments trong khoảng nghỉ phép
-        const currentDoctor = await Doctor.findOne({ doctorUserId: doctorUserId }).select('status').lean();
-        if (currentDoctor && currentDoctor.status === 'On Leave') {
-          // Chỉ restore về 'Available' nếu status hiện tại là 'On Leave'
-          // (để tránh ghi đè status 'Busy' hoặc 'Inactive' hợp lệ)
-          await Doctor.updateOne(
-            { doctorUserId: doctorUserId },
-            { $set: { status: 'Available' } }
-          );
-          console.log(`✅ Đã clear status global 'On Leave' của bác sĩ ${doctorName} (sử dụng logic kiểm tra leave theo ngày thay vì status global)`);
-        }
-        
-        console.log(`✅ Đã đánh dấu DoctorSchedule thành Unavailable cho bác sĩ ${doctorName} từ ${startDate.toISOString().split('T')[0]} đến ${endDate.toISOString().split('T')[0]}`);
-
-             // ✅ Gửi notification cho bác sĩ khi duyệt đơn nghỉ
-          try {
-            await notificationService.createNotification({
-              userId: doctorUserId,
-              createdByUserId: managerId,
-              title: 'Đơn xin nghỉ của bạn đã được duyệt',
-              message: `Lý do ${handleRequest.reason}`,
-              relatedAppointmentId: null,
-              link:  null,
-            });
-          } catch (notifError) {
-            console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
-          }
-          
-          // Gửi thông báo cho các staff nếu bác sĩ nghỉ có lịch khám
-              const checkApppointment = await Appointment.findOne({doctorUserId : doctorUserId})
-              if(checkApppointment){
-              const listStaff = await User.find({role : "Staff"})
-              try {
-               await Promise.all(
-              listStaff.map(s =>
-                notificationService.createNotification({
-                  userId: s._id,
-                  createdByUserId: patientUserId,
-                  title: 'Lịch khám mới đã được đặt',
-                  message: `Đã có bệnh nhân đặt lịch khám mới`,
-                  relatedAppointmentId: newAppointment._id,
-                  link: null,
-                })
-              )
-            );
-          } catch (notifError) {
-            console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
-          }
-        }
-
+        await notificationService.createNotification({
+          userId: doctorUserId,
+          createdByUserId: managerId,
+          title: 'Đơn xin nghỉ của bạn đã được duyệt',
+          message: `Lý do: ${handleRequest.reason}`,
+          relatedAppointmentId: null,
+          link: null,
+        });
       } catch (error) {
         console.error('❌ Lỗi xử lý khi approve leave request:', error);
-        // Không throw error để không làm gián đoạn việc approve
       }
     }
 
@@ -535,14 +404,12 @@ class LeaveRequestService {
 
   /**
    * Tự động restore schedules về Available sau khi hết thời gian nghỉ
-   * Nên được gọi định kỳ (cron job) hoặc khi có request
    */
   async restoreExpiredLeaveSchedules() {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Tìm tất cả leave requests đã hết hạn (endDate < today) và đã được approve
       const expiredLeaves = await LeaveRequest.find({
         status: 'Approved',
         endDate: { $lt: today }
@@ -550,9 +417,6 @@ class LeaveRequestService {
         .populate('userId', '_id')
         .lean();
 
-      console.log(`🔄 [restoreExpiredLeaveSchedules] Found ${expiredLeaves.length} expired leave requests`);
-
-      // Track doctors để check xem có còn leave active không
       const doctorIds = new Set();
 
       for (const leave of expiredLeaves) {
@@ -562,30 +426,24 @@ class LeaveRequestService {
         const leaveStart = new Date(leave.startDate);
         const leaveEnd = new Date(leave.endDate);
         
-        // Restore schedules cho doctor này trong khoảng thời gian leave
         await this._restoreDoctorSchedule(doctorUserId, leaveStart, leaveEnd);
         doctorIds.add(doctorUserId.toString());
       }
 
-      // Check và restore Doctor status về 'Available' nếu không còn leave active
       for (const doctorId of doctorIds) {
         const activeLeaves = await LeaveRequest.countDocuments({
           userId: doctorId,
           status: 'Approved',
-          endDate: { $gte: today } // Chỉ count leaves chưa hết hạn
+          endDate: { $gte: today }
         });
 
         if (activeLeaves === 0) {
-          // Không còn leave active, restore về Available
           await Doctor.updateOne(
             { doctorUserId: doctorId },
             { $set: { status: 'Available' } }
           );
-          console.log(`✅ Đã restore status của bác sĩ ${doctorId} về 'Available'`);
         }
       }
-
-      console.log(`✅ [restoreExpiredLeaveSchedules] Completed restoring schedules for ${expiredLeaves.length} expired leaves`);
     } catch (error) {
       console.error('❌ [restoreExpiredLeaveSchedules] Error:', error);
     }
@@ -593,9 +451,6 @@ class LeaveRequestService {
 
   /**
    * Kiểm tra xem bác sĩ có lịch nghỉ được duyệt trong khoảng thời gian appointment không
-   * @param {string} doctorUserId - ID của bác sĩ
-   * @param {Date} appointmentStartTime - Thời gian bắt đầu appointment
-   * @returns {Promise<boolean>} - true nếu có leave, false nếu không có
    */
   async isDoctorOnLeave(doctorUserId, appointmentStartTime) {
     try {
@@ -604,16 +459,26 @@ class LeaveRequestService {
       }
 
       const appointmentDate = new Date(appointmentStartTime);
-      // Chỉ lấy phần ngày, bỏ phần giờ
-      appointmentDate.setHours(0, 0, 0, 0);
+      // Normalize to UTC midnight to match database storage
+      appointmentDate.setUTCHours(0, 0, 0, 0);
 
-      // Tìm leave request được approve có startDate và endDate bao phủ appointmentDate
+      console.log(`🔍 [isDoctorOnLeave] Checking doctor ${doctorUserId} for date ${appointmentDate.toISOString().split('T')[0]}`);
+      console.log(`   Input: ${appointmentStartTime}`);
+      console.log(`   Normalized (UTC midnight): ${appointmentDate.toISOString()}`);
+
       const leaveRequest = await LeaveRequest.findOne({
         userId: doctorUserId,
         status: 'Approved',
         startDate: { $lte: appointmentDate },
         endDate: { $gte: appointmentDate }
       });
+
+      if (leaveRequest) {
+        console.log(`✅ [isDoctorOnLeave] Doctor ${doctorUserId} IS on leave on ${appointmentDate.toISOString().split('T')[0]}`);
+        console.log(`   Leave period: ${new Date(leaveRequest.startDate).toISOString().split('T')[0]} to ${new Date(leaveRequest.endDate).toISOString().split('T')[0]}`);
+      } else {
+        console.log(`❌ [isDoctorOnLeave] Doctor ${doctorUserId} is NOT on leave on ${appointmentDate.toISOString().split('T')[0]}`);
+      }
 
       return !!leaveRequest;
     } catch (error) {
@@ -624,4 +489,3 @@ class LeaveRequestService {
 }
 
 module.exports = new LeaveRequestService();
-

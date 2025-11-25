@@ -953,7 +953,10 @@ class AppointmentService {
       doctorUserId,
       serviceId,
       date: scheduleDate,
-      startTime: requestedStartTime
+      startTime: requestedStartTime,
+      // ⭐ Pass customer info for conflict checking (relative logic)
+      customerFullName: fullName,
+      customerEmail: email
     });
 
     const slotStartTime = new Date(validationResult.startTime);

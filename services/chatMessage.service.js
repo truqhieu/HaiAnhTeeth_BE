@@ -167,6 +167,11 @@ const message = new ChatMessage({
         // Group by appointmentId
         const conversationMap = new Map();
         messages.forEach(msg => {
+          // Skip if appointmentId or receiverId is null (deleted data)
+          if (!msg.appointmentId || !msg.receiverId) {
+            return;
+          }
+          
           const appointmentId = msg.appointmentId._id.toString();
           if (!conversationMap.has(appointmentId)) {
             conversationMap.set(appointmentId, {
@@ -198,10 +203,16 @@ const message = new ChatMessage({
         // Group by appointmentId
         const conversationMap = new Map();
         messages.forEach(msg => {
+          // Skip if appointmentId or senderId is null (deleted data)
+          if (!msg.appointmentId || !msg.senderId) {
+            return;
+          }
+          
           const appointmentId = msg.appointmentId._id.toString();
           if (!conversationMap.has(appointmentId)) {
             // Đếm unread messages
             const unreadCount = messages.filter(m => 
+              m.appointmentId && 
               m.appointmentId._id.toString() === appointmentId && 
               !m.read && 
               m.receiverId._id.toString() === userId.toString()
