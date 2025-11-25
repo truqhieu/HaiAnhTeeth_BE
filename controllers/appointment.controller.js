@@ -181,7 +181,7 @@ const createConsultationAppointment = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Đặt lịch tư vấn thành công',
+      message: 'Đặt lịch thành công',
       data: result
     });
 
@@ -341,7 +341,9 @@ const reserveTimeslot = async (req, res) => {
       doctorScheduleId,
       date,
       startTime,
-      appointmentFor
+      appointmentFor,
+      customerFullName,
+      customerEmail
     } = req.body;
 
     const result = await appointmentService.reserveTimeslot({
@@ -351,7 +353,9 @@ const reserveTimeslot = async (req, res) => {
       doctorScheduleId,
       date,
       startTime,
-      appointmentFor
+      appointmentFor,
+      customerFullName,
+      customerEmail
     });
 
     return res.status(200).json({

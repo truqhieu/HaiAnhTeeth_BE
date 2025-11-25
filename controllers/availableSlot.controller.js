@@ -206,7 +206,7 @@ const getAvailableDoctors = async (req, res) => {
  */
 const getAvailableDoctorsForTimeSlot = async (req, res) => {
   try {
-    const { serviceId, date, startTime, endTime, appointmentFor, userId } = req.query;
+    const { serviceId, date, startTime, endTime, appointmentFor, userId, customerFullName, customerEmail } = req.query;
 
     // Validation
     if (!serviceId || !date || !startTime || !endTime) {
@@ -253,12 +253,21 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     // Chỉ exclude khi appointmentFor === 'self'
     const patientUserId = req.user?.userId;
     const appointmentForValue = appointmentFor || 'self';
+    const normalizedCustomerFullName = appointmentForValue === 'other' && customerFullName
+      ? decodeURIComponent(customerFullName)
+      : null;
+    const normalizedCustomerEmail = appointmentForValue === 'other' && customerEmail
+      ? decodeURIComponent(customerEmail)
+      : null;
     
     // ⭐ FIX: Chỉ pass userIdForExclusion khi appointmentFor === 'self'
     // Khi appointmentFor === 'other', set patientUserId = null để KHÔNG exclude
     const userIdForExclusion = (appointmentForValue === 'self') ? (userId || patientUserId) : null;
     console.log('🔍 [getAvailableDoctorsForTimeSlot] userIdForExclusion:', userIdForExclusion || 'none');
     console.log('🔍 [getAvailableDoctorsForTimeSlot] appointmentForValue:', appointmentForValue);
+    if (normalizedCustomerFullName && normalizedCustomerEmail) {
+      console.log('   - booking for customer:', `${normalizedCustomerFullName} <${normalizedCustomerEmail}>`);
+    }
 
     const result = await availableSlotService.getAvailableDoctorsForTimeSlot({
       serviceId,
@@ -266,7 +275,9 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       startTime: slotStart,
       endTime: slotEnd,
       patientUserId: userIdForExclusion,
-      appointmentFor: appointmentForValue
+      appointmentFor: appointmentForValue,
+      customerFullName: normalizedCustomerFullName,
+      customerEmail: normalizedCustomerEmail
     });
 
     res.status(200).json({
@@ -302,14 +313,36 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
  */
 const getDoctorScheduleRange = async (req, res) => {
   try {
-    const { doctorUserId, serviceId, date, appointmentFor = 'self' } = req.query;
+    const { doctorUserId, serviceId, date, appointmentFor = 'self', customerFullName, customerEmail } = req.query;
     const patientUserId = req.user?.userId; // Lấy từ token
+    const normalizedCustomerFullName = appointmentFor === 'other' && customerFullName
+      ? decodeURIComponent(customerFullName)
+      : null;
+    const normalizedCustomerEmail = appointmentFor === 'other' && customerEmail
+      ? decodeURIComponent(customerEmail)
+      : null;
 
     // Validation
     if (!doctorUserId || !serviceId || !date) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng cung cấp đầy đủ doctorUserId, serviceId và date'
+      });
+    }
+
+    // ⭐ THÊM: Validate ObjectId format
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(doctorUserId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID bác sĩ không đúng định dạng. Vui lòng thử lại.'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID dịch vụ không đúng định dạng. Vui lòng thử lại.'
       });
     }
 
@@ -326,7 +359,9 @@ const getDoctorScheduleRange = async (req, res) => {
       serviceId,
       date: searchDate,
       patientUserId, // ⭐ THÊM: Truyền patientUserId để lọc appointments của user
-      appointmentFor // ⭐ THÊM: Truyền appointmentFor để biết đặt cho self hay other
+      appointmentFor, // ⭐ THÊM: Truyền appointmentFor để biết đặt cho self hay other
+      customerFullName: normalizedCustomerFullName,
+      customerEmail: normalizedCustomerEmail
     });
 
     res.status(200).json({

@@ -194,9 +194,10 @@ class AppointmentService {
     const slotStartTime = new Date(selectedSlot.startTime);
     const slotEndTime = new Date(selectedSlot.endTime);
 
-    // ⭐ THÊM: Check conflict khi đặt cho bản thân - không được đặt 2 bác sĩ khác nhau cùng giờ
+    // ⭐ THÊM: Check conflict khi đặt cho bản thân - CHỈ kiểm tra với CÙNG bác sĩ
+    // Cho phép đặt cùng giờ với bác sĩ khác
     if (appointmentFor === 'self' || !appointmentFor) {
-      console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId}`);
+      console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId} with doctor: ${doctorUserId}`);
       
       // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
       let excludeAppointmentId = null;
@@ -207,9 +208,10 @@ class AppointmentService {
         }
       }
       
-      // Lấy tất cả appointments của bệnh nhân này (BẤT KỲ bác sĩ nào) vào cùng thời gian
+      // ⭐ CHỈ lấy appointments của bệnh nhân với CÙNG bác sĩ (cho phép đặt cùng giờ với bác sĩ khác)
       const patientConflictAppointments = await Appointment.find({
         patientUserId: patientUserId,
+        doctorUserId: doctorUserId, // ⭐ THÊM: Chỉ kiểm tra với cùng bác sĩ
         status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
         timeslotId: { $exists: true }
       }).populate({
@@ -235,9 +237,8 @@ class AppointmentService {
         const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
         
         if (isConflict) {
-          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này:`);
+          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này với bác sĩ ${doctorUserId}:`);
           console.log(`   - Appointment ID: ${apt._id}`);
-          console.log(`   - Doctor ID: ${apt.doctorUserId} (current: ${doctorUserId})`);
           console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
           console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
         }
@@ -246,10 +247,10 @@ class AppointmentService {
       });
 
       if (hasConflict) {
-        throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ khác. Vui lòng chọn thời gian khác hoặc hủy lịch cũ trước!');
+        throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ này. Vui lòng chọn thời gian khác!');
       }
 
-      console.log(`✅ Patient ${patientUserId} không có conflict với appointments của chính họ`);
+      console.log(`✅ Patient ${patientUserId} không có conflict với bác sĩ ${doctorUserId}`);
     }
     
     
@@ -302,6 +303,14 @@ class AppointmentService {
       throw new Error(`Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.`);
     }
 
+    // ⭐ THÊM: Tự động tạo schedule cho TẤT CẢ bác sĩ nếu chưa có
+    const slotDate = new Date(selectedSlot.startTime);
+    const scheduleDate = new Date(selectedSlot.startTime); // Define scheduleDate
+    scheduleDate.setUTCHours(0, 0, 0, 0); // Set to start of day UTC
+    
+    console.log(`🔍 Ensuring schedules exist for date ${scheduleDate.toISOString().split('T')[0]}...`);
+    await ScheduleHelper.ensureSchedulesForDate(scheduleDate);
+    
     // Validate selectedSlot duration phải khớp với service duration
     const slotDurationMinutes = (slotEndTime - slotStartTime) / 60000;
 
@@ -718,7 +727,9 @@ class AppointmentService {
     doctorScheduleId,
     date,
     startTime,
-    appointmentFor = 'self'
+    appointmentFor = 'self',
+    customerFullName,
+    customerEmail
   }) {
     if (!patientUserId) {
       throw new Error('Vui lòng đăng nhập để giữ chỗ.');
@@ -744,7 +755,10 @@ class AppointmentService {
       serviceId,
       date: searchDate,
       startTime: slotStart,
-      patientUserId
+      patientUserId,
+      appointmentFor,
+      customerFullName,
+      customerEmail
     });
 
     const validatedStart = new Date(validationResult.startTime);
@@ -947,6 +961,10 @@ class AppointmentService {
 
     const startHourVN = (slotStartTime.getUTCHours() + 7 + 24) % 24;
     const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
+
+    // ⭐ THÊM: Tự động tạo schedule cho TẤT CẢ bác sĩ nếu chưa có
+    console.log(`🔍 Ensuring schedules exist for date ${scheduleDate.toISOString().split('T')[0]}...`);
+    await ScheduleHelper.ensureSchedulesForDate(scheduleDate);
 
     let schedule = null;
     if (doctorScheduleId) {
@@ -1477,19 +1495,24 @@ class AppointmentService {
           // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
           let isOnLeaveForThisDate = false;
           if (apt.timeslotId && apt.timeslotId.startTime) {
-            const appointmentDate = new Date(apt.timeslotId.startTime);
-            appointmentDate.setUTCHours(0, 0, 0, 0);
+            // Convert appointment time to VN Date (UTC+7)
+            // Tạo "fake UTC" date bằng cách cộng 7 giờ vào thời gian thực
+            const appointmentTimeVN = new Date(new Date(apt.timeslotId.startTime).getTime() + 7 * 60 * 60 * 1000);
+            const appointmentDateVN = new Date(appointmentTimeVN);
+            appointmentDateVN.setUTCHours(0, 0, 0, 0);
             
             // Kiểm tra trong danh sách approved leaves
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
-                const leaveStart = new Date(leave.startDate);
-                const leaveEnd = new Date(leave.endDate);
-                leaveStart.setUTCHours(0, 0, 0, 0);
-                leaveEnd.setUTCHours(23, 59, 59, 999);
+                // Convert leave dates to VN Date (UTC+7)
+                const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
+                leaveStartVN.setUTCHours(0, 0, 0, 0);
                 
-                // Nếu appointment nằm trong khoảng nghỉ phép
-                if (appointmentDate >= leaveStart && appointmentDate <= leaveEnd) {
+                const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
+                leaveEndVN.setUTCHours(23, 59, 59, 999);
+                
+                // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)
+                if (appointmentDateVN.getTime() >= leaveStartVN.getTime() && appointmentDateVN.getTime() <= leaveEndVN.getTime()) {
                   isOnLeaveForThisDate = true;
                   break;
                 }
@@ -1625,19 +1648,24 @@ class AppointmentService {
           // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
           let isOnLeaveForThisDate = false;
           if (apt.timeslotId && apt.timeslotId.startTime) {
-            const appointmentDate = new Date(apt.timeslotId.startTime);
-            appointmentDate.setUTCHours(0, 0, 0, 0);
+            // Convert appointment time to VN Date (UTC+7)
+            // Tạo "fake UTC" date bằng cách cộng 7 giờ vào thời gian thực
+            const appointmentTimeVN = new Date(new Date(apt.timeslotId.startTime).getTime() + 7 * 60 * 60 * 1000);
+            const appointmentDateVN = new Date(appointmentTimeVN);
+            appointmentDateVN.setUTCHours(0, 0, 0, 0);
             
             // Kiểm tra trong danh sách approved leaves
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
-                const leaveStart = new Date(leave.startDate);
-                const leaveEnd = new Date(leave.endDate);
-                leaveStart.setUTCHours(0, 0, 0, 0);
-                leaveEnd.setUTCHours(23, 59, 59, 999);
+                // Convert leave dates to VN Date (UTC+7)
+                const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
+                leaveStartVN.setUTCHours(0, 0, 0, 0);
                 
-                // Nếu appointment nằm trong khoảng nghỉ phép
-                if (appointmentDate >= leaveStart && appointmentDate <= leaveEnd) {
+                const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
+                leaveEndVN.setUTCHours(23, 59, 59, 999);
+                
+                // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)
+                if (appointmentDateVN.getTime() >= leaveStartVN.getTime() && appointmentDateVN.getTime() <= leaveEndVN.getTime()) {
                   isOnLeaveForThisDate = true;
                   break;
                 }

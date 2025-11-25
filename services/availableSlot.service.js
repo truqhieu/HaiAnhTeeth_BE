@@ -549,7 +549,7 @@ class AvailableSlotService {
    * Lấy bác sĩ có khung giờ rảnh tại một khung giờ cụ thể
    * (Sử dụng khi FE chọn một khung giờ cụ thể thay vì xem tất cả)
    */
-  async getAvailableDoctorsForTimeSlot({ serviceId, date, startTime, endTime, patientUserId, appointmentFor }) {
+  async getAvailableDoctorsForTimeSlot({ serviceId, date, startTime, endTime, patientUserId, appointmentFor, customerFullName = null, customerEmail = null }) {
     // 0. Update expired schedules trước
     await ScheduleHelper.updateExpiredSchedules();
 
@@ -638,6 +638,11 @@ class AvailableSlotService {
     console.log('   - Slot End:', slotEndTime.toISOString());
     console.log('   - Slot Duration (Minutes):', slotDurationMinutes);
     console.log('   - Service Duration (Minutes - raw):', serviceDurationMinutes);
+    if (appointmentFor === 'other') {
+      console.log('   - Booking for: other');
+      console.log('   - customerFullName:', customerFullName || 'N/A');
+      console.log('   - customerEmail:', customerEmail || 'N/A');
+    }
 
     // ⭐ THÊM: Validate service duration - nếu không hợp lý, dùng duration tính từ slot
     if (!serviceDurationMinutes || serviceDurationMinutes <= 5 || serviceDurationMinutes > 480) {
@@ -654,6 +659,73 @@ class AvailableSlotService {
         `Dịch vụ "${service.serviceName}" yêu cầu ${serviceDurationMinutes} phút, ` +
         `nhưng bạn đã chọn ${slotDurationMinutes} phút.`
       );
+    }
+
+    // ⭐ Khi đặt cho người thân cụ thể, kiểm tra xem người đó đã có lịch trùng giờ với bác sĩ bất kỳ chưa
+    if (appointmentFor === 'other' && customerFullName && customerEmail) {
+      const Customer = require('../models/customer.model');
+      const customer = await Customer.findOne({
+        fullName: new RegExp(`^${customerFullName}$`, 'i'),
+        email: new RegExp(`^${customerEmail}$`, 'i')
+      }).lean();
+
+      if (!customer) {
+        console.log(`⚠️  Không tìm thấy customer "${customerFullName}" <${customerEmail}> khi kiểm tra trùng giờ`);
+      } else {
+        const customerAppointments = await Appointment.find({
+          customerId: customer._id,
+          status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
+          timeslotId: { $exists: true }
+        }).populate({
+          path: 'timeslotId',
+          select: 'startTime endTime doctorUserId'
+        });
+
+        const overlappingAppointment = customerAppointments.find(apt => {
+          if (!apt.timeslotId) return false;
+          const aptStart = new Date(apt.timeslotId.startTime);
+          const aptEnd = new Date(apt.timeslotId.endTime);
+          return slotStartTime < aptEnd && slotEndTime > aptStart;
+        });
+
+        if (overlappingAppointment) {
+          let conflictDoctorName = 'bác sĩ khác';
+          if (overlappingAppointment.timeslotId?.doctorUserId) {
+            const conflictDoctor = await User.findById(overlappingAppointment.timeslotId.doctorUserId)
+              .select('fullName')
+              .lean();
+            if (conflictDoctor?.fullName) {
+              conflictDoctorName = conflictDoctor.fullName;
+            }
+          }
+
+          const formatVNTime = (dateObj) => {
+            return new Date(dateObj).toLocaleTimeString('vi-VN', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+              timeZone: 'Asia/Ho_Chi_Minh'
+            });
+          };
+
+          const conflictStartDisplay = formatVNTime(overlappingAppointment.timeslotId.startTime);
+          const conflictEndDisplay = formatVNTime(overlappingAppointment.timeslotId.endTime);
+
+          return {
+            date: new Date(date),
+            serviceId,
+            serviceName: service.serviceName,
+            requestedTime: {
+              startTime: new Date(startTime),
+              endTime: new Date(endTime),
+              displayTime: `${formatVNTime(slotStartTime)} - ${formatVNTime(slotEndTime)}`
+            },
+            availableDoctors: [],
+            totalDoctors: 0,
+            message: `Người thân ${customerFullName} đã có lịch với ${conflictDoctorName} từ ${conflictStartDisplay} - ${conflictEndDisplay}. Vui lòng chọn khung giờ khác.`
+          };
+        }
+      }
     }
 
     // 3. Lấy tất cả bác sĩ ACTIVE
@@ -1332,7 +1404,15 @@ class AvailableSlotService {
   /**
    * ⭐ NEW: Lấy khoảng thời gian khả dụng của một bác sĩ cụ thể vào 1 ngày
    */
-async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = null, appointmentFor = 'self' }) {
+async getDoctorScheduleRange({ 
+    doctorUserId, 
+    serviceId, 
+    date, 
+    patientUserId = null, 
+    appointmentFor = 'self',
+    customerFullName = null,
+    customerEmail = null
+  }) {
     // 1. Validate doctor
     const doctor = await User.findById(doctorUserId);
     if (!doctor) {
@@ -1529,6 +1609,10 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
       .populate({
         path: 'timeslotId',
         select: 'startTime endTime doctorUserId appointmentFor'
+      })
+      .populate({
+        path: 'customerId',
+        select: 'fullName email'
       });
 
       // Filter appointments vào ngày đang xét
@@ -1542,7 +1626,9 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
         start: new Date(apt.timeslotId.startTime),
         end: new Date(apt.timeslotId.endTime),
         doctorId: apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null,
-        appointmentFor: apt.appointmentFor || 'self'
+        appointmentFor: apt.appointmentFor || 'self',
+        customerFullName: apt.customerId?.fullName || null,
+        customerEmail: apt.customerId?.email || null
       }));
 
       userSelfBookedSlots = userAppointmentsWithType.filter(slot => slot.appointmentFor === 'self');
@@ -1550,15 +1636,69 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
 
       console.log(`🔍 [getDoctorScheduleRange] User ${patientUserId} appointments on ${searchDate.toISOString().split('T')[0]} (self: ${userSelfBookedSlots.length}, other: ${userOtherBookedSlots.length})`);
       userAppointmentsWithType.forEach((slot, idx) => {
-        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'}, appointmentFor: ${slot.appointmentFor})`);
+        console.log(`   - Slot ${idx + 1}: ${slot.start.toISOString()} - ${slot.end.toISOString()} (Doctor: ${slot.doctorId || 'N/A'}, appointmentFor: ${slot.appointmentFor}, customer: ${slot.customerFullName || 'N/A'})`);
       });
 
       const currentDoctorId = doctorUserId.toString();
+      
+      // ⭐ LOGIC MỚI: Exclude slots dựa trên appointmentFor và customer
       if (appointmentFor === 'self') {
+        // Khi đặt cho BẢN THÂN:
+        // - Exclude tất cả slots của bản thân (với BẤT KỲ bác sĩ nào)
+        // - Exclude slots của người thân với CÙNG bác sĩ hiện tại
         const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
         userBookedSlots = [...userSelfBookedSlots, ...sameDoctorOtherSlots];
+        console.log(`   → Exclude: ${userSelfBookedSlots.length} self slots + ${sameDoctorOtherSlots.length} other slots (same doctor)`);
+        
       } else if (appointmentFor === 'other') {
-        userBookedSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+        // ⭐ FIX MỚI: Khi đặt cho NGƯỜI THÂN:
+        // Case 1: Nếu có thông tin customer (fullName + email) → đang đặt cho CÙNG người thân
+        //         → Exclude TẤT CẢ slots của người thân này (với BẤT KỲ bác sĩ nào)
+        //         → Vì cùng người thân không thể đặt 2 bác sĩ khác nhau cùng giờ
+        // Case 2: Nếu KHÔNG có thông tin customer → đang chọn người thân mới
+        //         → Chỉ exclude slots với CÙNG bác sĩ hiện tại (của bản thân + tất cả người thân)
+        
+        if (customerFullName && customerEmail) {
+          // Case 1: Đang đặt cho CÙNG người thân (có fullName + email)
+          const normalizeString = (str) => {
+            if (!str) return '';
+            return str.toLowerCase().trim().replace(/\s+/g, ' ');
+          };
+          
+          const normalizedInputName = normalizeString(customerFullName);
+          const normalizedInputEmail = normalizeString(customerEmail);
+          
+          // Exclude TẤT CẢ slots của người thân này (BẤT KỲ bác sĩ nào)
+          const sameCustomerSlots = userOtherBookedSlots.filter(slot => {
+            if (!slot.customerFullName || !slot.customerEmail) return false;
+            const normalizedSlotName = normalizeString(slot.customerFullName);
+            const normalizedSlotEmail = normalizeString(slot.customerEmail);
+            return normalizedSlotName === normalizedInputName && normalizedSlotEmail === normalizedInputEmail;
+          });
+          
+          // Exclude slots của bản thân với CÙNG bác sĩ hiện tại
+          const sameDoctorSelfSlots = userSelfBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          
+          // Exclude slots của NGƯỜI THÂN KHÁC với CÙNG bác sĩ hiện tại
+          const sameDoctorOtherCustomerSlots = userOtherBookedSlots.filter(slot => {
+            if (!slot.customerFullName || !slot.customerEmail) return slot.doctorId === currentDoctorId;
+            const normalizedSlotName = normalizeString(slot.customerFullName);
+            const normalizedSlotEmail = normalizeString(slot.customerEmail);
+            const isSameCustomer = normalizedSlotName === normalizedInputName && normalizedSlotEmail === normalizedInputEmail;
+            return !isSameCustomer && slot.doctorId === currentDoctorId;
+          });
+          
+          userBookedSlots = [...sameCustomerSlots, ...sameDoctorSelfSlots, ...sameDoctorOtherCustomerSlots];
+          console.log(`   → Exclude for customer "${customerFullName}": ${sameCustomerSlots.length} same customer slots (any doctor) + ${sameDoctorSelfSlots.length} self slots (same doctor) + ${sameDoctorOtherCustomerSlots.length} other customer slots (same doctor)`);
+          
+        } else {
+          // Case 2: Đang chọn người thân mới (KHÔNG có fullName + email)
+          // Chỉ exclude slots với CÙNG bác sĩ hiện tại
+          const sameDoctorSelfSlots = userSelfBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          userBookedSlots = [...sameDoctorSelfSlots, ...sameDoctorOtherSlots];
+          console.log(`   → Exclude (no customer info): ${sameDoctorSelfSlots.length} self slots + ${sameDoctorOtherSlots.length} other slots (same doctor ${currentDoctorId})`);
+        }
       }
     }
 
@@ -1866,15 +2006,6 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
         displayRange: afternoonShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
       });
     }
-
-    // ⭐ GIẢM LOG: Comment lại để giảm spam log (chỉ log khi cần debug)
-    // console.log('📊 [getDoctorScheduleRange]');
-    // console.log('   - Doctor:', doctor.fullName);
-    // console.log('   - Date:', searchDate.toISOString().split('T')[0]);
-    // console.log('   - Is Today:', isToday);
-    // console.log('   - Service duration:', service.durationMinutes, 'phút');
-    // console.log('   - Schedule ranges:', scheduleRanges);
-
     // ⭐ THÊM: Lấy reserved slots của user (nếu có) để FE có thể hiển thị
     let userReservedSlots = [];
     if (patientUserId) {
@@ -1968,7 +2099,7 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
    * ⭐ NEW: Validate appointment time
    * Check: thời gian nhập có nằm trong doctor schedule không và có doctor khả dụng không
    */
-  async validateAppointmentTime({ doctorUserId, serviceId, date, startTime, patientUserId = null }) {
+  async validateAppointmentTime({ doctorUserId, serviceId, date, startTime, patientUserId = null, appointmentFor = 'self', customerFullName, customerEmail }) {
     // 1. Lấy schedule ranges
     const scheduleRangeResult = await this.getDoctorScheduleRange({
       doctorUserId,
@@ -2067,26 +2198,53 @@ async getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId = nu
           const aptEndDisplay = `${String(aptEndVN).padStart(2, '0')}:${String(aptEnd.getUTCMinutes()).padStart(2, '0')}`;
 
           // Case 1: User đã có appointment cho BẢN THÂN vào giờ này
+          // ⭐ CHỈ kiểm tra conflict nếu CÙNG bác sĩ (cho phép đặt cùng giờ với bác sĩ khác)
           if (apt.appointmentFor === 'self') {
-            throw new Error(
-              `Bạn đã có lịch khám cho bản thân vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
-              `Vui lòng chọn thời gian khác.`
-            );
+            // Kiểm tra xem có cùng bác sĩ không
+            if (apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId) {
+              throw new Error(
+                `Bạn đã có lịch khám cho bản thân với bác sĩ này vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
+                `Vui lòng chọn thời gian khác.`
+              );
+            }
+            // ⭐ Nếu khác bác sĩ → cho phép (không throw error)
           }
 
           // Case 2: User đã đặt cho NGƯỜI THÂN vào giờ này
-          // → Chỉ cho phép nếu đặt cho người thân KHÁC và bác sĩ KHÁC
           if (apt.appointmentFor === 'other' && apt.customerId) {
-            // Check nếu đặt cùng bác sĩ → không được
-            if (apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId) {
-              throw new Error(
-                `Bạn đã đặt lịch với bác sĩ này vào ${aptStartDisplay} - ${aptEndDisplay} cho người thân. ` +
-                `Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
-              );
+            const normalizeString = (str) => str ? str.trim().toLowerCase() : '';
+            
+            // Check nếu là CÙNG một người thân (dựa trên EMAIL only)
+            let isSameCustomer = false;
+            
+            // Validate Email Format (nếu có input)
+            if (customerEmail) {
+               const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+               if (!emailRegex.test(customerEmail)) {
+                  // Email không hợp lệ -> coi như không match
+                  isSameCustomer = false;
+               } else if (apt.customerId.email) {
+                  const inputEmail = normalizeString(customerEmail);
+                  const aptEmail = normalizeString(apt.customerId.email);
+                  isSameCustomer = (inputEmail === aptEmail);
+               }
             }
 
-            // Note: Validate customer duplicate sẽ được làm ở createAppointment
-            // vì ở đây chưa có thông tin fullName/email của customer mới
+            if (isSameCustomer) {
+              // Nếu là cùng một người thân → KHÔNG được đặt trùng giờ (bất kể bác sĩ nào)
+              throw new Error(
+                `Người thân (email: ${customerEmail}) đã có lịch khám vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
+                `Vui lòng chọn thời gian khác.`
+              );
+            } else {
+              // Nếu là người thân KHÁC → Chỉ check nếu đặt CÙNG bác sĩ
+              if (apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId) {
+                throw new Error(
+                  `Bạn đã đặt lịch với bác sĩ này vào ${aptStartDisplay} - ${aptEndDisplay} cho người thân khác. ` +
+                  `Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
+                );
+              }
+            }
           }
         }
       }

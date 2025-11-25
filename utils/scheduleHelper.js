@@ -582,41 +582,46 @@ static async ensureScheduleForDoctor(doctorUserId, searchDate) {
    */
   static async ensureSchedulesForDate(searchDate) {
     try {
-      // Kiểm tra xem ngày này đã có schedule nào chưa
-      const existingSchedulesCount = await DoctorSchedule.countDocuments({
-        date: searchDate,
-        status: 'Available'
-      });
-
-      if (existingSchedulesCount > 0) {
-        console.log(`✅ Ngày ${searchDate.toISOString().split('T')[0]} đã có ${existingSchedulesCount} schedules`);
-        return;
-      }
-
-      console.log(`⚠️  Ngày ${searchDate.toISOString().split('T')[0]} chưa có schedule, tự động tạo...`);
+      console.log(`🔍 [ensureSchedulesForDate] Checking schedules for ${searchDate.toISOString().split('T')[0]}...`);
       
-      // Lấy tất cả bác sĩ ACTIVE
+      // ⭐ FIX: Lấy tất cả bác sĩ ACTIVE
+      const User = require('../models/user.model');
       const doctors = await User.find({
         role: 'Doctor',
         status: 'Active'
-      }).select('_id');
+      }).select('_id fullName');
 
       if (doctors.length === 0) {
         console.log('⚠️  Không có bác sĩ ACTIVE nào');
         return;
       }
 
-      // Tạo schedule cho TẤT CẢ bác sĩ - mỗi bác sĩ 1 Morning + 1 Afternoon
+      console.log(`📋 Found ${doctors.length} active doctors`);
+
+      // ⭐ FIX: Kiểm tra TỪNG bác sĩ xem đã có schedule chưa
       const schedulesToCreate = [];
       const now = new Date(); // Thời gian hiện tại (UTC thực)
       
       for (const doctor of doctors) {
+        // ⭐ Kiểm tra xem bác sĩ này đã có schedule cho ngày này chưa
+        const existingSchedule = await DoctorSchedule.findOne({
+          doctorUserId: doctor._id,
+          date: searchDate
+        });
+
+        if (existingSchedule) {
+          console.log(`✅ Bác sĩ ${doctor.fullName} (${doctor._id}) đã có schedule cho ngày ${searchDate.toISOString().split('T')[0]}`);
+          continue; // Bỏ qua bác sĩ đã có schedule
+        }
+
+        console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có schedule, đang tạo...`);
+
         // ⭐ Lấy workingHours từ schedule cũ của bác sĩ (nếu có)
         const workingHours = await this.getDoctorWorkingHours(doctor._id, searchDate);
         
         // ⭐ Nếu bác sĩ chưa có workingHours (chưa được manager tạo lịch làm việc) → bỏ qua
         if (!workingHours || !workingHours.morningStart || !workingHours.morningEnd || !workingHours.afternoonStart || !workingHours.afternoonEnd) {
-          console.log(`⚠️  Bác sĩ ${doctor._id} chưa có workingHours (chưa được manager tạo lịch làm việc), bỏ qua...`);
+          console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có workingHours (chưa được manager tạo lịch làm việc), bỏ qua...`);
           continue; // Bỏ qua bác sĩ chưa có workingHours
         }
 
@@ -642,12 +647,12 @@ static async ensureScheduleForDoctor(doctorUserId, searchDate) {
         const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
         
         // Debug logging
-        console.log(`🔍 [${doctor._id}] Schedule Status Check:`);
+        console.log(`🔍 [${doctor.fullName}] Schedule Status Check:`);
         console.log(`   - Current time (UTC): ${now.toISOString()}`);
         console.log(`   - Morning end (UTC): ${morningEnd.toISOString()} = 12:00 VN`);
-        console.log(`   - Morning status: ${morningStatus} (${morningEnd.toISOString()} <= ${now.toISOString()})`);
+        console.log(`   - Morning status: ${morningStatus}`);
         console.log(`   - Afternoon end (UTC): ${afternoonEnd.toISOString()} = 18:00 VN`);
-        console.log(`   - Afternoon status: ${afternoonStatus} (${afternoonEnd.toISOString()} <= ${now.toISOString()})`);
+        console.log(`   - Afternoon status: ${afternoonStatus}`);
         
         schedulesToCreate.push(
           {
@@ -669,9 +674,14 @@ static async ensureScheduleForDoctor(doctorUserId, searchDate) {
         );
       }
       
+      if (schedulesToCreate.length === 0) {
+        console.log(`✅ Tất cả bác sĩ đã có schedule cho ngày ${searchDate.toISOString().split('T')[0]}`);
+        return;
+      }
+
       // ⭐ Dùng insertMany với ordered: false để bỏ qua duplicate keys
       const result = await DoctorSchedule.insertMany(schedulesToCreate, { ordered: false });
-      console.log(`✅ Tạo ${result.length} schedules mới cho ${doctors.length} bác sĩ`);
+      console.log(`✅ Tạo ${result.length} schedules mới cho ${schedulesToCreate.length / 2} bác sĩ`);
       
     } catch (error) {
       // ⭐ Nếu lỗi là duplicate key (code 11000), bỏ qua vì đã có schedule rồi
