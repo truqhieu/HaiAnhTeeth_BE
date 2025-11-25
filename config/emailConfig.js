@@ -1119,7 +1119,100 @@ Vui lòng liên hệ khách sớm để tư vấn & chốt lịch.
   };
 };
 
+const getReExaminationEmailTemplate = (data) => {
+  const {
+    patientName,
+    patientPhone,
+    patientEmail,
+    doctorName,
+    appointmentDate,
+    appointmentTime,
+    clinicName = 'Phòng khám Hải An',
+  } = data;
 
+  const createdAt = new Date().toLocaleString('vi-VN', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour12: false,
+  });
+
+  return {
+    subject: `[TÁI KHÁM] Đơn tái khám mới - ${patientName}`,
+    text: `
+Bác sĩ vừa tạo đơn tái khám cho bệnh nhân.
+
+THÔNG TIN BỆNH NHÂN:
+- Họ tên: ${patientName}
+- Số điện thoại: ${patientPhone}
+- Email: ${patientEmail}
+
+THÔNG TIN TÁI KHÁM:
+- Bác sĩ: ${doctorName}
+- Ngày tái khám: ${appointmentDate}
+- Giờ tái khám: ${appointmentTime}
+
+THÔNG TIN HỆ THỐNG:
+- Thời điểm tạo đơn: ${createdAt}
+- Cơ sở: ${clinicName}
+
+Vui lòng xác nhận với bệnh nhân và chuẩn bị hồ sơ.
+    `.trim(),
+    html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; padding: 20px; color: #333; }
+    .email-container { max-width: 650px; margin: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
+    .email-header { background: #17a2b8; color: white; padding: 20px; text-align: center; font-size: 20px; font-weight: bold; }
+    .email-body { padding: 25px; font-size: 15px; line-height: 1.6; }
+    .section-title { font-weight: 600; margin-top: 15px; margin-bottom: 8px; text-transform: uppercase; font-size: 13px; color: #555; }
+    .info-box { background: #f8f9fa; padding: 12px 15px; border-radius: 6px; margin-bottom: 12px; }
+    .info-row { margin-bottom: 4px; }
+    .label { font-weight: 600; }
+    .email-footer { background: #f1f1f1; padding: 12px 15px; text-align: center; font-size: 13px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      Đơn tái khám mới
+    </div>
+    <div class="email-body">
+      <p>Chào đội ngũ <strong>${clinicName}</strong>,</p>
+      <p>Bác sĩ vừa tạo <strong>đơn tái khám</strong> cho bệnh nhân.</p>
+
+      <div class="section-title">Thông tin bệnh nhân</div>
+      <div class="info-box">
+        <div class="info-row"><span class="label">Họ tên:</span> ${patientName}</div>
+        <div class="info-row"><span class="label">Số điện thoại:</span> ${patientPhone}</div>
+        <div class="info-row"><span class="label">Email:</span> ${patientEmail}</div>
+      </div>
+
+      <div class="section-title">Thông tin tái khám</div>
+      <div class="info-box">
+        <div class="info-row"><span class="label">Bác sĩ:</span> ${doctorName}</div>
+        <div class="info-row"><span class="label">Ngày tái khám:</span> ${appointmentDate}</div>
+        <div class="info-row"><span class="label">Giờ tái khám:</span> ${appointmentTime}</div>
+      </div>
+
+      <div class="section-title">Thông tin hệ thống</div>
+      <div class="info-box">
+        <div class="info-row"><span class="label">Thời điểm tạo đơn:</span> ${createdAt}</div>
+        <div class="info-row"><span class="label">Cơ sở:</span> ${clinicName}</div>
+      </div>
+
+      <p><strong>Gợi ý xử lý:</strong> Vui lòng xác nhận với bệnh nhân và chuẩn bị hồ sơ bệnh án.</p>
+    </div>
+    <div class="email-footer">
+      Email tự động thông báo đơn tái khám.
+    </div>
+  </div>
+</body>
+</html>
+    `.trim(),
+  };
+};
 
 
 
@@ -1129,11 +1222,12 @@ module.exports = {
   getResetPasswordEmailTemplate,
   getAppointmentConfirmationEmailTemplate,
   getAppointmentApprovedEmailTemplate,
-  getAppointmentCancelledEmailTemplate,
+  getAppointmentCancelledEmailTemplate, 
   getRequestApprovedEmailTemplate,
   getRequestRejectedEmailTemplate,
   getDoctorAssignedEmailTemplate,
-  getConsultationFormStaffEmailTemplate
+  getConsultationFormStaffEmailTemplate,
+  getReExaminationEmailTemplate,
 };
 
 // ⭐ Template: Yêu cầu đã được duyệt (Đổi lịch/Đổi bác sĩ)
