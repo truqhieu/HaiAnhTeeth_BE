@@ -13,6 +13,7 @@ const User = require('./models/user.model');
 const DoctorSchedule = require('./models/doctorSchedule.model');
 const Timeslot = require('./models/timeslot.model');
 const LeaveRequest = require('./models/leaveRequest.model');
+const Appointment = require('./models/appointment.model');
 
 // Test configuration
 const TEST_PATIENT_ID = '691fe21b4b0b8b308033efab'; // Replace with a valid test patient ID
@@ -1358,6 +1359,164 @@ async function runTests() {
       } else {
         logResult(false, 'Did not show service list');
         recordTestResult(28, 'VN Timezone + Slot Display Fix', false, 'Did not show service list');
+      }
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 29: Đặt lịch thành công với bác sĩ Thao vào hôm nay lúc 10:00
+    // ==========================================================================
+    logTest(29, 'Đặt lịch thành công - Bác sĩ Thao, Làm sạch răng, hôm nay 10:00');
+    
+    // Tìm bác sĩ Thao
+    const doctorThao = await User.findOne({ fullName: { $regex: /thao/i }, role: 'Doctor' });
+    
+    if (!doctorThao) {
+      logResult(false, 'Setup failed: Không tìm thấy bác sĩ Thao - bỏ qua test');
+      recordTestResult(29, 'Đặt lịch thành công với bác sĩ Thao', false, 'Không tìm thấy bác sĩ Thao');
+    } else {
+      logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ Thao vào hôm nay"');
+      result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Thao vào hôm nay');
+      history = [
+        { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ Thao vào hôm nay' },
+        { role: 'assistant', content: result.message }
+      ];
+      
+      // Kiểm tra xem có hiển thị danh sách dịch vụ không
+      const showsServiceList29 = result.message.includes('1.') || result.message.includes('dịch vụ');
+      logResult(showsServiceList29, showsServiceList29 ? 
+        '✅ Bước 1: Hiển thị danh sách dịch vụ' : 
+        '❌ Bước 1: Không hiển thị danh sách dịch vụ');
+      
+      logStep(2, 'User: "Làm sạch răng"');
+      result = await sendMessage('Làm sạch răng', history);
+      history.push({ role: 'user', content: 'Làm sạch răng' });
+      history.push({ role: 'assistant', content: result.message });
+      
+      const responseText29_1 = result.message || result.response || '';
+      
+      // Kiểm tra xem có hiển thị khung giờ khả dụng không
+      const showsAvailableSlots = responseText29_1.includes('khung giờ') || 
+                                   responseText29_1.includes('Buổi') ||
+                                   /\d{2}:\d{2}/.test(responseText29_1);
+      
+      logResult(showsAvailableSlots, showsAvailableSlots ? 
+        '✅ Bước 2: Hiển thị khung giờ khả dụng' : 
+        '❌ Bước 2: Không hiển thị khung giờ');
+      
+      // Log khung giờ được hiển thị
+      if (showsAvailableSlots) {
+        log(`  📋 Khung giờ hiển thị:`, colors.blue);
+        log(`     ${responseText29_1}`, colors.cyan);
+      }
+      
+      logStep(3, 'User: "10:00"');
+      result = await sendMessage('10:00', history);
+      history.push({ role: 'user', content: '10:00' });
+      history.push({ role: 'assistant', content: result.message });
+      
+      const responseText29_2 = result.message || result.response || '';
+      
+      // Kiểm tra xem có hiển thị confirmation không
+      const showsConfirmation = responseText29_2.includes('Xác nhận') || 
+                                 responseText29_2.includes('xác nhận') ||
+                                 responseText29_2.includes('10:00');
+      
+      logResult(showsConfirmation, showsConfirmation ? 
+        '✅ Bước 3: Hiển thị confirmation với giờ 10:00' : 
+        '❌ Bước 3: Không hiển thị confirmation');
+      
+      // Log confirmation message
+      if (showsConfirmation) {
+        log(`  📋 Confirmation message:`, colors.blue);
+        log(`     ${responseText29_2}`, colors.cyan);
+      }
+      
+      logStep(4, 'User: "Xác nhận"');
+      result = await sendMessage('Xác nhận', history);
+      
+      const responseText29_3 = result.message || result.response || '';
+      
+      // Kiểm tra kết quả đặt lịch
+      const appointmentCreated = result.success || 
+                                  responseText29_3.includes('thành công') ||
+                                  responseText29_3.includes('Đặt lịch thành công');
+      
+      const hasError = responseText29_3.includes('Giữ chỗ không khớp') ||
+                       responseText29_3.includes('không khớp với thời gian') ||
+                       responseText29_3.includes('không thể') ||
+                       responseText29_3.includes('lỗi');
+      
+      // Log kết quả cuối cùng
+      log(`  📋 Kết quả cuối cùng:`, colors.blue);
+      log(`     ${responseText29_3}`, colors.cyan);
+      
+      // Kiểm tra appointment trong database
+      if (appointmentCreated) {
+        logResult(true, '✅ Bước 4: Đặt lịch thành công!');
+        
+        // Verify appointment in database
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const createdAppointment = await Appointment.findOne({
+          patientUserId: TEST_PATIENT_ID,
+          doctorUserId: doctorThao._id,
+          appointmentDate: {
+            $gte: todayDate,
+            $lt: new Date(todayDate.getTime() + 24 * 60 * 60 * 1000)
+          }
+        }).sort({ createdAt: -1 }).lean();
+        
+        if (createdAppointment) {
+          const appointmentTime = new Date(createdAppointment.appointmentDate).toLocaleTimeString('vi-VN', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          });
+          log(`  🔍 Appointment đã tạo trong DB:`, colors.green);
+          log(`     - ID: ${createdAppointment._id}`, colors.green);
+          log(`     - Thời gian: ${appointmentTime}`, colors.green);
+          log(`     - Trạng thái: ${createdAppointment.status}`, colors.green);
+          
+          recordTestResult(29, 'Đặt lịch thành công với bác sĩ Thao', true,
+            `Appointment created successfully at ${appointmentTime} with status ${createdAppointment.status}`);
+        } else {
+          log(`  ⚠️ Không tìm thấy appointment trong DB mặc dù response báo thành công`, colors.yellow);
+          recordTestResult(29, 'Đặt lịch thành công với bác sĩ Thao', false,
+            'Response says success but appointment not found in DB');
+        }
+      } else if (hasError) {
+        logResult(false, '❌ Bước 4: Có lỗi xảy ra khi đặt lịch');
+        
+        // Debug: Kiểm tra context
+        const context29 = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+        log(`  🔍 Debug Context:`, colors.yellow);
+        log(`     ${JSON.stringify(context29, null, 2)}`, colors.yellow);
+        
+        // Debug: Kiểm tra timeslots trong database
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        const timeslots = await Timeslot.find({
+          doctorUserId: doctorThao._id,
+          startTime: { 
+            $gte: todayDate,
+            $lt: new Date(todayDate.getTime() + 24 * 60 * 60 * 1000)
+          }
+        }).select('startTime endTime status').lean();
+        
+        log(`  🔍 Debug Timeslots (${timeslots.length} found):`, colors.yellow);
+        timeslots.forEach(ts => {
+          const startTimeStr = new Date(ts.startTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+          const endTimeStr = new Date(ts.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+          log(`     - ${startTimeStr} to ${endTimeStr} (${ts.status})`, colors.yellow);
+        });
+        
+        recordTestResult(29, 'Đặt lịch thành công với bác sĩ Thao', false,
+          `Error occurred: ${responseText29_3.substring(0, 100)}`);
+      } else {
+        logResult(false, '⚠️ Bước 4: Kết quả không xác định');
+        recordTestResult(29, 'Đặt lịch thành công với bác sĩ Thao', false,
+          `Unexpected result: ${responseText29_3.substring(0, 100)}`);
       }
     }
     

@@ -24,9 +24,6 @@ const DateHelper = require('../utils/dateHelper');
 const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
 const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
-// ⭐ Reservation hold time (1 minute, same as booking UI)
-const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
-
 /**
  * LangChain-based AI Booking Service
  * This service uses LangChain to manage conversation flow and tool execution
@@ -849,10 +846,6 @@ class AIBookingLangchainService {
           endTime.setMinutes(endTime.getMinutes() + service.durationMinutes);
 
           // Call appointment service with correct format
-          // ⭐ NEW: Get reservation info from context
-          const context = this.getConversationContext(patientUserId);
-          const reservedTimeslotId = context.reservedTimeslotId || null;
-          
           const appointmentData = {
             patientUserId: patientUserId,
             doctorUserId: doctorId,
@@ -863,8 +856,7 @@ class AIBookingLangchainService {
               endTime: endTime
             },
             notes: notes || '',
-            appointmentFor: 'self',
-            reservedTimeslotId: reservedTimeslotId // ⭐ Pass reservation ID if exists
+            appointmentFor: 'self'
           };
           
           console.log('🔧 [Tool] create_appointment: Calling appointmentService.createConsultationAppointment with:', {
@@ -876,8 +868,7 @@ class AIBookingLangchainService {
               startTime: startTime.toISOString(),
               endTime: endTime.toISOString()
             },
-            appointmentFor: 'self',
-            reservedTimeslotId: reservedTimeslotId
+            appointmentFor: 'self'
           });
           
           const result = await appointmentService.createConsultationAppointment(appointmentData);
@@ -1653,58 +1644,21 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             }
           }
           
-          // ⭐ NEW: Create reservation (hold slot for 1 minute) when time is valid
+          // Store time in context (no reservation)
           if (context.doctorId && context.date && context.serviceId) {
-            try {
-              console.log(`🔒 [Pre-process] Creating reservation for ${timeStr} on ${context.date}`);
-              
-              // Parse date and time
-              const [year, month, day] = context.date.split('-').map(Number);
-              const [hour, minute] = timeStr.split(':').map(Number);
-              
-              // Create Date object in UTC
-              const startTime = new Date(Date.UTC(year, month - 1, day, hour - 7, minute, 0, 0)); // Convert VN time to UTC
-              
-              // Call reservation service
-              const reservationResult = await appointmentService.reserveTimeslot({
-                patientUserId,
-                doctorUserId: context.doctorId,
-                serviceId: context.serviceId,
-                date: context.date,
-                startTime: startTime.toISOString(),
-                appointmentFor: 'self'
-              });
-              
-              console.log(`✅ [Pre-process] Reservation created:`, reservationResult);
-              
-              // Store reservation info in context
-              this.updateConversationContext(patientUserId, { 
-                time: timeStr,
-                reservedTimeslotId: reservationResult.timeslotId,
-                reservationExpiresAt: reservationResult.expiresAt
-              });
-              
-              results.timeDetected = true;
-              results.timeValue = timeStr;
-              results.timeInvalid = false;
-              results.reservationCreated = true;
-              results.reservationExpiresAt = reservationResult.expiresAt;
-            } catch (reservationError) {
-              console.error('❌ [Pre-process] Reservation failed:', reservationError.message);
-              
-              // If reservation fails (slot taken, etc.), mark time as invalid
-              results.timeDetected = true;
-              results.timeValue = timeStr;
-              results.timeInvalid = true;
-              results.timeInvalidReason = 'reservation_failed';
-              results.reservationError = reservationError.message;
-            }
-          } else {
-            // Not enough context to create reservation yet, just store time
+            console.log(`✅ [Pre-process] Time ${timeStr} is valid, storing in context`);
             this.updateConversationContext(patientUserId, { time: timeStr });
+            
             results.timeDetected = true;
             results.timeValue = timeStr;
             results.timeInvalid = false;
+          } else {
+            // Not enough context yet, just store time
+            console.log(`⚠️ [Pre-process] Time ${timeStr} detected but missing context (doctor/date/service)`);
+            this.updateConversationContext(patientUserId, { time: timeStr });
+            
+            results.timeDetected = true;
+            results.timeValue = timeStr;
           }
           break;
         }
@@ -2559,91 +2513,88 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             finalResponse = 'Vui lòng chọn khung giờ bạn muốn đặt lịch.';
           }
         } else if (updatedContext.doctorId && updatedContext.serviceId && updatedContext.date && updatedContext.time) {
-          // ⭐ NEW: Time was selected, validate and create appointment
+          // ⭐ Time was selected, validate and create appointment
           console.log('🔧 [Fallback] Time detected, validating and creating appointment...');
           
-          // ⭐ FIX: If there's already a reservation, skip validation and create appointment directly
-          if (updatedContext.reservedTimeslotId) {
-            console.log('✅ [Fallback] Found existing reservation, creating appointment directly...');
-            try {
-              const createResult = await tools[5].func({
-                serviceId: updatedContext.serviceId,
-                doctorId: updatedContext.doctorId,
-                date: updatedContext.date,
-                time: updatedContext.time,
-                notes: '',
-              });
-              console.log('🔧 [Fallback] Create appointment result:', createResult);
-              const appointmentResult = JSON.parse(createResult);
+          // Validate time and create appointment
+          try {
+            // First, check if time is available
+            const slotsResult = await tools[4].func({
+              doctorId: updatedContext.doctorId,
+              date: updatedContext.date,
+              serviceId: updatedContext.serviceId,
+            });
+            const slots = JSON.parse(slotsResult);
+            
+            if (slots.success) {
+              // ⭐ FIX: Check if selected time is within available gaps (not single start/end)
+              const selectedTime = updatedContext.time; // e.g., "10:00"
+              const [h, m] = selectedTime.split(':').map(Number);
+              const selectedTimeMinutes = h * 60 + m;
               
-              if (appointmentResult.success) {
-                const appt = appointmentResult.appointment;
-                console.log('✅ [Fallback] Appointment created successfully:', appt);
-                
-                // Calculate end time for display
-                const service = await Service.findById(updatedContext.serviceId);
-                const [h, m] = updatedContext.time.split(':').map(Number);
-                const selectedTimeMinutes = h * 60 + m;
-                const endTimeMinutes = selectedTimeMinutes + (service?.durationMinutes || 30);
-                const endH = Math.floor(endTimeMinutes / 60);
-                const endM = endTimeMinutes % 60;
-                const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
-                
-                finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Mã lịch: #${appt?.appointmentId || appt?._id || 'N/A'}\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${updatedContext.time}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
-                // Clear context after successful booking
-                this.clearConversationContext(patientUserId);
-              } else {
-                console.error('❌ [Fallback] Appointment creation failed:', appointmentResult);
-                finalResponse = `❌ Không thể đặt lịch: ${appointmentResult.error || appointmentResult.message || 'Lỗi không xác định'}. Vui lòng thử lại.`;
+              let isValidTime = false;
+              
+              console.log('🔍 [Fallback] Validating time against slots:', JSON.stringify(slots, null, 2));
+              
+              // ⭐ NEW: Check against availableGaps in morning shift
+              if (slots.morning && slots.morning.slots && Array.isArray(slots.morning.slots)) {
+                for (const slot of slots.morning.slots) {
+                  // Parse start and end time from slot
+                  const startTime = slot.startTime; // ISO string
+                  const endTime = slot.endTime; // ISO string
+                  
+                  // Convert to VN time (UTC+7)
+                  const startDate = new Date(startTime);
+                  const endDate = new Date(endTime);
+                  
+                  const startH = (startDate.getUTCHours() + 7) % 24;
+                  const startM = startDate.getUTCMinutes();
+                  const endH = (endDate.getUTCHours() + 7) % 24;
+                  const endM = endDate.getUTCMinutes();
+                  
+                  const startMin = startH * 60 + startM;
+                  const endMin = endH * 60 + endM;
+                  
+                  console.log(`  🔍 Checking morning slot: ${startH}:${String(startM).padStart(2, '0')}-${endH}:${String(endM).padStart(2, '0')} (${startMin}-${endMin} min)`);
+                  
+                  if (selectedTimeMinutes >= startMin && selectedTimeMinutes < endMin) {
+                    isValidTime = true;
+                    console.log(`  ✅ Time ${selectedTime} is valid in morning slot`);
+                    break;
+                  }
+                }
               }
-            } catch (e) {
-              console.error('❌ [Fallback] Error creating appointment:', e);
-              finalResponse = 'Có lỗi xảy ra khi đặt lịch. Vui lòng thử lại.';
-            }
-          } else {
-            // No reservation yet, need to validate first
-            try {
-              // First, check if time is available
-              const slotsResult = await tools[4].func({
-                doctorId: updatedContext.doctorId,
-                date: updatedContext.date,
-                serviceId: updatedContext.serviceId,
-              });
-              const slots = JSON.parse(slotsResult);
               
-              if (slots.success) {
-                // ⭐ FIX: Check if selected time is within available time ranges (not arrays)
-                const selectedTime = updatedContext.time; // e.g., "09:00"
-                const [h, m] = selectedTime.split(':').map(Number);
-                const selectedTimeMinutes = h * 60 + m;
-                
-                let isValidTime = false;
-                
-                // Check morning range
-                if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                  const [startH, startM] = slots.morning.start.split(':').map(Number);
-                  const [endH, endM] = slots.morning.end.split(':').map(Number);
-                  const morningStartMin = startH * 60 + startM;
-                  const morningEndMin = endH * 60 + endM;
+              // ⭐ NEW: Check against availableGaps in afternoon shift
+              if (!isValidTime && slots.afternoon && slots.afternoon.slots && Array.isArray(slots.afternoon.slots)) {
+                for (const slot of slots.afternoon.slots) {
+                  // Parse start and end time from slot
+                  const startTime = slot.startTime; // ISO string
+                  const endTime = slot.endTime; // ISO string
                   
-                  if (selectedTimeMinutes >= morningStartMin && selectedTimeMinutes < morningEndMin) {
+                  // Convert to VN time (UTC+7)
+                  const startDate = new Date(startTime);
+                  const endDate = new Date(endTime);
+                  
+                  const startH = (startDate.getUTCHours() + 7) % 24;
+                  const startM = startDate.getUTCMinutes();
+                  const endH = (endDate.getUTCHours() + 7) % 24;
+                  const endM = endDate.getUTCMinutes();
+                  
+                  const startMin = startH * 60 + startM;
+                  const endMin = endH * 60 + endM;
+                  
+                  console.log(`  🔍 Checking afternoon slot: ${startH}:${String(startM).padStart(2, '0')}-${endH}:${String(endM).padStart(2, '0')} (${startMin}-${endMin} min)`);
+                  
+                  if (selectedTimeMinutes >= startMin && selectedTimeMinutes < endMin) {
                     isValidTime = true;
+                    console.log(`  ✅ Time ${selectedTime} is valid in afternoon slot`);
+                    break;
                   }
                 }
-                
-                // Check afternoon range
-                if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                  const [startH, startM] = slots.afternoon.start.split(':').map(Number);
-                  const [endH, endM] = slots.afternoon.end.split(':').map(Number);
-                  const afternoonStartMin = startH * 60 + startM;
-                  const afternoonEndMin = endH * 60 + endM;
-                  
-                  if (selectedTimeMinutes >= afternoonStartMin && selectedTimeMinutes < afternoonEndMin) {
-                    isValidTime = true;
-                  }
-                }
-                
-                console.log('🔧 [Fallback] Selected time:', selectedTime);
+              }
+              
+              console.log('🔧 [Fallback] Selected time:', selectedTime);
                 console.log('🔧 [Fallback] Time is valid:', isValidTime);
                 
                 if (isValidTime) {
@@ -2680,16 +2631,15 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 } else {
                   // Time is not valid, show available slots again
                   finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng.\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-                  if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                    finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
-                  } else if (slots.morning && slots.morning.isFull) {
-                    finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+                  
+                  // Use morningDisplay and afternoonDisplay for user-friendly output
+                  if (slots.morningDisplay) {
+                    finalResponse += `\n- Buổi sáng: ${slots.morningDisplay}`;
                   }
-                  if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                    finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-                  } else if (slots.afternoon && slots.afternoon.isFull) {
-                    finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+                  if (slots.afternoonDisplay) {
+                    finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay}`;
                   }
+                  
                 finalResponse += '\n\nVui lòng chọn khung giờ khác.';
                 // Clear invalid time from context
                 this.updateConversationContext(patientUserId, { time: null });
@@ -2702,7 +2652,6 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             console.error('❌ [Fallback] Error stack:', e.stack);
             finalResponse = 'Có lỗi xảy ra khi đặt lịch. Vui lòng thử lại.';
           }
-        }
         } else if (preProcessedData.shouldShowServices) {
           // User asked for services list
           try {
