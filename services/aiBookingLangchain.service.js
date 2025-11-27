@@ -1958,14 +1958,11 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           const selectedTimeMinutes = h * 60 + m;
           
           // Get booked timeslots for this doctor on this date
-          // ⭐ FIX: Parse date string correctly and create UTC date range
-          const [year, month, day] = updatedContext.date.split('-').map(Number);
-          const searchDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+          const searchDate = new Date(updatedContext.date);
+          searchDate.setHours(0, 0, 0, 0);
           const startOfDay = new Date(searchDate);
           const endOfDay = new Date(searchDate);
-          endOfDay.setUTCHours(23, 59, 59, 999);
-          
-          console.log(`🔍 [LangChain] Checking timeslots for date: ${updatedContext.date}, UTC range: ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
+          endOfDay.setHours(23, 59, 59, 999);
           
           const bookedTimeslots = await Timeslot.find({
             doctorUserId: updatedContext.doctorId,
