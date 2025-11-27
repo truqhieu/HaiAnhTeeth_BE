@@ -1223,6 +1223,56 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+    // ==========================================================================
+    // CASE 27: Hiển thị đúng available slots - Không có "undefined-undefined"
+    // ==========================================================================
+    logTest(27, 'Hiển thị đúng available slots - Không có "undefined-undefined"');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ Thao vào ngày mai"');
+    result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Thao vào ngày mai');
+    
+    // AI should show services list
+    const showsServices27 = result.message.includes('dịch vụ') || result.message.includes('Dịch vụ');
+    logResult(showsServices27, showsServices27 ? 'AI hiển thị danh sách dịch vụ' : 'AI không hiển thị dịch vụ');
+    
+    if (showsServices27) {
+      history = [
+        { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ Thao vào ngày mai' },
+        { role: 'assistant', content: result.message }
+      ];
+      
+      logStep(2, 'User: "Khám tổng quát"');
+      result = await sendMessage('Khám tổng quát', history);
+      
+      const responseText27 = result.message || result.response || '';
+      
+      // Check that available slots are displayed correctly
+      const showsSlots27 = responseText27.includes('khung giờ') || 
+                          responseText27.includes('Buổi sáng') ||
+                          responseText27.includes('Buổi chiều');
+      
+      // Check that there's NO "undefined-undefined" bug
+      const noUndefinedBug = !responseText27.includes('undefined');
+      
+      const testPassed27 = showsSlots27 && noUndefinedBug;
+      
+      logResult(testPassed27, testPassed27 ? 
+        '✅ Hiển thị đúng available slots, không có "undefined-undefined"' : 
+        '❌ Có lỗi hiển thị slots hoặc xuất hiện "undefined"');
+      
+      if (!testPassed27 && responseText27.includes('undefined')) {
+        log('  ⚠️ Phát hiện bug "undefined" trong response:', colors.red);
+        log(`  "${responseText27}"`, colors.yellow);
+      }
+      
+      recordTestResult(27, 'Hiển thị đúng available slots', testPassed27,
+        testPassed27 ? 'Slots displayed correctly without undefined' : 'Undefined bug detected in slot display');
+    } else {
+      recordTestResult(27, 'Hiển thị đúng available slots', false, 'AI did not show services');
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
 
     // ==========================================================================
     // Print Summary

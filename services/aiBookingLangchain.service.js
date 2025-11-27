@@ -2021,28 +2021,31 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             // Use pre-calculated gaps from slots instead of recalculating
             finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (đã có lịch hẹn khác từ ${conflictingSlot.start}-${conflictingSlot.end}).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
             
-            if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-              // Use pre-calculated gaps if available
-              if (slots.morning.gaps && slots.morning.gaps.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
-              } else {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+            // ⭐ FIX: Use correct structure from getDoctorScheduleRange
+            // slots.scheduleRanges is an array of {shift, displayRange, availableGaps, ...}
+            let morningRange = null;
+            let afternoonRange = null;
+            
+            if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+              for (const range of slots.scheduleRanges) {
+                if (range.shift === 'Morning') {
+                  morningRange = range;
+                } else if (range.shift === 'Afternoon') {
+                  afternoonRange = range;
+                }
               }
-            } else if (slots.morning && slots.morning.isFull) {
-              finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+            }
+            
+            // Display morning slots
+            if (morningRange && morningRange.displayRange && morningRange.displayRange !== 'Đã hết chỗ') {
+              finalResponse += `\n- Buổi sáng: ${morningRange.displayRange}`;
             } else {
               finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
             }
             
-            if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-              // Use pre-calculated gaps if available
-              if (slots.afternoon.gaps && slots.afternoon.gaps.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
-              } else {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-              }
-            } else if (slots.afternoon && slots.afternoon.isFull) {
-              finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+            // Display afternoon slots
+            if (afternoonRange && afternoonRange.displayRange && afternoonRange.displayRange !== 'Đã hết chỗ') {
+              finalResponse += `\n- Buổi chiều: ${afternoonRange.displayRange}`;
             } else {
               finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
             }
@@ -2081,17 +2084,29 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               if (!isInWorkingHours) {
                 console.log(`❌ [LangChain] Time ${selectedTime} is outside working hours`);
                 finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (ngoài giờ làm việc).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-                if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                  finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
-                } else if (slots.morning && slots.morning.isFull) {
-                  finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+                
+                // ⭐ FIX: Use correct structure from getDoctorScheduleRange
+                let morningRange = null;
+                let afternoonRange = null;
+                
+                if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+                  for (const range of slots.scheduleRanges) {
+                    if (range.shift === 'Morning') {
+                      morningRange = range;
+                    } else if (range.shift === 'Afternoon') {
+                      afternoonRange = range;
+                    }
+                  }
+                }
+                
+                if (morningRange && morningRange.displayRange && morningRange.displayRange !== 'Đã hết chỗ') {
+                  finalResponse += `\n- Buổi sáng: ${morningRange.displayRange}`;
                 } else {
                   finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
                 }
-                if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-                } else if (slots.afternoon && slots.afternoon.isFull) {
-                  finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+                
+                if (afternoonRange && afternoonRange.displayRange && afternoonRange.displayRange !== 'Đã hết chỗ') {
+                  finalResponse += `\n- Buổi chiều: ${afternoonRange.displayRange}`;
                 } else {
                   finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
                 }
