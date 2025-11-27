@@ -73,7 +73,7 @@ router.get('/medical-records', verifyToken, verifyRole('Patient'), getPatientMed
 
 // ⭐ Cập nhật trạng thái ca khám (Staff check-in, Nurse hoàn thành)
 // Staff: Approved → CheckedIn
-router.put('/:appointmentId/status', verifyToken, verifyRole(['Staff', 'Nurse', 'Manager']), updateAppointmentStatus);
+router.put('/:appointmentId/status', verifyToken, verifyRole(['Staff', 'Nurse', 'Manager', 'Doctor']), updateAppointmentStatus);
 
 // ⭐ Hủy ca khám - Patient có thể hủy lịch của mình
 router.delete('/:appointmentId/cancel', verifyToken, cancelAppointment);
