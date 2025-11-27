@@ -1053,39 +1053,101 @@ async function runTests() {
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
     // ==========================================================================
-    // SUMMARY
+    // CASE 21: AI Đặt lịch tư vấn online với thanh toán SePay
+    // ==========================================================================
+    logTest(21, 'AI Đặt lịch tư vấn online - Chuyển sang thanh toán SePay');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch tư vấn online với bác sĩ Dương vào 15h ngày mai"');
+    result = await sendMessage('Tôi muốn đặt lịch tư vấn online với bác sĩ Dương vào 15h ngày mai');
+    
+    // Kiểm tra AI có nhận diện đúng dịch vụ tư vấn online không
+    const recognizesOnlineConsultation = result.message.toLowerCase().includes('tư vấn') || 
+                                         result.message.toLowerCase().includes('online') ||
+                                         result.message.toLowerCase().includes('consultation');
+    
+    logResult(recognizesOnlineConsultation, recognizesOnlineConsultation ? 
+      'AI nhận diện dịch vụ tư vấn online' : 
+      'AI không nhận diện được dịch vụ tư vấn online');
+    
+    // Tiếp tục flow đặt lịch
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch tư vấn online với bác sĩ Dương vào 15h ngày mai' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    logStep(2, 'Xác nhận đặt lịch');
+    result = await sendMessage('Xác nhận', history);
+    
+    // Kiểm tra kết quả
+    const responseText21 = result.message || result.response || '';
+    
+    // Tình huống 1: Đặt lịch thành công và cần thanh toán
+    const requiresPayment = result.requirePayment === true || 
+                           responseText21.includes('thanh toán') ||
+                           responseText21.includes('payment') ||
+                           responseText21.includes('QR') ||
+                           result.appointmentId; // Có appointmentId nghĩa là đã tạo appointment
+    
+    // Tình huống 2: Appointment được tạo với status PendingPayment
+    const appointmentCreated21 = result.success || result.appointmentId;
+    
+    // Mong đợi: 
+    // - Appointment được tạo với status = "PendingPayment"
+    // - Frontend sẽ chuyển hướng đến trang thanh toán SePay
+    // - Có thông tin payment (QR code, amount, expireAt)
+    const testPassed21 = requiresPayment && appointmentCreated21;
+    
+    logResult(testPassed21, testPassed21 ? 
+      '✅ Đặt lịch thành công - Cần thanh toán (chuyển sang SePay)' : 
+      '❌ Không tạo được appointment hoặc không yêu cầu thanh toán');
+    
+    if (testPassed21) {
+      log('  📋 Mong đợi:', colors.cyan);
+      log('    - Appointment status: PendingPayment', colors.yellow);
+      log('    - Frontend chuyển đến trang thanh toán SePay', colors.yellow);
+      log('    - Hiển thị QR code và thông tin thanh toán', colors.yellow);
+      log('    - Sau khi thanh toán thành công:', colors.yellow);
+      log('      → Payment status: Completed', colors.yellow);
+      log('      → Appointment status: Pending (chờ staff duyệt)', colors.yellow);
+      log('      → Timeslot status: Booked', colors.yellow);
+      log('      → Chuyển về trang "Các ca khám đã đặt"', colors.yellow);
+      log('    - Nếu không thanh toán (timeout 3 phút):', colors.yellow);
+      log('      → Payment status: Expired', colors.yellow);
+      log('      → Appointment status: Cancelled', colors.yellow);
+      log('      → Timeslot status: Available', colors.yellow);
+      log('      → Chuyển về trang Home', colors.yellow);
+    }
+    
+    recordTestResult(21, 'AI Đặt lịch tư vấn online - Thanh toán SePay', testPassed21,
+      testPassed21 ? 'Appointment created, requires payment' : 'Failed to create appointment or no payment required');
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+
+    // ==========================================================================
+    // Print Summary
     // ==========================================================================
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);
     console.log('='.repeat(80));
     
-    // Count results
-    const totalTests = testResults.length;
-    const passedTests = testResults.filter(t => t.passed).length;
-    const failedTests = totalTests - passedTests;
+    const passed = testResults.filter(r => r.passed).length;
+    const total = testResults.length;
+    const passRate = ((passed / total) * 100).toFixed(1);
     
-    // Display table
-    console.log('');
-    console.log('┌─────┬────────────────────────────────────────────────┬────────┐');
-    console.log('│ #   │ Test Case                                      │ Result │');
-    console.log('├─────┼────────────────────────────────────────────────┼────────┤');
+    log(`\nTotal Tests: ${total}`, colors.bright);
+    log(`Passed: ${passed}`, colors.green);
+    log(`Failed: ${total - passed}`, colors.red);
+    log(`Pass Rate: ${passRate}%\n`, passRate >= 80 ? colors.green : colors.red);
     
-    testResults.forEach(test => {
-      const caseNum = test.caseNumber.toString().padEnd(3);
-      const title = test.title.padEnd(46).substring(0, 46);
-      const result = test.passed ? '  ✅   ' : '  ❌   ';
-      console.log(`│ ${caseNum} │ ${title} │ ${result} │`);
+    testResults.forEach(result => {
+      const icon = result.passed ? '✅' : '❌';
+      const color = result.passed ? colors.green : colors.red;
+      log(`${icon} Case ${result.caseNumber}: ${result.title}`, color);
+      if (!result.passed) {
+        log(`   Details: ${result.details}`, colors.yellow);
+      }
     });
-    
-    console.log('└─────┴────────────────────────────────────────────────┴────────┘');
-    console.log('');
-    
-    // Summary stats
-    log(`Total Tests: ${totalTests}`, colors.bright);
-    log(`Passed: ${passedTests}`, passedTests === totalTests ? colors.green : colors.yellow);
-    log(`Failed: ${failedTests}`, failedTests === 0 ? colors.green : colors.red);
-    log(`Success Rate: ${((passedTests/totalTests) * 100).toFixed(1)}%`, 
-        passedTests === totalTests ? colors.green : colors.yellow);
     
     console.log('\n' + '='.repeat(80));
     

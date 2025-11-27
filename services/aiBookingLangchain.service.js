@@ -852,6 +852,10 @@ class AIBookingLangchainService {
             this.clearConversationContext(patientUserId);
             
             console.log('✅ [Tool] create_appointment: Appointment created successfully! ID:', result.appointmentId);
+            
+            // ⭐ NEW: Check if payment is required (for online consultation services)
+            const requiresPayment = result.requirePayment || false;
+            
             return JSON.stringify({
               success: true,
               appointment: {
@@ -865,7 +869,18 @@ class AIBookingLangchainService {
                 type: result.type,
                 mode: result.mode
               },
-              message: 'Đặt lịch thành công!',
+              requirePayment: requiresPayment, // ⭐ NEW: Flag to indicate payment is needed
+              payment: requiresPayment && result.payment ? { // ⭐ NEW: Payment info for frontend
+                paymentId: result.payment.paymentId,
+                amount: result.payment.amount,
+                QRurl: result.payment.QRurl,
+                expiresAt: result.payment.expiresAt,
+                method: result.payment.method,
+                status: result.payment.status
+              } : null,
+              message: requiresPayment 
+                ? 'Đặt lịch thành công! Vui lòng thanh toán để hoàn tất đặt lịch.' 
+                : 'Đặt lịch thành công!',
             });
           } else {
             console.error('❌ [Tool] create_appointment: Invalid response from service:', result);
@@ -2652,6 +2667,35 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
       // Get final context state for response
       const finalContext = this.getConversationContext(patientUserId);
       
+      // ⭐ BỔ SUNG: Capture payment info from create_appointment tool (nếu có)
+      // Không ảnh hưởng logic hiện tại, chỉ thêm thông tin payment
+      let capturedPaymentInfo = null;
+      let capturedRequirePayment = false;
+      let capturedAppointmentData = null;
+      
+      if (result.intermediateSteps && result.intermediateSteps.length > 0) {
+        for (const step of result.intermediateSteps) {
+          if (step.action?.tool === 'create_appointment') {
+            try {
+              const toolResult = JSON.parse(step.observation);
+              if (toolResult.success && toolResult.appointment) {
+                capturedAppointmentData = toolResult.appointment;
+                capturedRequirePayment = toolResult.requirePayment || false;
+                capturedPaymentInfo = toolResult.payment || null;
+                console.log('💳 [LangChain] Captured payment info from create_appointment tool:', {
+                  appointmentId: capturedAppointmentData.appointmentId,
+                  requirePayment: capturedRequirePayment,
+                  hasPaymentInfo: !!capturedPaymentInfo
+                });
+                break;
+              }
+            } catch (e) {
+              console.warn('⚠️ [LangChain] Could not parse create_appointment result:', e.message);
+            }
+          }
+        }
+      }
+      
       // Check if the response indicates appointment creation
       const responseText = finalResponse.toLowerCase();
       const appointmentCreated = responseText.includes('đặt lịch thành công') || 
@@ -2673,14 +2717,25 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         needsMoreInfo,
       });
       
-      return {
+      // ⭐ BỔ SUNG: Build response với payment info (nếu có)
+      const responseData = {
         success: true,
         response: finalResponse,
         conversationHistory: updatedHistory,
         needsMoreInfo: needsMoreInfo,
         appointment: appointmentCreated ? { success: true } : null,
-        reservationExpiresAt: finalContext.reservationExpiresAt || null, // ⭐ NEW: For countdown timer
+        reservationExpiresAt: finalContext.reservationExpiresAt || null,
       };
+      
+      // ⭐ BỔ SUNG: Thêm payment info nếu có (không ảnh hưởng logic cũ)
+      if (capturedRequirePayment && capturedPaymentInfo) {
+        responseData.requirePayment = true;
+        responseData.payment = capturedPaymentInfo;
+        responseData.appointment = capturedAppointmentData; // Include full appointment data with payment
+        console.log('✅ [LangChain] Added payment info to response');
+      }
+      
+      return responseData;
     } catch (error) {
       console.error('❌ [LangChain] Error:', error);
       throw error;
@@ -2697,6 +2752,8 @@ async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self'
     return {
       success: result.success,
       appointment: result.appointment || null,
+      requirePayment: result.requirePayment || false, // ⭐ NEW: Forward payment requirement flag
+      payment: result.payment || null, // ⭐ NEW: Forward payment info (QR code, amount, etc.)
       needsMoreInfo: result.needsMoreInfo || false,
       message: result.message || result.response, // ⭐ Preserve message field for controller
       followUpQuestion: result.response,

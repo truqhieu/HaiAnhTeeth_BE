@@ -60,15 +60,37 @@ const createAppointmentByAI = async (req, res) => {
     if (result.success && result.appointment) {
       console.log('✅ [AI Booking] Appointment created successfully');
       const appointmentData = result.appointment;
+      
+      // ⭐ BỔ SUNG: Prepare response data (giữ nguyên cấu trúc hiện tại)
+      const responseData = {
+        appointmentId: appointmentData.appointmentId || appointmentData._id,
+        appointment: appointmentData,
+        followUpQuestion: result.followUpQuestion || result.response,
+        parsedData: result.parsedData || {}
+      };
+      
+      // ⭐ BỔ SUNG: Thêm payment info nếu có (không ảnh hưởng logic cũ)
+      if (result.requirePayment && result.payment) {
+        responseData.requirePayment = true;
+        responseData.payment = {
+          paymentId: result.payment.paymentId,
+          amount: result.payment.amount,
+          QRurl: result.payment.QRurl,
+          expiresAt: result.payment.expiresAt,
+          method: result.payment.method,
+          status: result.payment.status
+        };
+        console.log('💳 [AI Booking] Payment info added to response:', {
+          paymentId: result.payment.paymentId,
+          amount: result.payment.amount,
+          hasQR: !!result.payment.QRurl
+        });
+      }
+      
       return res.status(200).json({
         success: true,
         message: 'Đặt lịch thành công!',
-        data: {
-          appointmentId: appointmentData.appointmentId || appointmentData._id,
-          appointment: appointmentData,
-          followUpQuestion: result.followUpQuestion || result.response,
-          parsedData: result.parsedData || {}
-        }
+        data: responseData
       });
     }
 
