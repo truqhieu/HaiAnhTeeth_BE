@@ -274,21 +274,23 @@ async sendConsultationFormStaffEmail(staffEmail, data) {
     html: template.html,
   });
 }
-async sendReExaminationEmail(email, data) {
-    // Giả sử bạn đã có hàm getReExaminationEmailTemplate trong emailConfig.js
-    const template = getReExaminationEmailTemplate(data); 
-    if (this.useSendGrid) {
-      return this._sendViaSendGrid(email, template.subject, template.text, template.html);
-    }
-    const transporter = createTransporter();
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER || 'noreply@haianteeth.com',
-      to: email,
-      subject: template.subject,
-      text: template.text,
-      html: template.html,
-    });
+async sendReExaminationEmail(params) {
+  const { email, ...data } = params;
+  const template = getReExaminationEmailTemplate(data); 
+  
+  if (this.useSendGrid) {
+    return this._sendViaSendGrid(email, template.subject, template.text, template.html);
   }
+  
+  const transporter = createTransporter();
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER || 'noreply@haianteeth.com',
+    to: email,
+    subject: template.subject,
+    text: template.text,
+    html: template.html,
+  });
+}
 }
 
 module.exports = new EmailService();

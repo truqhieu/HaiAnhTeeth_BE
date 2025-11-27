@@ -1130,9 +1130,19 @@ const getReExaminationEmailTemplate = (data) => {
     clinicName = 'Phòng khám Hải An',
   } = data;
 
-  const createdAt = new Date().toLocaleString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    hour12: false,
+  // Format ngày tái khám
+  const formattedDate = new Date(appointmentDate).toLocaleDateString('vi-VN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  // Format giờ tái khám
+  const formattedTime = new Date(appointmentTime).toLocaleTimeString('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
   });
 
   return {
@@ -1147,65 +1157,178 @@ THÔNG TIN BỆNH NHÂN:
 
 THÔNG TIN TÁI KHÁM:
 - Bác sĩ: ${doctorName}
-- Ngày tái khám: ${appointmentDate}
-- Giờ tái khám: ${appointmentTime}
-
-THÔNG TIN HỆ THỐNG:
-- Thời điểm tạo đơn: ${createdAt}
+- Ngày tái khám: ${formattedDate}
+- Giờ tái khám: ${formattedTime}
 - Cơ sở: ${clinicName}
 
-Vui lòng xác nhận với bệnh nhân và chuẩn bị hồ sơ.
+Vui lòng xem chi tiết lịch tái khám trong hệ thống.
     `.trim(),
     html: `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: 'Segoe UI', sans-serif; background: #f4f4f4; padding: 20px; color: #333; }
-    .email-container { max-width: 650px; margin: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; }
-    .email-header { background: #17a2b8; color: white; padding: 20px; text-align: center; font-size: 20px; font-weight: bold; }
-    .email-body { padding: 25px; font-size: 15px; line-height: 1.6; }
-    .section-title { font-weight: 600; margin-top: 15px; margin-bottom: 8px; text-transform: uppercase; font-size: 13px; color: #555; }
-    .info-box { background: #f8f9fa; padding: 12px 15px; border-radius: 6px; margin-bottom: 12px; }
-    .info-row { margin-bottom: 4px; }
-    .label { font-weight: 600; }
-    .email-footer { background: #f1f1f1; padding: 12px 15px; text-align: center; font-size: 13px; color: #666; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      background: #f5f5f5; 
+      padding: 20px; 
+      color: #333; 
+      line-height: 1.6;
+    }
+    .email-wrapper { 
+      max-width: 600px; 
+      margin: 0 auto; 
+      background: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+    .email-header { 
+      background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+      color: white; 
+      padding: 30px 20px; 
+      text-align: center;
+    }
+    .email-header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: 0.5px;
+    }
+    .email-body { 
+      padding: 30px 25px;
+    }
+    .email-body > p:first-child {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+    .email-body > p:nth-child(2) {
+      font-size: 15px;
+      color: #555;
+      margin-bottom: 25px;
+    }
+    .section-title { 
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+      color: #17a2b8;
+      margin: 20px 0 10px 0;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid #17a2b8;
+      padding-bottom: 5px;
+    }
+    .info-box { 
+      background: #f8f9fa;
+      padding: 15px 18px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      border-left: 4px solid #17a2b8;
+    }
+    .info-row { 
+      margin-bottom: 8px;
+      font-size: 14px;
+      display: flex;
+      align-items: baseline;
+    }
+    .info-row:last-child {
+      margin-bottom: 0;
+    }
+    .label { 
+      font-weight: 600;
+      color: #444;
+      min-width: 130px;
+      display: inline-block;
+    }
+    .value {
+      color: #555;
+    }
+    .highlight-box {
+      background: #e7f6f8;
+      border: 1px solid #17a2b8;
+      border-radius: 6px;
+      padding: 15px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .highlight-box strong {
+      color: #17a2b8;
+      font-size: 15px;
+    }
+    .email-footer { 
+      background: #f8f9fa;
+      padding: 20px;
+      text-align: center;
+      font-size: 13px;
+      color: #6c757d;
+      border-top: 1px solid #e9ecef;
+    }
+    .email-footer p {
+      margin: 0;
+    }
+    @media only screen and (max-width: 600px) {
+      body { padding: 10px; }
+      .email-body { padding: 20px 15px; }
+      .label { min-width: 110px; font-size: 13px; }
+      .value { font-size: 13px; }
+    }
   </style>
 </head>
 <body>
-  <div class="email-container">
+  <div class="email-wrapper">
     <div class="email-header">
-      Đơn tái khám mới
+      <h1>Đơn tái khám mới</h1>
     </div>
+    
     <div class="email-body">
       <p>Chào đội ngũ <strong>${clinicName}</strong>,</p>
       <p>Bác sĩ vừa tạo <strong>đơn tái khám</strong> cho bệnh nhân.</p>
 
       <div class="section-title">Thông tin bệnh nhân</div>
       <div class="info-box">
-        <div class="info-row"><span class="label">Họ tên:</span> ${patientName}</div>
-        <div class="info-row"><span class="label">Số điện thoại:</span> ${patientPhone}</div>
-        <div class="info-row"><span class="label">Email:</span> ${patientEmail}</div>
+        <div class="info-row">
+          <span class="label">Họ tên:</span>
+          <span class="value">${patientName}</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Số điện thoại:</span>
+          <span class="value">${patientPhone}</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Email:</span>
+          <span class="value">${patientEmail}</span>
+        </div>
       </div>
 
       <div class="section-title">Thông tin tái khám</div>
       <div class="info-box">
-        <div class="info-row"><span class="label">Bác sĩ:</span> ${doctorName}</div>
-        <div class="info-row"><span class="label">Ngày tái khám:</span> ${appointmentDate}</div>
-        <div class="info-row"><span class="label">Giờ tái khám:</span> ${appointmentTime}</div>
+        <div class="info-row">
+          <span class="label">Bác sĩ:</span>
+          <span class="value">${doctorName}</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Ngày tái khám:</span>
+          <span class="value">${formattedDate}</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Giờ tái khám:</span>
+          <span class="value">${formattedTime}</span>
+        </div>
+        <div class="info-row">
+          <span class="label">Cơ sở:</span>
+          <span class="value">${clinicName}</span>
+        </div>
       </div>
 
-      <div class="section-title">Thông tin hệ thống</div>
-      <div class="info-box">
-        <div class="info-row"><span class="label">Thời điểm tạo đơn:</span> ${createdAt}</div>
-        <div class="info-row"><span class="label">Cơ sở:</span> ${clinicName}</div>
+      <div class="highlight-box">
+        <strong>Gợi ý xử lý:</strong> Vui lòng xem chi tiết lịch tái khám trong hệ thống.
       </div>
-
-      <p><strong>Gợi ý xử lý:</strong> Vui lòng xác nhận với bệnh nhân và chuẩn bị hồ sơ bệnh án.</p>
     </div>
+    
     <div class="email-footer">
-      Email tự động thông báo đơn tái khám.
+      <p>Email tự động thông báo đơn tái khám.</p>
     </div>
   </div>
 </body>
