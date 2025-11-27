@@ -12,81 +12,79 @@ class LeaveRequestService {
   /**
    * Tạo leave request mới
    */
-  async createLeaveRequest(userId, data) {
-    const { startDate, endDate, reason } = data;
+async createLeaveRequest(userId, data) {
+  const { startDate, endDate, reason } = data;
 
-    if (!startDate || !endDate || !reason) {
-      throw new Error('Vui lòng nhập đầy đủ thông tin');
-    }
+  if (!startDate || !endDate || !reason) {
+    throw new Error('Vui lòng nhập đầy đủ thông tin');
+  }
 
-    const normalizeDay = (d) =>{
-      const time = new Date(d);
-      if(isNaN(time.getTime())) return null;
-      time.setHours(0,0,0,0);
-      return time;
-    }
+  const normalizeDay = (d) => {
+    const time = new Date(d);
+    if(isNaN(time.getTime())) return null;
+    time.setHours(0, 0, 0, 0);
+    return time;
+  }
 
-    const start = normalizeDay(startDate);
-    const end = normalizeDay(endDate);
+  const start = normalizeDay(startDate);
+  const end = normalizeDay(endDate);
 
+  if (!start) {
+    throw new Error('Ngày bắt đầu không hợp lệ');
+  }
 
-    if (!start) {
-      throw new Error('Ngày bắt đầu không hợp lệ');
-    }
+  const now = normalizeDay(Date.now());
 
-    const now = normalizeDay(Date.now());
+  if (start < now) {
+    throw new Error('Ngày bắt đầu phải tính từ hiện tại');
+  }
 
-    if (start < now) {
-      throw new Error('Ngày bắt đầu phải tính từ hiện tại');
-    }
+  if (end < start) {
+    throw new Error('Ngày kết thúc phải lớn hơn ngày bắt đầu');
+  }
 
-    if (end < start) {
-      throw new Error('Ngày kết thúc phải lớn hơn ngày bắt đầu');
-    }
+  const cleanReason = reason.trim();
+  if (cleanReason.length === 0) {
+    throw new Error("Lý do nghỉ không thể để trống");
+  }
+  if (cleanReason.length < 3) {
+    throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
+  }
+  if (!/^[a-zA-ZÀ-ỹ0-9\s.,!?;:'"()_-]+$/.test(cleanReason)) {
+    throw new Error('Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -');
+  }
 
-    const cleanReason = reason.trim();
-    if (cleanReason.length === 0) {
-      throw new Error("Lý do nghỉ không thể để trống");
-    }
-    if (cleanReason.length < 3) {
-      throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
-    }
-    if (!/^[a-zA-ZÀ-ỹ0-9\s.,!?;:'"()_-]+$/.test(cleanReason)) {
-      throw new Error('Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -');
-    }
+  const existingApprovedLeave = await LeaveRequest.findOne({
+    userId: userId,
+    status: 'Approved',
+    $or: [
+      { startDate: { $lte: end }, endDate: { $gte: start } }
+    ]
+  });
 
-    // Kiểm tra đơn nghỉ đã được duyệt có trùng thời gian không
-    const existingApprovedLeave = await LeaveRequest.findOne({
-      userId: userId,
-      status: 'Approved',
-      $or: [
-        { startDate: { $lte: end }, endDate: { $gte: start } }
-      ]
-    });
+  if (existingApprovedLeave) {
+    throw new Error('Bạn đã có đơn nghỉ được duyệt trong khoảng thời gian này');
+  }
 
-    if (existingApprovedLeave) {
-      throw new Error('Bạn đã có đơn nghỉ được duyệt trong khoảng thời gian này');
-    }
+  // ✅ Sửa: Dùng setHours thay vì setUTCHours
+  const startToSave = new Date(start);
+  startToSave.setHours(0, 0, 0, 0); // Local time
 
-    // Format dates to UTC midnight to avoid timezone shift
-    const startToSave = new Date(start);
-    startToSave.setUTCHours(0, 0, 0, 0); // UTC midnight
+  const endToSave = new Date(end);
+  endToSave.setHours(23, 59, 59, 999); // Local time
 
-    const endToSave = new Date(end);
-    endToSave.setUTCHours(23, 59, 59, 999); // UTC end of day
+  const newRequest = new LeaveRequest({
+    userId,
+    startDate: startToSave,
+    endDate: endToSave,
+    reason: cleanReason,
+  });
 
-    const newRequest = new LeaveRequest({
-      userId,
-      startDate : startToSave,
-      endDate : endToSave,
-      reason : cleanReason,
-    });
-
-    await newRequest.save();
-      //Thông báo cho quản lý
-      const listManager = await User.find({role : "Manager"})
-      try {
-       await Promise.all(
+  await newRequest.save();
+  
+  const listManager = await User.find({role: "Manager"});
+  try {
+    await Promise.all(
       listManager.map(s =>
         notificationService.createNotification({
           userId: s._id,
@@ -100,9 +98,10 @@ class LeaveRequestService {
     );
   } catch (notifError) {
     console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
-  }  
-    return newRequest;
   }
+  
+  return newRequest;
+}
 
   /**
    * Lấy danh sách leave requests
