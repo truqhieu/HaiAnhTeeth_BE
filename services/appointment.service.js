@@ -3247,8 +3247,8 @@ async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpN
   }
 
   const originalAppointment = await Appointment.findById(originalAppointmentId)
-    .populate('patientUserId', 'fullName email')
-    .populate('customerId', 'fullName email')
+    .populate('patientUserId', 'fullName email phoneNumber')
+    .populate('customerId', 'fullName email phnoneNumber')
     .populate('serviceId', 'serviceName durationMinutes category')
     .populate('doctorUserId', 'fullName email')
     .populate('timeslotId', 'startTime endTime');
@@ -3447,6 +3447,32 @@ async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpN
   await Timeslot.findByIdAndUpdate(timeslot._id, {
     appointmentId: followUpAppointment._id
   });
+
+const formattedFollowUpDate = new Date(startTime).toLocaleDateString('vi-VN');
+const followUpTime = new Date(startTime).toLocaleTimeString('vi-VN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false
+});
+
+console.log(`✅ [createFollowUpAppointment] Tạo lịch tái khám thành công cho bệnh nhân vào ${formattedFollowUpDate} lúc ${followUpTime}`);
+
+try {
+  await emailService.sendReExaminationEmail({
+    email: originalAppointment.patientUserId?.email,
+    patientName: originalAppointment.patientUserId?.fullName || 'Bệnh nhân',
+    patientPhone: originalAppointment.patientUserId?.phoneNumber || 'Chưa cập nhật',
+    patientEmail: originalAppointment.patientUserId?.email || 'Chưa cập nhật',
+    doctorName: originalAppointment.doctorUserId?.fullName || 'Chưa xác định',
+    appointmentDate: startTime,
+    appointmentTime: startTime,
+    clinicName: 'Phòng khám Hải An'
+  });
+  console.log('✅ [Email] Gửi email tái khám thành công');
+} catch (err) {
+  console.error('[Email] Gửi email tái khám thất bại:', err);
+}
+
 
   if (patientUserId) {
     const followUpDisplayTime = new Date(startTime).toLocaleString('vi-VN', {

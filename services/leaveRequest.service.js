@@ -19,21 +19,24 @@ async createLeaveRequest(userId, data) {
     throw new Error('Vui lòng nhập đầy đủ thông tin');
   }
 
-  const normalizeDay = (d) => {
-    const time = new Date(d);
-    if(isNaN(time.getTime())) return null;
-    time.setHours(0, 0, 0, 0);
-    return time;
-  }
+  // Parse input dates
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-  const start = normalizeDay(startDate);
-  const end = normalizeDay(endDate);
-
-  if (!start) {
+  if (isNaN(start.getTime())) {
     throw new Error('Ngày bắt đầu không hợp lệ');
   }
 
-  const now = normalizeDay(Date.now());
+  if (isNaN(end.getTime())) {
+    throw new Error('Ngày kết thúc không hợp lệ');
+  }
+
+  // Normalize to start of day in LOCAL timezone
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
 
   if (start < now) {
     throw new Error('Ngày bắt đầu phải tính từ hiện tại');
@@ -43,6 +46,7 @@ async createLeaveRequest(userId, data) {
     throw new Error('Ngày kết thúc phải lớn hơn ngày bắt đầu');
   }
 
+  // Validate lý do
   const cleanReason = reason.trim();
   if (cleanReason.length === 0) {
     throw new Error("Lý do nghỉ không thể để trống");
@@ -54,50 +58,53 @@ async createLeaveRequest(userId, data) {
     throw new Error('Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -');
   }
 
+  // ✅ TẠO THỜI GIAN LƯU VÀO DB (giờ local, MongoDB tự convert sang UTC)
+  const startToSave = new Date(start);
+  startToSave.setHours(0, 0, 0, 0); // 00:00:00 giờ VN
+
+  const endToSave = new Date(end);
+  endToSave.setHours(23, 59, 59, 999); // 23:59:59 giờ VN
+
+  // Check xung đột lịch nghỉ
   const existingApprovedLeave = await LeaveRequest.findOne({
     userId: userId,
-    status: 'Approved',
+    status: { $in: ['Approved', 'Pending'] },
     $or: [
-      { startDate: { $lte: end }, endDate: { $gte: start } }
+      { startDate: { $lte: endToSave }, endDate: { $gte: startToSave } }
     ]
   });
 
   if (existingApprovedLeave) {
-    throw new Error('Bạn đã có đơn nghỉ được duyệt trong khoảng thời gian này');
+    throw new Error('Bạn đã có đơn nghỉ trong khoảng thời gian này');
   }
 
-  // ✅ Sửa: Dùng setHours thay vì setUTCHours
-  const startToSave = new Date(start);
-  startToSave.setHours(0, 0, 0, 0); // Local time
-
-  const endToSave = new Date(end);
-  endToSave.setHours(23, 59, 59, 999); // Local time
-
+  // Tạo đơn nghỉ mới
   const newRequest = new LeaveRequest({
     userId,
-    startDate: startToSave,
-    endDate: endToSave,
+    startDate: startToSave,  // MongoDB tự convert: VN 28/11 00:00 → UTC 27/11 17:00
+    endDate: endToSave,      // MongoDB tự convert: VN 30/11 23:59 → UTC 30/11 16:59
     reason: cleanReason,
   });
 
   await newRequest.save();
   
-  const listManager = await User.find({role: "Manager"});
+  // Gửi thông báo cho Manager
+  const listManager = await User.find({ role: "Manager" });
   try {
     await Promise.all(
-      listManager.map(s =>
+      listManager.map(manager =>
         notificationService.createNotification({
-          userId: s._id,
+          userId: manager._id,
           createdByUserId: userId,
           title: 'Đơn xin nghỉ phép',
-          message: `Có gửi đơn xin nghỉ phép mới`,
+          message: `Có đơn xin nghỉ phép mới cần duyệt`,
           relatedAppointmentId: null,
           link: null,
         })
       )
     );
   } catch (notifError) {
-    console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
+    console.warn('⚠️ Lỗi gửi notification cho manager:', notifError.message);
   }
   
   return newRequest;
