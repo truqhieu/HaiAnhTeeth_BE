@@ -188,13 +188,22 @@ class AppointmentMonitorService {
   async _updateAppointmentStatus(appointment, now, scheduleEndTime = null) {
     const oldStatus = appointment.status;
     let newStatus = null;
+    let updateData = {};
 
     if (appointment.status === 'Pending' || appointment.status === 'Approved') {
-      newStatus = 'Expired';
+      // ⭐ Change: Pending/Approved -> Cancelled (instead of Expired)
+      newStatus = 'Cancelled';
+      updateData = {
+        status: newStatus,
+        cancelReason: 'Quá hạn (Hệ thống tự động hủy)',
+        cancelledAt: now
+      };
     } else if (appointment.status === 'CheckedIn') {
       newStatus = 'No-Show';
+      updateData = { status: newStatus };
     } else if (appointment.status === 'InProgress') {
       newStatus = 'Completed';
+      updateData = { status: newStatus };
     }
 
     if (newStatus) {
@@ -206,8 +215,15 @@ class AppointmentMonitorService {
       }
       console.log(`      - Hiện tại: ${now.toISOString()}`);
 
-      appointment.status = newStatus;
+      // Apply updates
+      Object.assign(appointment, updateData);
       await appointment.save();
+      
+      // If cancelled, we might want to release the timeslot?
+      // But since it's "expired" (past time), releasing the timeslot doesn't really matter for booking purposes
+      // as it's in the past. However, for data consistency, we can update it if needed.
+      // For now, just updating appointment status is enough as per requirement.
+      
       return true;
     }
     

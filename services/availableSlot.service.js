@@ -462,11 +462,15 @@ class AvailableSlotService {
 
     for (const doctor of availableDoctorsUser) {
       try {
+        console.log(`\n🔍 Checking doctor: ${doctor.fullName} (${doctor._id})`);
+        
         // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
         // Tạo một Date object với giờ 12:00 để kiểm tra nghỉ phép (isDoctorOnLeave cần startTime)
         const checkLeaveDate = new Date(searchDate);
         checkLeaveDate.setUTCHours(12, 0, 0, 0);
         const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
+        
+        console.log(`   - On leave: ${isOnLeave}`);
         
         if (isOnLeave) {
           console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) đang nghỉ phép vào ngày ${searchDate.toISOString().split('T')[0]}, skip...`);
@@ -479,6 +483,8 @@ class AvailableSlotService {
           date: searchDate,
           status: 'Available'
         });
+        
+        console.log(`   - Available schedules found: ${schedules.length}`);
 
         // ⭐ Nếu không có schedule Available → kiểm tra xem có schedule nào không (có thể là Unavailable)
         if (!schedules || schedules.length === 0) {
@@ -486,21 +492,48 @@ class AvailableSlotService {
             doctorUserId: doctor._id,
             date: searchDate
           });
+          
+          console.log(`   - Any schedule found: ${anySchedule ? 'Yes (status: ' + anySchedule.status + ')' : 'No'}`);
 
-              // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
+          // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
           if (!anySchedule) {
             console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có schedule, tự động tạo...`);
-            await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+            const createdSchedule = await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+            console.log(`   - Schedule created: ${createdSchedule ? 'Yes' : 'No (failed)'}`);
+            
             // Tìm lại schedule sau khi tạo
             schedules = await DoctorSchedule.find({
               doctorUserId: doctor._id,
               date: searchDate,
               status: 'Available'
             });
+            console.log(`   - Available schedules after creation: ${schedules.length}`);
+          } else if (anySchedule.status === 'Unavailable') {
+            // ⭐ FIX: Có schedule Unavailable nhưng bác sĩ KHÔNG on leave
+            // → Có thể là schedule cũ từ leave request đã hết hạn
+            // → Update status thành Available
+            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule Unavailable nhưng không on leave, updating to Available...`);
+            await DoctorSchedule.updateMany(
+              {
+                doctorUserId: doctor._id,
+                date: searchDate,
+                status: 'Unavailable'
+              },
+              {
+                $set: { status: 'Available' }
+              }
+            );
+            
+            // Tìm lại schedule sau khi update
+            schedules = await DoctorSchedule.find({
+              doctorUserId: doctor._id,
+              date: searchDate,
+              status: 'Available'
+            });
+            console.log(`   - Available schedules after update: ${schedules.length}`);
           } else {
-            // Có schedule nhưng không phải Available → có thể là Unavailable (do leave)
-            // Không cần tạo mới, chỉ skip
-            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule nhưng status không phải Available`);
+            // Có schedule với status khác (không phải Available hay Unavailable)
+            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule với status: ${anySchedule.status}`);
           }
         }
 
@@ -512,6 +545,7 @@ class AvailableSlotService {
 
         // Bác sĩ này có schedule vào ngày đó → thêm vào danh sách
         // (FE sẽ chọn bác sĩ, sau đó lấy schedule range của bác sĩ đó)
+        console.log(`✅ Adding doctor ${doctor.fullName} to available list`);
         availableDoctors.push({
           doctorId: doctor._id,
           doctorName: doctor.fullName,
@@ -522,7 +556,8 @@ class AvailableSlotService {
         });
 
       } catch (error) {
-        console.warn(`⚠️  Lỗi kiểm tra bác sĩ ${doctor._id}:`, error.message);
+        console.warn(`⚠️  Lỗi kiểm tra bác sĩ ${doctor.fullName} (${doctor._id}):`, error.message);
+        console.error(error);
       }
     }
 

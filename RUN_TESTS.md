@@ -39,7 +39,7 @@ Option B - Create a test user in the application
 
 Edit `test-ai-booking-cases.js` line 10:
 ```javascript
-const TEST_PATIENT_ID = 'YOUR_PATIENT_ID_HERE'; // ⬅️ Replace this
+const TEST_PATIENT_ID = '691fe21b4b0b8b308033efab';
 ```
 
 ---
