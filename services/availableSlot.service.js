@@ -2152,8 +2152,20 @@ async getDoctorScheduleRange({
   /**
    * ⭐ NEW: Validate appointment time
    * Check: thời gian nhập có nằm trong doctor schedule không và có doctor khả dụng không
+   * @param {Object} params
+   * @param {string} params.reservedByUserId - ID của user đang reserve (có thể là patientUserId hoặc staffUserId)
    */
-  async validateAppointmentTime({ doctorUserId, serviceId, date, startTime, patientUserId = null, appointmentFor = 'self', customerFullName, customerEmail }) {
+  async validateAppointmentTime({ 
+    doctorUserId, 
+    serviceId, 
+    date, 
+    startTime, 
+    patientUserId = null, 
+    appointmentFor = 'self', 
+    customerFullName, 
+    customerEmail,
+    reservedByUserId = null // ⭐ THÊM: ID của user đang reserve (staff hoặc patient)
+  }) {
     // 1. Lấy schedule ranges
     const scheduleRangeResult = await this.getDoctorScheduleRange({
       doctorUserId,
@@ -2444,11 +2456,14 @@ async getDoctorScheduleRange({
         continue;
       }
 
-      // ⭐ Loại trừ reservation của chính user đang đặt (nếu có patientUserId)
+      // ⭐ FIX: Loại trừ reservation của chính user đang đặt
+      // Sử dụng reservedByUserId (có thể là patientUserId hoặc staffUserId)
       // Cho phép user release slot cũ và đặt slot mới ngay lập tức
-      if (slot.status === 'Reserved' && patientUserId && slot.reservedByUserId && 
-          slot.reservedByUserId.toString() === patientUserId.toString()) {
+      const userIdToCheck = reservedByUserId || patientUserId;
+      if (slot.status === 'Reserved' && userIdToCheck && slot.reservedByUserId && 
+          slot.reservedByUserId.toString() === userIdToCheck.toString()) {
         // Đây là reservation của chính user này → bỏ qua, không tính là conflict
+        console.log(`   ✅ Skipping own reservation: ${slot._id} (reserved by ${userIdToCheck})`);
         continue;
       }
 

@@ -69,6 +69,8 @@ const verifyRole = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
       console.error('❌ verifyRole: No user found in request');
+      console.error('   - Request URL:', req.originalUrl);
+      console.error('   - Request Method:', req.method);
       return res.status(401).json({
         success: false,
         message: 'Vui lòng đăng nhập'
@@ -94,14 +96,27 @@ const verifyRole = (...allowedRoles) => {
       : userRole;
     
     console.log('🔍 verifyRole check:');
+    console.log('   - Request URL:', req.originalUrl);
+    console.log('   - Request Method:', req.method);
+    console.log('   - User ID:', req.user.userId);
+    console.log('   - User Email:', req.user.email);
     console.log('   - User role (original):', req.user.role);
     console.log('   - User role (normalized):', normalizedUserRole);
+    console.log('   - User role type:', typeof req.user.role);
     console.log('   - Allowed roles (original):', roles);
     console.log('   - Allowed roles (normalized):', normalizedAllowedRoles);
+    console.log('   - Comparison details:');
+    normalizedAllowedRoles.forEach((allowedRole, idx) => {
+      console.log(`     [${idx}] "${allowedRole}" === "${normalizedUserRole}" ? ${allowedRole === normalizedUserRole}`);
+    });
     console.log('   - Has permission?', normalizedAllowedRoles.includes(normalizedUserRole));
 
     if (!normalizedAllowedRoles.includes(normalizedUserRole)) {
-      console.error('❌ Permission denied for role:', req.user.role);
+      console.error('❌ Permission denied!');
+      console.error('   - User role:', req.user.role);
+      console.error('   - Normalized user role:', normalizedUserRole);
+      console.error('   - Allowed roles:', normalizedAllowedRoles);
+      console.error('   - Full user object:', JSON.stringify(req.user, null, 2));
       return res.status(403).json({
         success: false,
         message: 'Bạn không có quyền truy cập'

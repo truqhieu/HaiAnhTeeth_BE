@@ -911,7 +911,8 @@ class AppointmentService {
       notes,
       fullName,
       email,
-      phoneNumber
+      phoneNumber,
+      reservedTimeslotId
     } = appointmentData;
 
     // Validate cơ bản
@@ -938,6 +939,16 @@ class AppointmentService {
     const service = await Service.findById(serviceId);
     if (!service) throw new Error('Dịch vụ không tồn tại');
     if (service.status !== 'Active') throw new Error('Dịch vụ hiện không khả dụng');
+    
+    // ⭐ VALIDATE: Đảm bảo service có price field
+    if (typeof service.price !== 'number' || service.price < 0) {
+      console.error('❌ Service missing price field:', {
+        serviceId: service._id,
+        serviceName: service.serviceName,
+        price: service.price
+      });
+      throw new Error(`Dịch vụ "${service.serviceName}" chưa có giá. Vui lòng liên hệ quản lý để cập nhật giá dịch vụ.`);
+    }
 
     // Mode luôn Offline (walk-in)
     const appointmentMode = 'Offline';
@@ -956,7 +967,10 @@ class AppointmentService {
       startTime: requestedStartTime,
       // ⭐ Pass customer info for conflict checking (relative logic)
       customerFullName: fullName,
-      customerEmail: email
+      customerEmail: email,
+      // ⭐ FIX: Pass staffUserId as reservedByUserId để loại trừ reserved slots của chính staff
+      // Khi staff reserve slot rồi submit form, cần loại trừ reservation của chính họ
+      reservedByUserId: staffUserId
     });
 
     const slotStartTime = new Date(validationResult.startTime);
@@ -1001,14 +1015,49 @@ class AppointmentService {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
 
-    // Check conflict timeslot (KHÔNG cộng buffer)
-    const conflictingTimeslots = await Timeslot.find({
+    // ⭐ Check conflict timeslot - Áp dụng logic từ patient booking
+    // Bước 1: Lấy conflicting timeslots
+    const conflictingTimeslotsRaw = await Timeslot.find({
       doctorUserId,
       startTime: { $lt: slotEndTime },
       endTime: { $gt: slotStartTime },
       status: { $in: ['Reserved', 'Booked'] }
     });
+
+    // Bước 2: Clean up expired reserved timeslots và filter
+    const nowForConflict = new Date();
+    const conflictingTimeslots = [];
+
+    for (const ts of conflictingTimeslotsRaw) {
+      // Clean up expired reservations
+      if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
+        await Timeslot.updateOne(
+          { _id: ts._id },
+          {
+            $set: {
+              status: 'Available',
+              reservedUntil: null,
+              reservedByUserId: null,
+              appointmentId: null
+            }
+          }
+        );
+        continue;
+      }
+
+      // Bỏ qua chính timeslot mà staff đang giữ chỗ
+      if (reservedTimeslotId && ts._id.toString() === reservedTimeslotId.toString()) {
+        continue;
+      }
+
+      conflictingTimeslots.push(ts);
+    }
+
     if (conflictingTimeslots.length > 0) {
+      console.log('❌ Khung giờ bị conflict với timeslots đã có:', conflictingTimeslots.length);
+      conflictingTimeslots.forEach(ts => {
+        console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
+      });
       throw new Error('Khung giờ đã được đặt. Vui lòng chọn thời gian khác.');
     }
 
@@ -1028,22 +1077,95 @@ class AppointmentService {
       linkedUserId: null
     });
 
-    // Tạo Timeslot (trực tiếp → Booked luôn)
-    const newTimeslot = await Timeslot.create({
-      doctorScheduleId: schedule._id,
-      doctorUserId,
-      serviceId,
-      startTime: slotStartTime,
-      endTime: slotEndTime,
-      breakAfterMinutes: 0,
-      status: 'Booked',
-      appointmentId: null
-    });
+    // ⭐ Tạo hoặc reuse Timeslot - Áp dụng logic từ patient booking
+    let timeslotRecord = null;
+
+    if (reservedTimeslotId) {
+      // Validate và reuse reserved timeslot
+      timeslotRecord = await Timeslot.findById(reservedTimeslotId);
+
+      if (!timeslotRecord) {
+        throw new Error('Giữ chỗ của bạn đã hết hạn. Vui lòng chọn lại thời gian.');
+      }
+
+      if (timeslotRecord.status !== 'Reserved') {
+        throw new Error('Khung giờ này không còn khả dụng. Vui lòng chọn thời gian khác.');
+      }
+
+      if (timeslotRecord.reservedUntil && timeslotRecord.reservedUntil.getTime() < Date.now()) {
+        throw new Error('Giữ chỗ của bạn đã hết hạn. Vui lòng chọn lại thời gian.');
+      }
+
+      if (timeslotRecord.reservedByUserId && timeslotRecord.reservedByUserId.toString() !== staffUserId.toString()) {
+        throw new Error('Khung giờ này đã được người khác giữ chỗ. Vui lòng chọn thời gian khác.');
+      }
+
+      if (timeslotRecord.doctorUserId.toString() !== doctorUserId.toString()) {
+        throw new Error('Giữ chỗ không hợp lệ cho bác sĩ này. Vui lòng thử lại.');
+      }
+
+      if (timeslotRecord.startTime.getTime() !== slotStartTime.getTime() || timeslotRecord.endTime.getTime() !== slotEndTime.getTime()) {
+        throw new Error('Giữ chỗ không khớp với thời gian bạn chọn. Vui lòng chọn lại.');
+      }
+
+      // Update timeslot: chuyển từ Reserved → Booked
+      timeslotRecord.doctorScheduleId = schedule._id;
+      timeslotRecord.serviceId = serviceId;
+      timeslotRecord.breakAfterMinutes = 0;
+      timeslotRecord.reservedByUserId = staffUserId;
+      timeslotRecord.reservedUntil = null;
+      timeslotRecord.appointmentId = null;
+      timeslotRecord.status = 'Booked'; // Walk-in luôn Booked ngay
+
+      await timeslotRecord.save();
+      console.log('✅ Sử dụng timeslot đã giữ chỗ:', timeslotRecord._id);
+    } else {
+      // Tạo Timeslot mới
+      timeslotRecord = await Timeslot.create({
+        doctorScheduleId: schedule._id,
+        doctorUserId,
+        serviceId,
+        startTime: slotStartTime,
+        endTime: slotEndTime,
+        breakAfterMinutes: 0,
+        status: 'Booked',
+        appointmentId: null
+      });
+
+      console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
+    }
 
     // Giá với promotion (nếu có) chỉ để lưu price info, không cần payment hold
-    const promotionData = await calculateServicePrice(serviceId, service.price);
-    const finalPrice = promotionData.finalPrice;
-    const originalPrice = promotionData.originalPrice;
+    let promotionData;
+    let finalPrice;
+    let originalPrice;
+    
+    try {
+      promotionData = await calculateServicePrice(serviceId, service.price);
+      finalPrice = promotionData.finalPrice;
+      originalPrice = promotionData.originalPrice;
+      
+      console.log('💰 Price calculation for walk-in:', {
+        serviceId: serviceId,
+        serviceName: service.serviceName,
+        originalPrice: originalPrice,
+        finalPrice: finalPrice,
+        discountAmount: promotionData.discountAmount,
+        hasPromotion: !!promotionData.promotionInfo
+      });
+    } catch (priceError) {
+      console.error('❌ Error calculating service price:', priceError);
+      // Fallback: Sử dụng giá gốc nếu không tính được promotion
+      originalPrice = service.price;
+      finalPrice = service.price;
+      promotionData = {
+        originalPrice: service.price,
+        finalPrice: service.price,
+        discountAmount: 0,
+        promotionInfo: null
+      };
+      console.warn('⚠️ Using fallback pricing (no promotion applied)');
+    }
 
     // Tạo appointment: trạng thái Approved (bệnh nhân đã đến quầy), mode Offline
     const newAppointment = await Appointment.create({
@@ -1051,7 +1173,7 @@ class AppointmentService {
       customerId: newCustomer._id,      // Bệnh nhân vãng lai
       doctorUserId,
       serviceId,
-      timeslotId: newTimeslot._id,
+      timeslotId: timeslotRecord._id,
       status: 'Approved',
       type: appointmentType,
       mode: appointmentMode,
@@ -1065,7 +1187,7 @@ class AppointmentService {
     });
 
     // Link timeslot -> appointment
-    await Timeslot.findByIdAndUpdate(newTimeslot._id, {
+    await Timeslot.findByIdAndUpdate(timeslotRecord._id, {
       appointmentId: newAppointment._id,
       status: 'Booked'
     });
@@ -1091,7 +1213,14 @@ class AppointmentService {
         startTime: populated.timeslotId?.startTime,
         endTime: populated.timeslotId?.endTime,
         patientName: populated.customerId?.fullName,
-        requirePayment: false
+        requirePayment: false,
+        // ⭐ THÊM: Thông tin giá để FE có thể hiển thị
+        pricing: {
+          originalPrice: populated.originalPrice || 0,
+          finalPrice: populated.finalPrice || 0,
+          discountAmount: populated.discountAmount || 0,
+          hasPromotion: !!(populated.promotionId)
+        }
       }
     };
   }

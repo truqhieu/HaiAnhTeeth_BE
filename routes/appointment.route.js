@@ -40,11 +40,11 @@ router.post('/ai-create', verifyToken, verifyRole('Patient'), createAppointmentB
 // ⭐ Patient đặt lịch tư vấn/khám - Cần đăng nhập
 router.post('/consultation/create', verifyToken, verifyRole('Patient'), createConsultationAppointment);
 
-// ⭐ Patient/Doctor giữ chỗ tạm thời cho khung giờ
-router.post('/reserve-slot', verifyToken, verifyRole(['Patient', 'Doctor']), reserveTimeslot);
+// ⭐ Patient/Doctor/Staff/Manager giữ chỗ tạm thời cho khung giờ
+router.post('/reserve-slot', verifyToken, verifyRole(['Patient', 'Doctor', 'Staff', 'Manager']), reserveTimeslot);
 
-// ⭐ Patient/Doctor hủy giữ chỗ
-router.post('/release-slot', verifyToken, verifyRole(['Patient', 'Doctor']), releaseReservedTimeslot);
+// ⭐ Patient/Doctor/Staff/Manager hủy giữ chỗ
+router.post('/release-slot', verifyToken, verifyRole(['Patient', 'Doctor', 'Staff', 'Manager']), releaseReservedTimeslot);
 
 // ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
 router.post('/walk-in/create', verifyToken, verifyRole(['Staff', 'Manager']), createWalkInAppointment);

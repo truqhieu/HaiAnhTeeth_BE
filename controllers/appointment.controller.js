@@ -198,6 +198,13 @@ const createConsultationAppointment = async (req, res) => {
 // ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
 const createWalkInAppointment = async (req, res) => {
   try {
+    console.log('🏥 ===== CREATE WALK-IN APPOINTMENT REQUEST =====');
+    console.log('   - Request from user:', {
+      userId: req.user?.userId,
+      email: req.user?.email,
+      role: req.user?.role
+    });
+    
     const {
       fullName,
       email,
@@ -206,12 +213,14 @@ const createWalkInAppointment = async (req, res) => {
       doctorUserId,
       doctorScheduleId,
       selectedSlot,
-      notes
+      notes,
+      reservedTimeslotId
     } = req.body;
 
     // Yêu cầu đăng nhập (Staff/Manager)
     const staffUserId = req.user?.userId;
     if (!staffUserId) {
+      console.error('❌ No staffUserId found in request');
       return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập' });
     }
 
@@ -232,12 +241,23 @@ const createWalkInAppointment = async (req, res) => {
       doctorUserId,
       doctorScheduleId: doctorScheduleId || null,
       selectedSlot,
-      notes
+      notes,
+      reservedTimeslotId: reservedTimeslotId || null
     });
 
     return res.status(201).json(result);
   } catch (error) {
     console.error('❌ Error in createWalkInAppointment:', error);
+    console.error('   - Error message:', error.message);
+    console.error('   - Error stack:', error.stack);
+    console.error('   - Request body:', {
+      serviceId: req.body.serviceId,
+      doctorUserId: req.body.doctorUserId,
+      selectedSlot: req.body.selectedSlot,
+      fullName: req.body.fullName,
+      email: req.body.email
+    });
+    
     return res.status(400).json({
       success: false,
       message: error.message || 'Lỗi khi tạo lịch hẹn trực tiếp',
