@@ -1195,7 +1195,8 @@ class AIBookingLangchainService {
 
 **BƯỚC 3: Khi user chọn GIỜ**
 - KHÔNG GỌI TOOL, CHỈ HIỂN THỊ XÁC NHẬN:
-- "Xác nhận lịch hẹn:\n- Ngày: [date]\n- Dịch vụ: [tên]\n- Bác sĩ: [tên]\n- Giờ: [time]\nBạn xác nhận đặt lịch?"
+- CỰC KỲ QUAN TRỌNG: PHẢI HIỂN THỊ KHOẢNG THỜI GIAN (start-end) DỰA TRÊN THỜI LƯỢNG DỊCH VỤ
+- "Xác nhận lịch hẹn:\n- Ngày: [date]\n- Dịch vụ: [tên] ([duration] phút)\n- Bác sĩ: [tên]\n- Giờ: [time]-[endTime]\nBạn xác nhận đặt lịch?"
 
 **BƯỚC 4: Khi user XÁC NHẬN (nói "có", "đồng ý", "yes")**
 - GỌI: create_appointment(serviceId, doctorId, date, time)
@@ -1486,6 +1487,17 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             }
           }
           
+          // ⭐ FIX Case 13: Allow time to be set even if serviceId is missing
+          // Store the time first, then validate later when service is known
+          if (!context.serviceId) {
+            console.log(`✅ [Pre-process] Time detected without service - storing time ${timeStr} for later use`);
+            this.updateConversationContext(patientUserId, { time: timeStr });
+            results.timeDetected = true;
+            results.timeValue = timeStr;
+            results.timeInvalid = false;
+            break;
+          }
+          
           // ⭐ Now validate against doctor's working hours (if we have doctor)
           if (context.doctorId || (results.doctorResult && results.doctorResult.found)) {
             const doctorId = context.doctorId || results.doctorResult.doctor.id;
@@ -1519,45 +1531,55 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
                   const [h, m] = timeStr.split(':').map(Number);
                   const selectedTimeMinutes = h * 60 + m;
                   
-                  // Check if selected time is within available ranges
+                  // ⭐ FIX Case 5: Check if selected time is within actual available GAPS (not just shift range)
+                  // Available gaps exclude booked slots
                   let isTimeAvailable = false;
+                  let availableSlots = [];
                   
-                  // Check morning slot
-                  if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                    const [startH, startM] = slots.morning.start.split(':').map(Number);
-                    const [endH, endM] = slots.morning.end.split(':').map(Number);
-                    const morningStartMin = startH * 60 + startM;
-                    const morningEndMin = endH * 60 + endM;
-                    
-                    if (selectedTimeMinutes >= morningStartMin && selectedTimeMinutes < morningEndMin) {
-                      isTimeAvailable = true;
-                    }
+                  // Collect all available slots from morning and afternoon
+                  if (slots.morning && slots.morning.slots && slots.morning.slots.length > 0) {
+                    availableSlots = availableSlots.concat(slots.morning.slots);
+                  }
+                  if (slots.afternoon && slots.afternoon.slots && slots.afternoon.slots.length > 0) {
+                    availableSlots = availableSlots.concat(slots.afternoon.slots);
                   }
                   
-                  // Check afternoon slot
-                  if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                    const [startH, startM] = slots.afternoon.start.split(':').map(Number);
-                    const [endH, endM] = slots.afternoon.end.split(':').map(Number);
-                    const afternoonStartMin = startH * 60 + startM;
-                    const afternoonEndMin = endH * 60 + endM;
+                  // Check if selectedTime falls within any available gap
+                  for (const slot of availableSlots) {
+                    // Parse slot start and end times
+                    const slotStart = new Date(slot.startTime);
+                    const slotEnd = new Date(slot.endTime);
                     
-                    if (selectedTimeMinutes >= afternoonStartMin && selectedTimeMinutes < afternoonEndMin) {
+                    const slotStartMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
+                    const slotEndMinutes = slotEnd.getHours() * 60 + slotEnd.getMinutes();
+                    
+                    // Check if selected time + service duration fits within this gap
+                    const serviceDuration = slots.durationMinutes || 30;
+                    const selectedEndTimeMinutes = selectedTimeMinutes + serviceDuration;
+                    
+                    if (selectedTimeMinutes >= slotStartMinutes && selectedEndTimeMinutes <= slotEndMinutes) {
                       isTimeAvailable = true;
+                      break;
                     }
                   }
                   
                   if (!isTimeAvailable) {
-                    console.log('❌ [Pre-process] Time is not within available slots');
+                    console.log('❌ [Pre-process] Time is not within available gaps (may be booked or conflicting)');
                     results.timeDetected = true;
                     results.timeValue = timeStr;
                     results.timeInvalid = true;
-                    results.timeInvalidReason = 'not_available';
+                    results.timeInvalidReason = 'slot_conflict';
+                    // Store available alternatives for response
+                    results.availableSlots = {
+                      morningDisplay: slots.morningDisplay,
+                      afternoonDisplay: slots.afternoonDisplay
+                    };
                     break;
                   }
                   
-                  console.log('✅ [Pre-process] Time is within available slots');
+                  console.log('✅ [Pre-process] Time is within available gaps');
                 } else {
-                  console.log(`⚠️ [Pre-process] Could not get available slots`);
+                  console.log(`⚠️ [Pre-process] Could not get available slots: ${slots.error || 'Unknown error'}`);
                 }
               } catch (err) {
                 console.error('Error checking availability:', err);
@@ -2018,12 +2040,27 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           finalResponse = `Bạn muốn đặt lịch vào tuần sau${doctorName ? ' với ' + doctorName : ''}. Bạn muốn chọn thứ mấy? (Ví dụ: "thứ Hai", "thứ Ba", hoặc ngày cụ thể như "25/11/2025")`;
           // Keep the flag so we can handle the response
         }
-        // ⭐ FIX Case 4: Handle invalid time (outside working hours)
+        // ⭐ FIX Case 4 & 5: Handle invalid time (outside working hours or slot conflict)
         else if (preProcessedData.timeInvalid) {
           if (preProcessedData.timeInvalidReason === 'past_time') {
             finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} đã qua. Vui lòng chọn khung giờ khác trong tương lai.`;
-          } else if (preProcessedData.timeInvalidReason === 'booked') {
-            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} đã kín lịch. Vui lòng chọn khung giờ khác.`;
+          } else if (preProcessedData.timeInvalidReason === 'booked' || preProcessedData.timeInvalidReason === 'slot_conflict') {
+            // ⭐ FIX Case 5: Show alternatives when slot is conflicting/booked
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (đã có lịch hẹn khác).`;
+            if (preProcessedData.availableSlots) {
+              finalResponse += `\n\nCác khung giờ khả dụng:`;
+              if (preProcessedData.availableSlots.morningDisplay) {
+                finalResponse += `\n- Buổi sáng: ${preProcessedData.availableSlots.morningDisplay}`;
+              }
+              if (preProcessedData.availableSlots.afternoonDisplay) {
+                finalResponse += `\n- Buổi chiều: ${preProcessedData.availableSlots.afternoonDisplay}`;
+              }
+              finalResponse += `\n\nBạn muốn chọn giờ nào?`;
+            } else {
+              finalResponse += ` Vui lòng chọn khung giờ khác.`;
+            }
+          } else if (preProcessedData.timeInvalidReason === 'reservation_failed') {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không thể đặt (${preProcessedData.reservationError || 'đã có người đặt trước'}). Vui lòng chọn giờ khác.`;
           } else {
             finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (ngoài giờ làm việc của bác sĩ). Vui lòng chọn khung giờ khác.`;
           }
