@@ -1848,10 +1848,12 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 this.updateConversationContext(patientUserId, { rejectedPastDate: true });
                 
                 // Return early with error message
+                const errorMessage = `Không thể đặt lịch vào ngày ${day}/${month}/${year} vì đây là ngày ở quá khứ. Vui lòng chọn ngày trong tương lai.`;
                 return {
                   success: false,
-                  message: `Không thể đặt lịch vào ngày ${day}/${month}/${year} vì đây là ngày ở quá khứ. Vui lòng chọn ngày trong tương lai.`,
-                  requiresMoreInfo: true,
+                  message: errorMessage,
+                  response: errorMessage,
+                  needsMoreInfo: true,
                   context: this.getConversationContext(patientUserId)
                 };
               }
