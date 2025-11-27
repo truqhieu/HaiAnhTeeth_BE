@@ -2022,32 +2022,24 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             const slots = JSON.parse(slotsResult);
             
             // ⭐ Show specific conflict message with available gaps
-            // Use pre-calculated gaps from slots instead of recalculating
+            // Use morningDisplay/afternoonDisplay from get_available_slots tool
             finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (đã có lịch hẹn khác từ ${conflictingSlot.start}-${conflictingSlot.end}).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
             
-            if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-              // Use pre-calculated gaps if available
-              if (slots.morning.gaps && slots.morning.gaps.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
+            // ⭐ FIX: get_available_slots returns morningDisplay/afternoonDisplay, NOT scheduleRanges
+            if (slots.success) {
+              if (slots.morningDisplay) {
+                finalResponse += `\n- Buổi sáng: ${slots.morningDisplay}`;
               } else {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+                finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
               }
-            } else if (slots.morning && slots.morning.isFull) {
-              finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+              
+              if (slots.afternoonDisplay) {
+                finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay}`;
+              } else {
+                finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
+              }
             } else {
               finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
-            }
-            
-            if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-              // Use pre-calculated gaps if available
-              if (slots.afternoon.gaps && slots.afternoon.gaps.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
-              } else {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-              }
-            } else if (slots.afternoon && slots.afternoon.isFull) {
-              finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
-            } else {
               finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
             }
             
@@ -2086,16 +2078,18 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 console.log(`❌ [LangChain] Time ${selectedTime} is outside working hours`);
                 finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (ngoài giờ làm việc).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
                 
-                // ⭐ FIX: Use scheduleRanges structure from getDoctorScheduleRange
-                if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
-                  for (const range of slots.scheduleRanges) {
-                    if (range.shift === 'Morning') {
-                      const display = range.displayRange || 'Đã qua thời gian làm việc';
-                      finalResponse += `\n- Buổi sáng: ${display}`;
-                    } else if (range.shift === 'Afternoon') {
-                      const display = range.displayRange || 'Không có thời gian khả dụng';
-                      finalResponse += `\n- Buổi chiều: ${display}`;
-                    }
+                // ⭐ FIX: Use morningDisplay/afternoonDisplay from get_available_slots tool
+                if (slots.success) {
+                  if (slots.morningDisplay) {
+                    finalResponse += `\n- Buổi sáng: ${slots.morningDisplay}`;
+                  } else {
+                    finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
+                  }
+                  
+                  if (slots.afternoonDisplay) {
+                    finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay}`;
+                  } else {
+                    finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
                   }
                 } else {
                   finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
@@ -2184,38 +2178,17 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         else if (preProcessedData.timeInvalid) {
           if (preProcessedData.timeInvalidReason === 'past_time') {
             finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} đã qua. Vui lòng chọn khung giờ khác trong tương lai.`;
-          } else if (preProcessedData.timeInvalidReason === 'booked' || preProcessedData.timeInvalidReason === 'slot_conflict') {
-            // ⭐ FIX Case 5: Show alternatives when slot is conflicting/booked
-            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (đã có lịch hẹn khác).`;
-            if (preProcessedData.availableSlots) {
-              finalResponse += `\n\nCác khung giờ khả dụng:`;
-              if (preProcessedData.availableSlots.morningDisplay) {
-                finalResponse += `\n- Buổi sáng: ${preProcessedData.availableSlots.morningDisplay}`;
-              }
-              if (preProcessedData.availableSlots.afternoonDisplay) {
-                finalResponse += `\n- Buổi chiều: ${preProcessedData.availableSlots.afternoonDisplay}`;
-              }
-              finalResponse += `\n\nBạn muốn chọn giờ nào?`;
-            } else {
-              finalResponse += ` Vui lòng chọn khung giờ khác.`;
-            }
-          } else if (preProcessedData.timeInvalidReason === 'reservation_failed') {
-            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không thể đặt (${preProcessedData.reservationError || 'đã có người đặt trước'}). Vui lòng chọn giờ khác.`;
-          } else {
-            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (ngoài giờ làm việc của bác sĩ). Vui lòng chọn khung giờ khác.`;
-          }
-          try {
-            const slotsResult = await tools[4].func({
-              doctorId: updatedContext.doctorId,
-              date: updatedContext.date,
-              serviceId: updatedContext.serviceId,
-            });
-            const slots = JSON.parse(slotsResult);
-            if (slots.success) {
-              finalResponse += `\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-              
-              // ⭐ FIX: Use scheduleRanges structure from getDoctorScheduleRange
-              if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+            
+            // Show available slots for past time
+            try {
+              const slotsResult = await tools[4].func({
+                doctorId: updatedContext.doctorId,
+                date: updatedContext.date,
+                serviceId: updatedContext.serviceId,
+              });
+              const slots = JSON.parse(slotsResult);
+              if (slots.success && slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+                finalResponse += `\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
                 for (const range of slots.scheduleRanges) {
                   if (range.shift === 'Morning') {
                     const display = range.displayRange || 'Đã qua thời gian làm việc';
@@ -2225,13 +2198,23 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                     finalResponse += `\n- Buổi chiều: ${display}`;
                   }
                 }
-              } else {
-                finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
-                finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
               }
+            } catch (e) {
+              console.error('❌ [Fallback] Error getting available slots for past time:', e);
             }
-          } catch (e) {
-            console.error('❌ [Fallback] Error getting available slots for invalid time:', e);
+          } else if (preProcessedData.timeInvalidReason === 'booked' || preProcessedData.timeInvalidReason === 'slot_conflict') {
+            // ⭐ FIX: For slot conflicts, the message is already generated in the main validation (lines 2001-2043)
+            // DO NOT call tool again here to avoid duplicate/conflicting messages
+            // Just use the pre-generated message from the main validation
+            console.log('⚠️ [Fallback] Slot conflict already handled in main validation, skipping duplicate message');
+            // finalResponse will be set by the main validation logic (lines 2001-2043)
+            // So we should NOT reach here if validation ran properly
+            // But if we do reach here, generate a simple message
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (đã có lịch hẹn khác). Vui lòng chọn khung giờ khác.`;
+          } else if (preProcessedData.timeInvalidReason === 'reservation_failed') {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không thể đặt (${preProcessedData.reservationError || 'đã có người đặt trước'}). Vui lòng chọn giờ khác.`;
+          } else {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (ngoài giờ làm việc của bác sĩ). Vui lòng chọn khung giờ khác.`;
           }
           this.updateConversationContext(patientUserId, { time: null }); // Clear invalid time
         }

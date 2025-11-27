@@ -1281,6 +1281,7 @@ async function runTests() {
     // This test verifies the fixes for:
     // 1. Time validation using VN timezone (not UTC)
     // 2. Slot display using scheduleRanges structure (not undefined)
+    // 3. No duplicate messages when slot conflicts
     
     const currentHour28 = new Date().getHours();
     
@@ -1329,25 +1330,31 @@ async function runTests() {
         const doesNotRejectFutureTime = !responseText28_2.includes('đã qua') && 
                                          !responseText28_2.includes('quá khứ');
         
-        // Check 4: Should show confirmation or proceed with booking
-        const proceedsWithBooking = responseText28_2.includes('Xác nhận') || 
-                                     responseText28_2.includes('xác nhận') ||
-                                     responseText28_2.includes('14:00');
+        // Check 4: Should NOT have duplicate messages
+        const noDuplicateMessages = !(responseText28_2.includes('Các khung giờ khả dụng') && 
+                                       responseText28_2.split('Các khung giờ khả dụng').length > 2);
+        
+        // Check 5: Should NOT have "Không có thời gian khả dụng" when slots are available
+        const noIncorrectUnavailable = !responseText28_2.includes('Không có thời gian khả dụng');
         
         logResult(doesNotRejectFutureTime, doesNotRejectFutureTime ? 
           '✅ Correctly accepts 14:00 as future time (VN timezone)' : 
           '❌ Incorrectly rejects 14:00 as past time (UTC bug)');
         
-        logResult(proceedsWithBooking, proceedsWithBooking ? 
-          '✅ Proceeds to confirmation' : 
-          '⚠️ Does not proceed to confirmation');
+        logResult(noDuplicateMessages, noDuplicateMessages ? 
+          '✅ No duplicate slot messages' : 
+          '❌ Duplicate slot messages detected');
         
-        const testPassed28 = noUndefinedBug28 && doesNotRejectFutureTime;
+        logResult(noIncorrectUnavailable, noIncorrectUnavailable ? 
+          '✅ No incorrect "Không có thời gian khả dụng"' : 
+          '❌ Shows "Không có thời gian khả dụng" when slots exist');
+        
+        const testPassed28 = noUndefinedBug28 && doesNotRejectFutureTime && noDuplicateMessages && noIncorrectUnavailable;
         
         recordTestResult(28, 'VN Timezone + Slot Display Fix', testPassed28,
           testPassed28 ? 
-            'Both fixes working: no undefined, correct timezone' : 
-            `Failed: undefined=${!noUndefinedBug28}, timezone=${!doesNotRejectFutureTime}`);
+            'All fixes working: no undefined, correct timezone, no duplicates' : 
+            `Failed: undefined=${!noUndefinedBug28}, timezone=${!doesNotRejectFutureTime}, duplicates=${!noDuplicateMessages}, incorrect_unavailable=${!noIncorrectUnavailable}`);
       } else {
         logResult(false, 'Did not show service list');
         recordTestResult(28, 'VN Timezone + Slot Display Fix', false, 'Did not show service list');
