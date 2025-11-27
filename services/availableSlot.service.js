@@ -1501,7 +1501,7 @@ async getDoctorScheduleRange({
       .lean();
     const doctorHasWorkingHours = hasCompleteWorkingHours(doctorProfile?.workingHours);
 
-    const schedules = await DoctorSchedule.find({
+    let schedules = await DoctorSchedule.find({
       doctorUserId,
       date: searchDate,
       status: 'Available'
