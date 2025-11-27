@@ -1822,6 +1822,47 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         } else if (lowerPrompt.includes('ngày kia')) {
           this.updateConversationContext(patientUserId, { date: dayAfterTomorrowStr });
           console.log(`📅 [LangChain] Parsed date: "ngày kia" → ${dayAfterTomorrowStr}`);
+        } else {
+          // ⭐ NEW: Detect specific date format (DD/MM or DD/MM/YYYY)
+          const datePattern = /(ngày\s+)?(\d{1,2})\/(\d{1,2})(\/(\d{4}))?/i;
+          const dateMatch = userPrompt.match(datePattern);
+          if (dateMatch) {
+            const day = parseInt(dateMatch[2]);
+            const month = parseInt(dateMatch[3]);
+            const year = dateMatch[5] ? parseInt(dateMatch[5]) : new Date().getFullYear();
+            
+            // Create date object (month is 0-indexed in JS)
+            const parsedDate = new Date(year, month - 1, day);
+            parsedDate.setHours(0, 0, 0, 0);
+            
+            // Check if date is valid
+            if (parsedDate.getDate() === day && parsedDate.getMonth() === month - 1) {
+              const parsedDateStr = parsedDate.toISOString().split('T')[0];
+              
+              // ⭐ Check if date is in the past
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              
+              if (parsedDate < today) {
+                console.log(`❌ [LangChain] Detected past date: ${parsedDateStr}`);
+                this.updateConversationContext(patientUserId, { rejectedPastDate: true });
+                
+                // Return early with error message
+                return {
+                  success: false,
+                  message: `Không thể đặt lịch vào ngày ${day}/${month}/${year} vì đây là ngày ở quá khứ. Vui lòng chọn ngày trong tương lai.`,
+                  requiresMoreInfo: true,
+                  context: this.getConversationContext(patientUserId)
+                };
+              }
+              
+              // Date is valid and in the future
+              this.updateConversationContext(patientUserId, { date: parsedDateStr });
+              console.log(`📅 [LangChain] Parsed date: "${day}/${month}/${year}" → ${parsedDateStr}`);
+            } else {
+              console.log(`⚠️ [LangChain] Invalid date: ${day}/${month}/${year}`);
+            }
+          }
         }
       }
       
