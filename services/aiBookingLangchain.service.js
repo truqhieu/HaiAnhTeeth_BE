@@ -1979,10 +1979,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           for (const slot of bookedTimeslots) {
             const slotStart = new Date(slot.startTime);
             const slotEnd = new Date(slot.endTime);
-            
-            // ⭐ FIX: Convert UTC to Vietnam time (UTC+7) for comparison
-            const slotStartMinutes = (slotStart.getUTCHours() + 7) * 60 + slotStart.getUTCMinutes();
-            const slotEndMinutes = (slotEnd.getUTCHours() + 7) * 60 + slotEnd.getUTCMinutes();
+            const slotStartMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
+            const slotEndMinutes = slotEnd.getHours() * 60 + slotEnd.getMinutes();
             
             // Calculate end time of selected appointment
             const selectedEndMinutes = selectedTimeMinutes + service.durationMinutes;
@@ -1991,14 +1989,9 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             // Overlap if: (selectedStart < slotEnd) AND (selectedEnd > slotStart)
             if (selectedTimeMinutes < slotEndMinutes && selectedEndMinutes > slotStartMinutes) {
               hasConflict = true;
-              
-              // ⭐ FIX: Format times in Vietnam timezone for display
-              const vnSlotStartHour = (slotStart.getUTCHours() + 7) % 24;
-              const vnSlotEndHour = (slotEnd.getUTCHours() + 7) % 24;
-              
               conflictingSlot = {
-                start: `${String(vnSlotStartHour).padStart(2, '0')}:${String(slotStart.getUTCMinutes()).padStart(2, '0')}`,
-                end: `${String(vnSlotEndHour).padStart(2, '0')}:${String(slotEnd.getUTCMinutes()).padStart(2, '0')}`
+                start: `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`,
+                end: `${String(slotEnd.getHours()).padStart(2, '0')}:${String(slotEnd.getMinutes()).padStart(2, '0')}`
               };
               console.log(`❌ [LangChain] Time ${selectedTime} conflicts with existing appointment ${conflictingSlot.start}-${conflictingSlot.end}`);
               break;
