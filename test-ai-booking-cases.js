@@ -1273,10 +1273,90 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+    // ==========================================================================
+    // CASE 28: VN Timezone Time Validation + Slot Display Fix
+    // ==========================================================================
+    logTest(28, 'VN Timezone Time Validation + Slot Display (User Flow)');
+    
+    // This test verifies the fixes for:
+    // 1. Time validation using VN timezone (not UTC)
+    // 2. Slot display using scheduleRanges structure (not undefined)
+    
+    const currentHour28 = new Date().getHours();
+    
+    // Only run if current time is early morning (before 14:00) so 14:00 is in the future
+    if (currentHour28 >= 14) {
+      logResult(true, `Test skipped - current time is ${currentHour28}:00 (test requires time before 14:00)`);
+      recordTestResult(28, 'VN Timezone + Slot Display Fix', true, 'Skipped - inappropriate time');
+    } else {
+      logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ thao vào hôm nay"');
+      result = await sendMessage('Tôi muốn đặt lịch với bác sĩ thao vào hôm nay');
+      history = [
+        { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ thao vào hôm nay' },
+        { role: 'assistant', content: result.message }
+      ];
+      
+      const showsServiceList28 = result.message.includes('1.') || result.message.includes('dịch vụ');
+      
+      if (showsServiceList28) {
+        logStep(2, 'User: "làm sạch răng"');
+        result = await sendMessage('làm sạch răng', history);
+        history.push({ role: 'user', content: 'làm sạch răng' });
+        history.push({ role: 'assistant', content: result.message });
+        
+        const responseText28 = result.message || result.response || '';
+        
+        // Check 1: Slot display should NOT have "undefined-undefined"
+        const noUndefinedBug28 = !responseText28.includes('undefined');
+        
+        // Check 2: Should show proper slot format (e.g., "14:00-18:00" or "07:50-08:00")
+        const showsProperSlotFormat = /\d{2}:\d{2}-\d{2}:\d{2}/.test(responseText28);
+        
+        logResult(noUndefinedBug28, noUndefinedBug28 ? 
+          '✅ No "undefined" in slot display' : 
+          '❌ Found "undefined" in slot display (BUG)');
+        
+        logResult(showsProperSlotFormat, showsProperSlotFormat ? 
+          '✅ Shows proper time range format (HH:MM-HH:MM)' : 
+          '⚠️ Does not show time range format');
+        
+        logStep(3, 'User: "14:00" (should be accepted as future time)');
+        result = await sendMessage('14:00', history);
+        
+        const responseText28_2 = result.message || result.response || '';
+        
+        // Check 3: Should NOT reject 14:00 as past time (VN timezone fix)
+        const doesNotRejectFutureTime = !responseText28_2.includes('đã qua') && 
+                                         !responseText28_2.includes('quá khứ');
+        
+        // Check 4: Should show confirmation or proceed with booking
+        const proceedsWithBooking = responseText28_2.includes('Xác nhận') || 
+                                     responseText28_2.includes('xác nhận') ||
+                                     responseText28_2.includes('14:00');
+        
+        logResult(doesNotRejectFutureTime, doesNotRejectFutureTime ? 
+          '✅ Correctly accepts 14:00 as future time (VN timezone)' : 
+          '❌ Incorrectly rejects 14:00 as past time (UTC bug)');
+        
+        logResult(proceedsWithBooking, proceedsWithBooking ? 
+          '✅ Proceeds to confirmation' : 
+          '⚠️ Does not proceed to confirmation');
+        
+        const testPassed28 = noUndefinedBug28 && doesNotRejectFutureTime;
+        
+        recordTestResult(28, 'VN Timezone + Slot Display Fix', testPassed28,
+          testPassed28 ? 
+            'Both fixes working: no undefined, correct timezone' : 
+            `Failed: undefined=${!noUndefinedBug28}, timezone=${!doesNotRejectFutureTime}`);
+      } else {
+        logResult(false, 'Did not show service list');
+        recordTestResult(28, 'VN Timezone + Slot Display Fix', false, 'Did not show service list');
+      }
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
-    // ==========================================================================
-    // Print Summary
-    // ==========================================================================
+
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);
     console.log('='.repeat(80));

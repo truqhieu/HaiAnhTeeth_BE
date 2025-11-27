@@ -1526,9 +1526,21 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             const [h, m] = timeStr.split(':').map(Number);
             const selectedTimeMinutes = h * 60 + m;
             
-            // Get current time in minutes
+            // ⭐ FIX: Get current time in VN timezone (not UTC)
+            // Use Intl.DateTimeFormat to get actual VN time components
             const now = new Date();
-            const currentTimeMinutes = now.getHours() * 60 + now.getMinutes();
+            const vnHour = parseInt(new Intl.DateTimeFormat('en-US', { 
+              timeZone: 'Asia/Ho_Chi_Minh', 
+              hour: '2-digit', 
+              hour12: false 
+            }).format(now));
+            const vnMinute = parseInt(new Intl.DateTimeFormat('en-US', { 
+              timeZone: 'Asia/Ho_Chi_Minh', 
+              minute: '2-digit' 
+            }).format(now));
+            const currentTimeMinutes = vnHour * 60 + vnMinute;
+            
+            console.log(`🕐 [Pre-process] VN Time: ${vnHour}:${vnMinute.toString().padStart(2, '0')} (${currentTimeMinutes} minutes), Selected: ${timeStr} (${selectedTimeMinutes} minutes)`);
             
             // Only reject if the selected time is actually in the past (with 1 min tolerance for processing)
             if (selectedTimeMinutes < currentTimeMinutes - 1) {
@@ -2073,18 +2085,20 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               if (!isInWorkingHours) {
                 console.log(`❌ [LangChain] Time ${selectedTime} is outside working hours`);
                 finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (ngoài giờ làm việc).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-                if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                  finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
-                } else if (slots.morning && slots.morning.isFull) {
-                  finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+                
+                // ⭐ FIX: Use scheduleRanges structure from getDoctorScheduleRange
+                if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+                  for (const range of slots.scheduleRanges) {
+                    if (range.shift === 'Morning') {
+                      const display = range.displayRange || 'Đã qua thời gian làm việc';
+                      finalResponse += `\n- Buổi sáng: ${display}`;
+                    } else if (range.shift === 'Afternoon') {
+                      const display = range.displayRange || 'Không có thời gian khả dụng';
+                      finalResponse += `\n- Buổi chiều: ${display}`;
+                    }
+                  }
                 } else {
                   finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
-                }
-                if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-                } else if (slots.afternoon && slots.afternoon.isFull) {
-                  finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
-                } else {
                   finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
                 }
                 finalResponse += '\n\nVui lòng chọn khung giờ khác.';
@@ -2199,18 +2213,20 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             const slots = JSON.parse(slotsResult);
             if (slots.success) {
               finalResponse += `\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
-              } else if (slots.morning && slots.morning.isFull) {
-                finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+              
+              // ⭐ FIX: Use scheduleRanges structure from getDoctorScheduleRange
+              if (slots.scheduleRanges && Array.isArray(slots.scheduleRanges)) {
+                for (const range of slots.scheduleRanges) {
+                  if (range.shift === 'Morning') {
+                    const display = range.displayRange || 'Đã qua thời gian làm việc';
+                    finalResponse += `\n- Buổi sáng: ${display}`;
+                  } else if (range.shift === 'Afternoon') {
+                    const display = range.displayRange || 'Không có thời gian khả dụng';
+                    finalResponse += `\n- Buổi chiều: ${display}`;
+                  }
+                }
               } else {
                 finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
-              }
-              if (slots.afternoon && !slots.afternoon.isFull) {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-              } else if (slots.afternoon && slots.afternoon.isFull) {
-                finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
-              } else {
                 finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
               }
             }
