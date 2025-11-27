@@ -759,7 +759,7 @@ async function runTests() {
     logTest(22, 'Bác sĩ nghỉ phép - Hiển thị danh sách bác sĩ thay thế');
     
     const LeaveRequest = require('./models/leaveRequest.model');
-    const User = require('./models/user.model');
+    // User already required at line 190
     
     // Tìm bác sĩ để tạo leave request
     const doctorForLeave = await User.findOne({ fullName: { $regex: /hải/i }, role: 'Doctor' });
@@ -853,16 +853,16 @@ async function runTests() {
     logStep(2, 'User: "Làm sạch răng"');
     result = await sendMessage('Làm sạch răng', history);
     
-    const responseText17 = result.message || result.response || '';
+    const responseText17b = result.message || result.response || '';
     // Should show time range like "17:27-18:00" not just "17:27"
-    const showsTimeRange = /\d{2}:\d{2}-\d{2}:\d{2}/.test(responseText17);
+    const showsTimeRangeB = /\d{2}:\d{2}-\d{2}:\d{2}/.test(responseText17b);
     
-    logResult(showsTimeRange, showsTimeRange ? 
+    logResult(showsTimeRangeB, showsTimeRangeB ? 
       'Hiển thị time range (start-end)' : 
       'Chỉ hiển thị start time');
     
-    recordTestResult(17, 'Display time range (start-end)', showsTimeRange,
-      showsTimeRange ? 'Shows time range correctly' : 'Only shows start time');
+    recordTestResult(17, 'Display time range (start-end)', showsTimeRangeB,
+      showsTimeRangeB ? 'Shows time range correctly' : 'Only shows start time');
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
