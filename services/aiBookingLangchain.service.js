@@ -24,6 +24,9 @@ const DateHelper = require('../utils/dateHelper');
 const toolsConfigPath = path.join(__dirname, '../config/aiBooking.tools.json');
 const toolsConfig = JSON.parse(fs.readFileSync(toolsConfigPath, 'utf8'));
 
+// ⭐ Reservation hold time (1 minute, same as booking UI)
+const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
+
 /**
  * LangChain-based AI Booking Service
  * This service uses LangChain to manage conversation flow and tool execution
@@ -590,9 +593,36 @@ class AIBookingLangchainService {
             const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctorId, recheckLeaveDate);
             
             if (isOnLeave) {
+              // ⭐ Get doctor name
+              const doctorInfo = await User.findById(doctorId).select('fullName');
+              const doctorName = doctorInfo ? doctorInfo.fullName : 'Bác sĩ bạn chọn';
+              
+              // ⭐ Get list of available doctors for this date and service
+              let alternativeDoctorsMessage = '';
+              try {
+                const availableDoctorsResult = await availableSlotService.getAvailableDoctors({
+                  serviceId,
+                  date,
+                  breakAfterMinutes: 10
+                });
+                
+                if (availableDoctorsResult && availableDoctorsResult.availableDoctors && availableDoctorsResult.availableDoctors.length > 0) {
+                  alternativeDoctorsMessage = '\n\nCác bác sĩ khác còn khả dụng:';
+                  availableDoctorsResult.availableDoctors.forEach((doc, idx) => {
+                    alternativeDoctorsMessage += `\n${idx + 1}. ${doc.doctorName}`;
+                  });
+                  alternativeDoctorsMessage += '\n\nBạn muốn chọn bác sĩ nào?';
+                } else {
+                  alternativeDoctorsMessage = '\n\nKhông có bác sĩ nào khác khả dụng vào ngày này. Vui lòng chọn ngày khác.';
+                }
+              } catch (e) {
+                console.error('❌ [Tool] Error getting alternative doctors:', e);
+                alternativeDoctorsMessage = '\n\nVui lòng chọn bác sĩ khác hoặc đổi ngày.';
+              }
+              
               return JSON.stringify({
                 success: false,
-                error: `Bác sĩ bạn chọn hiện đang nghỉ phép vào ngày ${date}. Vui lòng chọn bác sĩ khác hoặc đổi ngày.`
+                error: `Bác sĩ ${doctorName} đang trong thời gian nghỉ phép vào ngày ${date}.${alternativeDoctorsMessage}`
               });
             }
           }
@@ -626,28 +656,68 @@ class AIBookingLangchainService {
             doctorUserId: doctorId,
             status: { $in: ['Reserved', 'Booked'] },
             startTime: { $gte: startOfDay, $lt: endOfDay }
-          }).select('startTime endTime').lean();
+          }).select('startTime endTime status').lean();
 
-          console.log(`📅 [Tool] Found ${bookedTimeslots.length} booked timeslots`);
 
-          // Generate available slots
-          const morningSlots = this.generateTimeSlots(
-            workingHours.morningStart,
-            workingHours.morningEnd,
-            service.durationMinutes,
-            bookedTimeslots,
-            searchDate
-          );
+          console.log(`📅 [Tool] Found ${bookedTimeslots.length} booked timeslots for doctor ${doctorId} on ${date}`);
+          bookedTimeslots.forEach(ts => console.log(`   - ${ts.startTime.toISOString()} to ${ts.endTime.toISOString()} (${ts.status})`));
 
-          const afternoonSlots = this.generateTimeSlots(
-            workingHours.afternoonStart,
-            workingHours.afternoonEnd,
-            service.durationMinutes,
-            bookedTimeslots,
-            searchDate
-          );
+          // ⭐ USE getDoctorScheduleRange - EXACT same logic as Patient BookingModal
+          // This ensures AI shows the same available slots as the Patient booking form
+          console.log(`🔧 [Tool] Calling availableSlotService.getDoctorScheduleRange...`);
+          const scheduleResult = await availableSlotService.getDoctorScheduleRange({
+            doctorUserId: doctorId,
+            serviceId: serviceId,
+            date: date,
+            patientUserId: null, // Don't exclude self-appointments for AI view
+            appointmentFor: 'self' // Default to 'self' for AI
+          });
 
-          console.log(`✅ [Tool] Generated ${morningSlots.length} morning slots, ${afternoonSlots.length} afternoon slots`);
+          console.log(`✅ [Tool] getDoctorScheduleRange result:`, JSON.stringify(scheduleResult, null, 2));
+
+          // ⭐ Format the result - use displayRange directly from scheduleRanges (EXACT same as Patient BookingModal)
+          // scheduleRanges structure: [{ shift: 'Morning'|'Afternoon', displayRange: '08:30-10:00, 10:30-11:00', ... }, ...]
+          let morningDisplay = '';
+          let afternoonDisplay = '';
+          let morningSlots = [];
+          let afternoonSlots = [];
+          
+          if (scheduleResult && scheduleResult.scheduleRanges && Array.isArray(scheduleResult.scheduleRanges)) {
+            for (const range of scheduleResult.scheduleRanges) {
+              // Use shift field to determine morning/afternoon (EXACT same as Patient BookingModal)
+              if (range.shift === 'Morning') {
+                // ⭐ Use displayRange directly - already formatted correctly by getDoctorScheduleRange
+                morningDisplay = range.displayRange || 'Đã hết chỗ';
+                
+                // Convert availableGaps to slots format for compatibility (if needed)
+                if (range.availableGaps && Array.isArray(range.availableGaps) && range.availableGaps.length > 0) {
+                  morningSlots = range.availableGaps.map(gap => ({
+                    startTime: gap.start, // ISO string
+                    endTime: gap.end, // ISO string
+                    displayTime: gap.display || `${gap.start}-${gap.end}` // "08:30-10:00"
+                  }));
+                }
+              } else if (range.shift === 'Afternoon') {
+                // ⭐ Use displayRange directly - already formatted correctly by getDoctorScheduleRange
+                afternoonDisplay = range.displayRange || 'Không có thời gian khả dụng';
+                
+                // Convert availableGaps to slots format for compatibility (if needed)
+                if (range.availableGaps && Array.isArray(range.availableGaps) && range.availableGaps.length > 0) {
+                  afternoonSlots = range.availableGaps.map(gap => ({
+                    startTime: gap.start, // ISO string
+                    endTime: gap.end, // ISO string
+                    displayTime: gap.display || `${gap.start}-${gap.end}` // "14:00-18:00"
+                  }));
+                }
+              }
+            }
+          } else {
+            console.warn('⚠️ [Tool] scheduleResult.scheduleRanges is missing or not an array:', scheduleResult);
+          }
+          
+          // Handle missing shifts (EXACT same as Patient BookingModal fallback)
+          if (!morningDisplay) morningDisplay = 'Đã qua thời gian làm việc hoặc không có lịch';
+          if (!afternoonDisplay) afternoonDisplay = 'Không có thời gian khả dụng';
 
           return JSON.stringify({
             success: true,
@@ -655,9 +725,11 @@ class AIBookingLangchainService {
             durationMinutes: service.durationMinutes,
             date,
             workingHours,
-            morning: morningSlots,
-            afternoon: afternoonSlots,
-            totalFreeBlocks: morningSlots.length + afternoonSlots.length,
+            morning: morningSlots.length > 0 ? { slots: morningSlots, isFull: false } : null,
+            afternoon: afternoonSlots.length > 0 ? { slots: afternoonSlots, isFull: false } : null,
+            morningDisplay, // ⭐ Pre-formatted string for agent to use
+            afternoonDisplay, // ⭐ Pre-formatted string for agent to use
+            bookedTimeslots: bookedTimeslots // ⭐ Return booked slots for reference
           });
         } catch (error) {
           console.error('❌ [Tool] get_available_slots error:', error);
@@ -738,6 +810,10 @@ class AIBookingLangchainService {
           endTime.setMinutes(endTime.getMinutes() + service.durationMinutes);
 
           // Call appointment service with correct format
+          // ⭐ NEW: Get reservation info from context
+          const context = this.getConversationContext(patientUserId);
+          const reservedTimeslotId = context.reservedTimeslotId || null;
+          
           const appointmentData = {
             patientUserId: patientUserId,
             doctorUserId: doctorId,
@@ -748,7 +824,8 @@ class AIBookingLangchainService {
               endTime: endTime
             },
             notes: notes || '',
-            appointmentFor: 'self'
+            appointmentFor: 'self',
+            reservedTimeslotId: reservedTimeslotId // ⭐ Pass reservation ID if exists
           };
           
           console.log('🔧 [Tool] create_appointment: Calling appointmentService.createConsultationAppointment with:', {
@@ -760,7 +837,8 @@ class AIBookingLangchainService {
               startTime: startTime.toISOString(),
               endTime: endTime.toISOString()
             },
-            appointmentFor: 'self'
+            appointmentFor: 'self',
+            reservedTimeslotId: reservedTimeslotId
           });
           
           const result = await appointmentService.createConsultationAppointment(appointmentData);
@@ -815,54 +893,269 @@ class AIBookingLangchainService {
   }
 
   /**
-   * Generate time slots for a given time range
+   * Get available time ranges (not fixed slots) for a doctor on a specific date
+   * Returns working hours with current time consideration and full booking check
    */
-  generateTimeSlots(startTime, endTime, durationMinutes, bookedTimeslots, searchDate) {
-    const slots = [];
-    const [startHour, startMinute] = startTime.split(':').map(Number);
-    const [endHour, endMinute] = endTime.split(':').map(Number);
+  async generateTimeSlots(schedule, bookedTimeslots, durationMinutes, searchDate) {
+    const { morningStart, morningEnd, afternoonStart, afternoonEnd } = schedule.workingHours;
     
-    let currentTime = startHour * 60 + startMinute;
-    const endTimeMinutes = endHour * 60 + endMinute;
+    // Get current time in Vietnam
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTimeMinutes = currentHour * 60 + currentMinute;
     
-    while (currentTime + durationMinutes <= endTimeMinutes) {
-      const hour = Math.floor(currentTime / 60);
-      const minute = currentTime % 60;
-      const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    // Check if searchDate is today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const searchDateObj = new Date(searchDate);
+    searchDateObj.setHours(0, 0, 0, 0);
+    const isToday = searchDateObj.getTime() === today.getTime();
+    
+    // Parse working hours
+    const [morningStartH, morningStartM] = morningStart.split(':').map(Number);
+    const [morningEndH, morningEndM] = morningEnd.split(':').map(Number);
+    const [afternoonStartH, afternoonStartM] = afternoonStart.split(':').map(Number);
+    const [afternoonEndH, afternoonEndM] = afternoonEnd.split(':').map(Number);
+    
+    const morningStartMinutes = morningStartH * 60 + morningStartM;
+    const morningEndMinutes = morningEndH * 60 + morningEndM;
+    const afternoonStartMinutes = afternoonStartH * 60 + afternoonStartM;
+    const afternoonEndMinutes = afternoonEndH * 60 + afternoonEndM;
+    
+    // ⭐ NEW: Generate available slots in a shift (similar to patient booking logic)
+    // Instead of finding gaps, we generate potential slots and check for conflicts
+    const generateAvailableSlots = (shiftStartMinutes, shiftEndMinutes) => {
+      const slots = [];
+      let currentStartMinutes = shiftStartMinutes;
       
-      // Create Date object for this slot
-      const slotStartTime = new Date(searchDate);
-      slotStartTime.setHours(hour, minute, 0, 0);
-      
-      const slotEndTime = new Date(slotStartTime);
-      slotEndTime.setMinutes(slotEndTime.getMinutes() + durationMinutes);
-      
-      // Check if slot overlaps with any booked timeslots
-      const isAvailable = !bookedTimeslots.some(timeslot => {
-        const timeslotStart = new Date(timeslot.startTime);
-        const timeslotEnd = new Date(timeslot.endTime);
+      // Generate potential slots with service duration
+      while (currentStartMinutes < shiftEndMinutes) {
+        const currentEndMinutes = currentStartMinutes + durationMinutes;
         
-        // Check for overlap: slot overlaps if it starts before timeslot ends and ends after timeslot starts
-        return slotStartTime < timeslotEnd && slotEndTime > timeslotStart;
-      });
-      
-      if (isAvailable) {
-        const endTimeMinutesSlot = currentTime + durationMinutes;
-        const endHourSlot = Math.floor(endTimeMinutesSlot / 60);
-        const endMinuteSlot = endTimeMinutesSlot % 60;
-        const endTimeStr = `${String(endHourSlot).padStart(2, '0')}:${String(endMinuteSlot).padStart(2, '0')}`;
+        // Check if slot exceeds shift end time
+        if (currentEndMinutes > shiftEndMinutes) {
+          break;
+        }
         
-        slots.push({
-          startTime: timeStr,
-          endTime: endTimeStr,
-          displayTime: `${timeStr} - ${endTimeStr}`,
-        });
+        // Check if this slot conflicts with any booked timeslot
+        let hasConflict = false;
+        for (const timeslot of bookedTimeslots) {
+          const tsStart = new Date(timeslot.startTime);
+          const tsEnd = new Date(timeslot.endTime);
+          const tsStartMinutes = tsStart.getHours() * 60 + tsStart.getMinutes();
+          const tsEndMinutes = tsEnd.getHours() * 60 + tsEnd.getMinutes();
+          
+          // Check for overlap: slot overlaps with booked timeslot if:
+          // - slot starts during booked time, OR
+          // - slot ends during booked time, OR
+          // - slot completely contains booked time
+          if (
+            (currentStartMinutes >= tsStartMinutes && currentStartMinutes < tsEndMinutes) ||
+            (currentEndMinutes > tsStartMinutes && currentEndMinutes <= tsEndMinutes) ||
+            (currentStartMinutes <= tsStartMinutes && currentEndMinutes >= tsEndMinutes)
+          ) {
+            hasConflict = true;
+            break;
+          }
+        }
+        
+        if (!hasConflict) {
+          slots.push({
+            start: `${String(Math.floor(currentStartMinutes / 60)).padStart(2, '0')}:${String(currentStartMinutes % 60).padStart(2, '0')}`,
+            end: `${String(Math.floor(currentEndMinutes / 60)).padStart(2, '0')}:${String(currentEndMinutes % 60).padStart(2, '0')}`
+          });
+        }
+        
+        // Move to next potential slot (no break time - slots can be consecutive)
+        currentStartMinutes = currentEndMinutes;
       }
       
-      currentTime += 30; // Move to next 30-minute slot
+      return slots;
+    };
+    
+    // ⭐ Helper to merge consecutive slots into ranges
+    const mergeSlotsIntoRanges = (slots) => {
+      if (slots.length === 0) return [];
+      
+      const ranges = [];
+      let rangeStart = slots[0].start;
+      let rangeEnd = slots[0].end;
+      
+      for (let i = 1; i < slots.length; i++) {
+        // If current slot starts where previous ended, extend the range
+        if (slots[i].start === rangeEnd) {
+          rangeEnd = slots[i].end;
+        } else {
+          // Gap found, save current range and start new one
+          ranges.push({ start: rangeStart, end: rangeEnd });
+          rangeStart = slots[i].start;
+          rangeEnd = slots[i].end;
+        }
+      }
+      
+      // Add the last range
+      ranges.push({ start: rangeStart, end: rangeEnd });
+      
+      return ranges;
+    };
+    
+    // Helper to check if a shift is fully booked
+    const isShiftFullyBooked = (shiftStartMinutes, shiftEndMinutes) => {
+      const slots = generateAvailableSlots(shiftStartMinutes, shiftEndMinutes);
+      return slots.length === 0; // If no available slots, shift is full
+    };
+    
+    // Determine available time ranges
+    let morningAvailable = null;
+    let afternoonAvailable = null;
+    
+    if (isToday) {
+      // For today, only show times after current time
+      if (currentTimeMinutes < morningEndMinutes) {
+        const startMinutes = Math.max(currentTimeMinutes, morningStartMinutes);
+        if (startMinutes < morningEndMinutes) {
+          // Generate available slots for morning shift
+          const morningSlots = generateAvailableSlots(startMinutes, morningEndMinutes);
+          if (morningSlots.length > 0) {
+            // Merge consecutive slots into ranges
+            const morningRanges = mergeSlotsIntoRanges(morningSlots);
+            morningAvailable = {
+              start: morningRanges[0].start,
+              end: morningRanges[morningRanges.length - 1].end,
+              gaps: morningRanges, // ⭐ Include specific ranges
+              isFull: false
+            };
+          } else {
+            morningAvailable = { isFull: true };
+          }
+        }
+      }
+      
+      if (currentTimeMinutes < afternoonEndMinutes) {
+        const startMinutes = Math.max(currentTimeMinutes, afternoonStartMinutes);
+        if (startMinutes < afternoonEndMinutes) {
+          // Generate available slots for afternoon shift
+          const afternoonSlots = generateAvailableSlots(startMinutes, afternoonEndMinutes);
+          if (afternoonSlots.length > 0) {
+            // Merge consecutive slots into ranges
+            const afternoonRanges = mergeSlotsIntoRanges(afternoonSlots);
+            afternoonAvailable = {
+              start: afternoonRanges[0].start,
+              end: afternoonRanges[afternoonRanges.length - 1].end,
+              gaps: afternoonRanges, // ⭐ Include specific ranges
+              isFull: false
+            };
+          } else {
+            afternoonAvailable = { isFull: true };
+          }
+        }
+      }
+    } else {
+      // For future dates, generate slots for full working hours
+      const morningSlots = generateAvailableSlots(morningStartMinutes, morningEndMinutes);
+      if (morningSlots.length > 0) {
+        // Merge consecutive slots into ranges
+        const morningRanges = mergeSlotsIntoRanges(morningSlots);
+        morningAvailable = {
+          start: morningRanges[0].start,
+          end: morningRanges[morningRanges.length - 1].end,
+          gaps: morningRanges, // ⭐ Include specific ranges
+          isFull: false
+        };
+      } else {
+        morningAvailable = { isFull: true };
+      }
+      
+      const afternoonSlots = generateAvailableSlots(afternoonStartMinutes, afternoonEndMinutes);
+      if (afternoonSlots.length > 0) {
+        // Merge consecutive slots into ranges
+        const afternoonRanges = mergeSlotsIntoRanges(afternoonSlots);
+        afternoonAvailable = {
+          start: afternoonRanges[0].start,
+          end: afternoonRanges[afternoonRanges.length - 1].end,
+          gaps: afternoonRanges, // ⭐ Include specific ranges
+          isFull: false
+        };
+      } else {
+        afternoonAvailable = { isFull: true };
+      }
     }
     
-    return slots;
+    return {
+      morning: morningAvailable,
+      afternoon: afternoonAvailable,
+    };
+  }
+
+  /**
+   * Helper function to group consecutive slots into ranges
+   * @param {Array} slots - Array of slot objects with startTime and endTime
+   * @param {Number} durationMinutes - Service duration in minutes
+   * @returns {Array} Array of ranges {start, end}
+   */
+  _groupConsecutiveSlots(slots, durationMinutes) {
+    if (!slots || slots.length === 0) return [];
+    
+    const ranges = [];
+    let rangeStart = null;
+    let rangeEnd = null;
+    let prevEndTime = null;
+    
+    // Sort slots by start time
+    const sortedSlots = slots.sort((a, b) => {
+      const aTime = new Date(a.startTime);
+      const bTime = new Date(b.startTime);
+      return aTime - bTime;
+    });
+    
+    // Helper to format time in Vietnam timezone (UTC+7)
+    const formatVNTime = (date) => {
+      const d = new Date(date);
+      const utcHour = d.getUTCHours();
+      const utcMin = d.getUTCMinutes();
+      const vnHour = (utcHour + 7) % 24;
+      return `${String(vnHour).padStart(2, '0')}:${String(utcMin).padStart(2, '0')}`;
+    };
+    
+    for (const slot of sortedSlots) {
+      const slotStart = new Date(slot.startTime);
+      const slotEnd = new Date(slot.endTime);
+      
+      const slotStartStr = formatVNTime(slotStart);
+      const slotEndStr = formatVNTime(slotEnd);
+      
+      if (!rangeStart) {
+        // First slot
+        rangeStart = slotStartStr;
+        rangeEnd = slotEndStr;
+        prevEndTime = slotEnd;
+      } else {
+        // Check if this slot is consecutive (starts exactly where previous ended)
+        // Slots are consecutive if current start equals previous end (within 1 minute tolerance)
+        const timeDiff = Math.abs(slotStart.getTime() - prevEndTime.getTime());
+        const isConsecutive = timeDiff <= 60000; // 1 minute tolerance
+        
+        if (isConsecutive) {
+          // Extend range
+          rangeEnd = slotEndStr;
+          prevEndTime = slotEnd;
+        } else {
+          // Gap found, save current range and start new one
+          ranges.push({ start: rangeStart, end: rangeEnd });
+          rangeStart = slotStartStr;
+          rangeEnd = slotEndStr;
+          prevEndTime = slotEnd;
+        }
+      }
+    }
+    
+    // Add the last range
+    if (rangeStart && rangeEnd) {
+      ranges.push({ start: rangeStart, end: rangeEnd });
+    }
+    
+    return ranges;
   }
 
   /**
@@ -892,16 +1185,18 @@ class AIBookingLangchainService {
 - KẾT THÚC với: "Bạn muốn chọn dịch vụ nào?"
 
 **BƯỚC 2: Khi user chọn DỊCH VỤ**  
-- GỌI: find_service_by_name(tên_dịch_vụ)
+- GỌI: find_service_by_name(tên_dịch vụ)
 - SAU KHI CÓ KẾT QUẢ → NÓI: "Dịch vụ bạn chọn: [tên] ([phút] phút)."
 - KIỂM TRA: Đã có doctorId + serviceId + date?
 - NẾU CÓ ĐỦ → GỌI NGAY: get_available_slots(doctorId, date, serviceId)
-- SAU KHI CÓ SLOTS → HIỂN THỊ: "Khung giờ khả dụng:\n- Buổi sáng: [giờ]\n- Buổi chiều: [giờ]"
+- SAU KHI CÓ SLOTS → HIỂN THỊ: "Các khung giờ khả dụng ngày [date]:\n- Buổi sáng: [morningDisplay]\n- Buổi chiều: [afternoonDisplay]"
+  **QUAN TRỌNG**: SỬ DỤNG ĐÚNG TRƯỜNG 'morningDisplay' VÀ 'afternoonDisplay' TỪ KẾT QUẢ TOOL, KHÔNG DÙNG 'morning.start-morning.end'
 - KẾT THÚC với: "Bạn muốn chọn giờ nào?"
 
 **BƯỚC 3: Khi user chọn GIỜ**
 - KHÔNG GỌI TOOL, CHỈ HIỂN THỊ XÁC NHẬN:
-- "Xác nhận lịch hẹn:\n- Ngày: [date]\n- Dịch vụ: [tên]\n- Bác sĩ: [tên]\n- Giờ: [time]\nBạn xác nhận đặt lịch?"
+- CỰC KỲ QUAN TRỌNG: PHẢI HIỂN THỊ KHOẢNG THỜI GIAN (start-end) DỰA TRÊN THỜI LƯỢNG DỊCH VỤ
+- "Xác nhận lịch hẹn:\n- Ngày: [date]\n- Dịch vụ: [tên] ([duration] phút)\n- Bác sĩ: [tên]\n- Giờ: [time]-[endTime]\nBạn xác nhận đặt lịch?"
 
 **BƯỚC 4: Khi user XÁC NHẬN (nói "có", "đồng ý", "yes")**
 - GỌI: create_appointment(serviceId, doctorId, date, time)
@@ -997,8 +1292,68 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           results.doctorResult = JSON.parse(doctorResult);
           console.log(`✅ [Pre-process] Doctor search result:`, results.doctorResult);
           
-          // If doctor found and no service yet, should show services (unless one-shot)
-          if (results.doctorResult.found && !context.serviceId && !results.isOneShotPrompt) {
+          // ⭐ NEW: Check if doctor is on leave immediately after finding doctor
+          if (results.doctorResult.found && results.doctorResult.doctor) {
+            const doctorId = results.doctorResult.doctor.id;
+            
+            // Detect date from prompt
+            const todayStr = DateHelper.getTodayVN();
+            const tomorrowStr = DateHelper.getTomorrowVN();
+            const parsedDate = lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai') ? tomorrowStr : 
+                             lowerPrompt.includes('hôm nay') || lowerPrompt.includes('nay') ? todayStr : context.date;
+            
+            if (parsedDate) {
+              try {
+                const checkLeaveDate = new Date(parsedDate);
+                checkLeaveDate.setHours(12, 0, 0, 0);
+                const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctorId, checkLeaveDate);
+                
+                if (isOnLeave) {
+                  console.log(`⚠️ [Pre-process] Doctor ${doctorId} is on leave on ${parsedDate}, setting error flag`);
+                  
+                  // Get alternatives
+                  let alternativeDoctorsMessage = '';
+                  try {
+                    const allDoctors = await User.find({ role: 'Doctor', status: 'Active' }).select('fullName _id');
+                    const availableDocs = [];
+                    
+                    for (const doc of allDoctors) {
+                      if (doc._id.toString() === doctorId) continue;
+                      
+                      const isDocOnLeave = await leaveRequestService.isDoctorOnLeave(doc._id, checkLeaveDate);
+                      if (!isDocOnLeave) {
+                        availableDocs.push(doc);
+                      }
+                    }
+                    
+                    if (availableDocs.length > 0) {
+                      alternativeDoctorsMessage = '\n\nCác bác sĩ khác đang hoạt động trong hệ thống:';
+                      availableDocs.slice(0, 5).forEach((doc, idx) => {
+                        alternativeDoctorsMessage += `\n${idx + 1}. ${doc.fullName}`;
+                      });
+                      alternativeDoctorsMessage += '\n\nVui lòng chọn bác sĩ khác bên dưới.';
+                    } else {
+                      alternativeDoctorsMessage = '\n\nKhông có bác sĩ nào khác khả dụng vào ngày này. Vui lòng chọn ngày khác.';
+                    }
+                  } catch (e) {
+                    console.error('❌ [Pre-process] Error getting alternatives:', e);
+                  }
+                  
+                  // Set error in results to be handled by main flow
+                  results.doctorOnLeave = true;
+                  results.doctorOnLeaveMessage = `Bác sĩ ${results.doctorResult.doctor.name} đã có lịch nghỉ phép vào ngày ${parsedDate}.${alternativeDoctorsMessage}`;
+                  
+                  // Don't show services if doctor is on leave
+                  results.shouldShowServices = false;
+                }
+              } catch (e) {
+                console.error('❌ [Pre-process] Error checking leave status:', e);
+              }
+            }
+          }
+          
+          // If doctor found and no service yet, should show services (unless one-shot or doctor on leave)
+          if (results.doctorResult.found && !context.serviceId && !results.isOneShotPrompt && !results.doctorOnLeave) {
             results.shouldShowServices = true;
           }
         } catch (e) {
@@ -1020,7 +1375,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
     // Detect service mention (support Vietnamese)
     const servicePatterns = [
       /dịch\s*vụ\s+([^,\.]+)/iu,
-      /(làm\s*sạch\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu,
+      /(làm\s*sạch\s*răng|khám\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu,
     ];
     
     for (const pattern of servicePatterns) {
@@ -1038,16 +1393,36 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           // If service found and have doctor + date, should show slots (unless one-shot)
           if (results.serviceResult.found && context.doctorId && context.date && !results.isOneShotPrompt) {
             results.shouldShowSlots = true;
+          } else if (!results.serviceResult.found && !context.serviceId) {
+            // Service not found - show services list instead
+            console.log(`⚠️ [Pre-process] Service "${serviceName}" not found, will show services list`);
+            results.shouldShowServices = true;
           }
         } catch (e) {
           console.error(`❌ [Pre-process] Error finding service:`, e);
         }
         break;
+      } else if (match) {
+        // Matched a general service keyword (e.g., "khám răng") but no specific service name
+        console.log(`🔍 [Pre-process] Detected general service keyword: "${match[0]}"`);
+        // Set flag to show services list
+        if (!context.serviceId) {
+          results.shouldShowServices = true;
+        }
+        break;
       }
     }
     
-    // Detect time input (when we have doctor + service + date but no time, or in one-shot)
-    if ((context.doctorId && context.serviceId && context.date && !context.time) || results.isOneShotPrompt) {
+    // Detect time input (when we have doctor + date but no time, or in one-shot)
+    // ⭐ FIX: Allow time detection even if serviceId is missing, as long as we have doctor and date (either in context or just detected)
+    // Note: Date detection logic seems to be missing in this snippet, assuming it's handled elsewhere or we need to rely on context.
+    // If date detection is NOT in preProcessUserInput, then we rely on context.
+    // However, for one-shot prompts, date might not be in context yet if it's extracted later by the agent.
+    // BUT, for "2 giờ chiều", it's a time update.
+    
+    // Let's relax it further: If user mentions time pattern, we should try to parse it regardless of date/doctor presence, 
+    // but only validate if we have doctor.
+    if (!context.time || results.isOneShotPrompt || userPrompt.match(/(\d{1,2})[:h]/) || userPrompt.match(/\d+\s*giờ/i)) {
       // Look for time patterns like "9:00", "09:00", "9h", "9 giờ", "15h chiều", etc.
       const timePatterns = [
         /(\d{1,2}):(\d{2})/,  // 9:00, 09:30
@@ -1062,11 +1437,68 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           let hour = parseInt(match[1]);
           let minute = match[2] ? parseInt(match[2]) : 0;
           
+          // ⭐ FIX: Handle 12-hour format (PM)
+          // Check if "chiều" or "tối" is present in the full match
+          const fullMatch = match[0].toLowerCase();
+          const isPM = fullMatch.includes('chiều') || fullMatch.includes('tối') || fullMatch.includes('pm');
+          
+          if (isPM && hour < 12) {
+            hour += 12;
+            console.log(`🕐 [Pre-process] Converted PM time: ${match[1]} -> ${hour}`);
+          }
+          
           // Format as HH:mm
           const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
           console.log(`🕐 [Pre-process] Detected time: "${timeStr}"`);
           
-          // ⭐ FIX Case 4: Validate time against doctor's working hours
+          // ⭐ FIX: Validate past time FIRST (even without doctor/service)
+          const todayStr = DateHelper.getTodayVN();
+          const tomorrowStr = DateHelper.getTomorrowVN();
+          
+          // ⭐ IMPORTANT: Check for "ngày mai" BEFORE checking for "nay" to avoid false positive
+          const isTomorrow = userPrompt.toLowerCase().includes('ngày mai') || 
+                             userPrompt.toLowerCase().includes(' mai') ||
+                             (context.date === tomorrowStr);
+          
+          const isToday = !isTomorrow && (
+            (context.date === todayStr) || 
+            userPrompt.toLowerCase().includes('hôm nay') || 
+            (userPrompt.toLowerCase().includes(' nay') && !userPrompt.toLowerCase().includes('ngày mai'))
+          );
+          
+          if (isToday) {
+            // ⭐ FIX: Instead of using arbitrary buffer, validate against available slots
+            // This ensures consistency between what we show and what we allow
+            const [h, m] = timeStr.split(':').map(Number);
+            const selectedTimeMinutes = h * 60 + m;
+            
+            // Get current time in minutes
+            const now = new Date();
+            const currentTimeMinutes = now.getHours() * 60 + now.getMinutes();
+            
+            // Only reject if the selected time is actually in the past (with 1 min tolerance for processing)
+            if (selectedTimeMinutes < currentTimeMinutes - 1) {
+              console.log('❌ [Pre-process] Time is in the past');
+              results.timeDetected = true;
+              results.timeValue = timeStr;
+              results.timeInvalid = true;
+              results.timeInvalidReason = 'past_time';
+              break;
+            }
+          }
+          
+          // ⭐ FIX Case 13: Allow time to be set even if serviceId is missing
+          // Store the time first, then validate later when service is known
+          if (!context.serviceId) {
+            console.log(`✅ [Pre-process] Time detected without service - storing time ${timeStr} for later use`);
+            this.updateConversationContext(patientUserId, { time: timeStr });
+            results.timeDetected = true;
+            results.timeValue = timeStr;
+            results.timeInvalid = false;
+            break;
+          }
+          
+          // ⭐ Now validate against doctor's working hours (if we have doctor)
           if (context.doctorId || (results.doctorResult && results.doctorResult.found)) {
             const doctorId = context.doctorId || results.doctorResult.doctor.id;
             const isValidTime = await this.validateTimeAgainstWorkingHours(doctorId, timeStr);
@@ -1078,13 +1510,136 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
               results.timeInvalid = true; // Flag to handle in fallback
               break;
             }
+
+            // ⭐ FIX: Validate against available slots instead of checking booked appointments
+            // This is more accurate and consistent with what we show to users
+            const dateToCheck = context.date || (results.isOneShotPrompt ? DateHelper.getTodayVN() : null);
+            
+            if (dateToCheck && doctorId && context.serviceId) {
+              try {
+                console.log(`🔍 [Pre-process] Validating time ${timeStr} against available slots for Doctor ${doctorId} on ${dateToCheck}`);
+                
+                // Get available slots
+                const slotsResult = await tools[4].func({
+                  doctorId: doctorId,
+                  date: dateToCheck,
+                  serviceId: context.serviceId,
+                });
+                const slots = JSON.parse(slotsResult);
+                
+                if (slots.success) {
+                  const [h, m] = timeStr.split(':').map(Number);
+                  const selectedTimeMinutes = h * 60 + m;
+                  
+                  // ⭐ FIX Case 5: Check if selected time is within actual available GAPS (not just shift range)
+                  // Available gaps exclude booked slots
+                  let isTimeAvailable = false;
+                  let availableSlots = [];
+                  
+                  // Collect all available slots from morning and afternoon
+                  if (slots.morning && slots.morning.slots && slots.morning.slots.length > 0) {
+                    availableSlots = availableSlots.concat(slots.morning.slots);
+                  }
+                  if (slots.afternoon && slots.afternoon.slots && slots.afternoon.slots.length > 0) {
+                    availableSlots = availableSlots.concat(slots.afternoon.slots);
+                  }
+                  
+                  // Check if selectedTime falls within any available gap
+                  for (const slot of availableSlots) {
+                    // Parse slot start and end times
+                    const slotStart = new Date(slot.startTime);
+                    const slotEnd = new Date(slot.endTime);
+                    
+                    const slotStartMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
+                    const slotEndMinutes = slotEnd.getHours() * 60 + slotEnd.getMinutes();
+                    
+                    // Check if selected time + service duration fits within this gap
+                    const serviceDuration = slots.durationMinutes || 30;
+                    const selectedEndTimeMinutes = selectedTimeMinutes + serviceDuration;
+                    
+                    if (selectedTimeMinutes >= slotStartMinutes && selectedEndTimeMinutes <= slotEndMinutes) {
+                      isTimeAvailable = true;
+                      break;
+                    }
+                  }
+                  
+                  if (!isTimeAvailable) {
+                    console.log('❌ [Pre-process] Time is not within available gaps (may be booked or conflicting)');
+                    results.timeDetected = true;
+                    results.timeValue = timeStr;
+                    results.timeInvalid = true;
+                    results.timeInvalidReason = 'slot_conflict';
+                    // Store available alternatives for response
+                    results.availableSlots = {
+                      morningDisplay: slots.morningDisplay,
+                      afternoonDisplay: slots.afternoonDisplay
+                    };
+                    break;
+                  }
+                  
+                  console.log('✅ [Pre-process] Time is within available gaps');
+                } else {
+                  console.log(`⚠️ [Pre-process] Could not get available slots: ${slots.error || 'Unknown error'}`);
+                }
+              } catch (err) {
+                console.error('Error checking availability:', err);
+              }
+            }
           }
           
-          // Store in context for validation
-          this.updateConversationContext(patientUserId, { time: timeStr });
-          results.timeDetected = true;
-          results.timeValue = timeStr;
-          results.timeInvalid = false;
+          // ⭐ NEW: Create reservation (hold slot for 1 minute) when time is valid
+          if (context.doctorId && context.date && context.serviceId) {
+            try {
+              console.log(`🔒 [Pre-process] Creating reservation for ${timeStr} on ${context.date}`);
+              
+              // Parse date and time
+              const [year, month, day] = context.date.split('-').map(Number);
+              const [hour, minute] = timeStr.split(':').map(Number);
+              
+              // Create Date object in UTC
+              const startTime = new Date(Date.UTC(year, month - 1, day, hour - 7, minute, 0, 0)); // Convert VN time to UTC
+              
+              // Call reservation service
+              const reservationResult = await appointmentService.reserveTimeslot({
+                patientUserId,
+                doctorUserId: context.doctorId,
+                serviceId: context.serviceId,
+                date: context.date,
+                startTime: startTime.toISOString(),
+                appointmentFor: 'self'
+              });
+              
+              console.log(`✅ [Pre-process] Reservation created:`, reservationResult);
+              
+              // Store reservation info in context
+              this.updateConversationContext(patientUserId, { 
+                time: timeStr,
+                reservedTimeslotId: reservationResult.timeslotId,
+                reservationExpiresAt: reservationResult.expiresAt
+              });
+              
+              results.timeDetected = true;
+              results.timeValue = timeStr;
+              results.timeInvalid = false;
+              results.reservationCreated = true;
+              results.reservationExpiresAt = reservationResult.expiresAt;
+            } catch (reservationError) {
+              console.error('❌ [Pre-process] Reservation failed:', reservationError.message);
+              
+              // If reservation fails (slot taken, etc.), mark time as invalid
+              results.timeDetected = true;
+              results.timeValue = timeStr;
+              results.timeInvalid = true;
+              results.timeInvalidReason = 'reservation_failed';
+              results.reservationError = reservationError.message;
+            }
+          } else {
+            // Not enough context to create reservation yet, just store time
+            this.updateConversationContext(patientUserId, { time: timeStr });
+            results.timeDetected = true;
+            results.timeValue = timeStr;
+            results.timeInvalid = false;
+          }
           break;
         }
       }
@@ -1100,16 +1655,76 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
   }
 
   /**
-   * Main method to process user message with AI
+   * Calculate available gaps between booked slots
    */
-  async chatWithAI(userPrompt, patientUserId, conversationHistory = []) {
-    try {
-      console.log('🤖 [LangChain] Processing message:', userPrompt);
-      console.log('📝 [LangChain] Conversation history:', conversationHistory.length, 'messages');
-      
-      // PRE-PROCESS: Parse date from user prompt and update context
-      const context = this.getConversationContext(patientUserId);
-      const lowerPrompt = userPrompt.toLowerCase();
+  calculateGaps(shiftStart, shiftEnd, bookedSlots) {
+    const [startH, startM] = shiftStart.split(':').map(Number);
+    const [endH, endM] = shiftEnd.split(':').map(Number);
+    const shiftStartMin = startH * 60 + startM;
+    const shiftEndMin = endH * 60 + endM;
+    
+    // Collect booked ranges in this shift
+    const bookedRanges = [];
+    if (bookedSlots && Array.isArray(bookedSlots)) {
+      for (const slot of bookedSlots) {
+        const slotStart = new Date(slot.startTime);
+        const slotEnd = new Date(slot.endTime);
+        const slotStartMin = slotStart.getHours() * 60 + slotStart.getMinutes();
+        const slotEndMin = slotEnd.getHours() * 60 + slotEnd.getMinutes();
+        
+        if (slotStartMin < shiftEndMin && slotEndMin > shiftStartMin) {
+          bookedRanges.push({ start: slotStartMin, end: slotEndMin });
+        }
+      }
+    }
+    
+    // Sort by start time
+    bookedRanges.sort((a, b) => a.start - b.start);
+    
+    // Find gaps
+    const gaps = [];
+    let currentPos = shiftStartMin;
+    
+    for (const range of bookedRanges) {
+      if (currentPos < range.start) {
+        // There's a gap before this booked range
+        gaps.push({
+          start: `${String(Math.floor(currentPos / 60)).padStart(2, '0')}:${String(currentPos % 60).padStart(2, '0')}`,
+          end: `${String(Math.floor(range.start / 60)).padStart(2, '0')}:${String(range.start % 60).padStart(2, '0')}`
+        });
+      }
+      currentPos = Math.max(currentPos, range.end);
+    }
+    
+    // Check for gap after last booked range
+    if (currentPos < shiftEndMin) {
+      gaps.push({
+        start: `${String(Math.floor(currentPos / 60)).padStart(2, '0')}:${String(currentPos % 60).padStart(2, '0')}`,
+        end: shiftEnd
+      });
+    }
+    
+    return gaps;
+  }
+
+  /**
+ * Main method to process user message with AI
+ */
+async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConversation = false) {
+  try {
+    console.log('🤖 [LangChain] Processing message:', userPrompt);
+    console.log('📝 [LangChain] Conversation history:', conversationHistory.length, 'messages');
+    console.log('🆕 [LangChain] Is new conversation:', isNewConversation);
+    
+    // ⭐ Clear context if this is a new conversation
+    if (isNewConversation) {
+      console.log('🗑️ [LangChain] Clearing context for new conversation');
+      this.clearConversationContext(patientUserId);
+    }
+    
+    // PRE-PROCESS: Parse date from user prompt and update context
+    const context = this.getConversationContext(patientUserId);
+    const lowerPrompt = userPrompt.toLowerCase();
       
       // ⭐ FIX Case 7: Reject past dates - Handle this BEFORE anything else
       const isPastDateRequest = lowerPrompt.includes('hôm qua') || 
@@ -1230,41 +1845,160 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       
       // ⭐ FIX Case 5: ALWAYS validate slots for one-shot prompts BEFORE using agent response
       // This must happen regardless of whether agent generated a response or not
-      if (preProcessedData.isOneShotPrompt && updatedContext.doctorId && updatedContext.serviceId && updatedContext.date && updatedContext.time) {
-        console.log('🎯 [LangChain] One-shot prompt detected - validating slot availability');
+      // ⭐ FIX: Validate time availability whenever we have all required context
+      // This handles both one-shot prompts AND multi-turn conversations where time was set earlier
+      if (updatedContext.doctorId && updatedContext.serviceId && updatedContext.date && updatedContext.time) {
+        console.log('🎯 [LangChain] All context available - validating slot availability for time:', updatedContext.time);
         try {
-          const slotsResult = await tools[4].func({
-            doctorId: updatedContext.doctorId,
-            date: updatedContext.date,
-            serviceId: updatedContext.serviceId,
-          });
-          const slots = JSON.parse(slotsResult);
+          // Get service duration
+          const service = await Service.findById(updatedContext.serviceId).lean();
+          if (!service) {
+            console.error('❌ [LangChain] Service not found for validation');
+            return;
+          }
           
-          if (slots.success) {
-            const selectedTime = updatedContext.time;
-            const allSlots = [...(slots.morning || []), ...(slots.afternoon || [])];
-            const isValidTime = allSlots.some(slot => slot.startTime === selectedTime);
+          // Parse selected time
+          const selectedTime = updatedContext.time; // e.g., "08:00"
+          const [h, m] = selectedTime.split(':').map(Number);
+          const selectedTimeMinutes = h * 60 + m;
+          
+          // Get booked timeslots for this doctor on this date
+          const searchDate = new Date(updatedContext.date);
+          searchDate.setHours(0, 0, 0, 0);
+          const startOfDay = new Date(searchDate);
+          const endOfDay = new Date(searchDate);
+          endOfDay.setHours(23, 59, 59, 999);
+          
+          const bookedTimeslots = await Timeslot.find({
+            doctorUserId: updatedContext.doctorId,
+            status: { $in: ['Booked', 'Reserved'] },
+            startTime: { $gte: startOfDay, $lt: endOfDay }
+          }).select('startTime endTime status').lean();
+          
+          console.log(`📅 [LangChain] Found ${bookedTimeslots.length} booked/reserved timeslots`);
+          
+          // Check if selected time conflicts with any booked slot
+          let hasConflict = false;
+          let conflictingSlot = null;
+          
+          for (const slot of bookedTimeslots) {
+            const slotStart = new Date(slot.startTime);
+            const slotEnd = new Date(slot.endTime);
+            const slotStartMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
+            const slotEndMinutes = slotEnd.getHours() * 60 + slotEnd.getMinutes();
             
-            if (!isValidTime) {
-              // ⭐ Slot is NOT available - override agent response to show alternatives
-              console.log('❌ [LangChain] Slot not available, showing alternatives');
-              finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng.\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning && slots.morning.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.morning.map(s => s.startTime).join(', ')}`;
+            // Calculate end time of selected appointment
+            const selectedEndMinutes = selectedTimeMinutes + service.durationMinutes;
+            
+            // Check for overlap: selected appointment overlaps with booked slot
+            // Overlap if: (selectedStart < slotEnd) AND (selectedEnd > slotStart)
+            if (selectedTimeMinutes < slotEndMinutes && selectedEndMinutes > slotStartMinutes) {
+              hasConflict = true;
+              conflictingSlot = {
+                start: `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}`,
+                end: `${String(slotEnd.getHours()).padStart(2, '0')}:${String(slotEnd.getMinutes()).padStart(2, '0')}`
+              };
+              console.log(`❌ [LangChain] Time ${selectedTime} conflicts with existing appointment ${conflictingSlot.start}-${conflictingSlot.end}`);
+              break;
+            }
+          }
+          
+          if (hasConflict) {
+            // Get available slots to show alternatives
+            const slotsResult = await tools[4].func({
+              doctorId: updatedContext.doctorId,
+              date: updatedContext.date,
+              serviceId: updatedContext.serviceId,
+            });
+            const slots = JSON.parse(slotsResult);
+            
+            // ⭐ Show specific conflict message with available gaps
+            // Use pre-calculated gaps from slots instead of recalculating
+            finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (đã có lịch hẹn khác từ ${conflictingSlot.start}-${conflictingSlot.end}).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
+            
+            if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+              // Use pre-calculated gaps if available
+              if (slots.morning.gaps && slots.morning.gaps.length > 0) {
+                finalResponse += `\n- Buổi sáng: ${slots.morning.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
+              } else {
+                finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
               }
-              if (slots.afternoon && slots.afternoon.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.afternoon.map(s => s.startTime).join(', ')}`;
-              }
-              finalResponse += '\n\nVui lòng chọn khung giờ khác.';
-              // Clear invalid time from context
-              this.updateConversationContext(patientUserId, { time: null });
+            } else if (slots.morning && slots.morning.isFull) {
+              finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
             } else {
-              console.log('✅ [LangChain] Slot is available for one-shot prompt');
-              // Slot is available - agent response can be used (likely confirmation)
+              finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
+            }
+            
+            if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
+              // Use pre-calculated gaps if available
+              if (slots.afternoon.gaps && slots.afternoon.gaps.length > 0) {
+                finalResponse += `\n- Buổi chiều: ${slots.afternoon.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
+              } else {
+                finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
+              }
+            } else if (slots.afternoon && slots.afternoon.isFull) {
+              finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+            } else {
+              finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
+            }
+            
+            finalResponse += '\n\nVui lòng chọn khung giờ khác.';
+            // Clear invalid time from context
+            this.updateConversationContext(patientUserId, { time: null });
+          } else {
+            // No conflict, but still check if time is within working hours
+            const slotsResult = await tools[4].func({
+              doctorId: updatedContext.doctorId,
+              date: updatedContext.date,
+              serviceId: updatedContext.serviceId,
+            });
+            const slots = JSON.parse(slotsResult);
+            
+            if (slots.success) {
+              let isInWorkingHours = false;
+              const { morningStart, morningEnd, afternoonStart, afternoonEnd } = slots.workingHours;
+              const [mStartH, mStartM] = morningStart.split(':').map(Number);
+              const [mEndH, mEndM] = morningEnd.split(':').map(Number);
+              const [aStartH, aStartM] = afternoonStart.split(':').map(Number);
+              const [aEndH, aEndM] = afternoonEnd.split(':').map(Number);
+              
+              const morningStartMin = mStartH * 60 + mStartM;
+              const morningEndMin = mEndH * 60 + mEndM;
+              const afternoonStartMin = aStartH * 60 + aStartM;
+              const afternoonEndMin = aEndH * 60 + aEndM;
+              
+              // Check if time is within working hours
+              if ((selectedTimeMinutes >= morningStartMin && selectedTimeMinutes < morningEndMin) ||
+                  (selectedTimeMinutes >= afternoonStartMin && selectedTimeMinutes < afternoonEndMin)) {
+                isInWorkingHours = true;
+              }
+              
+              if (!isInWorkingHours) {
+                console.log(`❌ [LangChain] Time ${selectedTime} is outside working hours`);
+                finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng (ngoài giờ làm việc).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
+                if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+                  finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+                } else if (slots.morning && slots.morning.isFull) {
+                  finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+                } else {
+                  finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
+                }
+                if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
+                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
+                } else if (slots.afternoon && slots.afternoon.isFull) {
+                  finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+                } else {
+                  finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
+                }
+                finalResponse += '\n\nVui lòng chọn khung giờ khác.';
+                this.updateConversationContext(patientUserId, { time: null });
+              } else {
+                console.log('✅ [LangChain] Slot is available - no conflicts and within working hours');
+              }
             }
           }
         } catch (e) {
-          console.error('❌ [LangChain] Error validating slot for one-shot prompt:', e);
+          console.error('❌ [LangChain] Error validating slot:', e);
         }
       }
       
@@ -1283,6 +2017,18 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         const toolsCalled = result.intermediateSteps?.map(s => s.action?.tool) || [];
         console.log('🔧 [LangChain] Tools called in this turn:', toolsCalled);
         
+        // ⭐ NEW: Handle doctor on leave error (highest priority)
+        if (preProcessedData.doctorOnLeave) {
+          console.log('⚠️ [Fallback] Doctor is on leave, returning error message');
+          finalResponse = preProcessedData.doctorOnLeaveMessage;
+          // Return immediately with needsMoreInfo flag
+          return {
+            message: finalResponse,
+            intermediateSteps: result.intermediateSteps,
+            needsMoreInfo: true
+          };
+        }
+        
         // ⭐ FIX Case 7: Handle past date rejection
         if (updatedContext.rejectedPastDate) {
           finalResponse = '❌ Không thể đặt lịch cho ngày trong quá khứ. Vui lòng chọn ngày trong tương lai (ví dụ: "ngày mai", "hôm nay", hoặc ngày cụ thể như "25/11/2025").';
@@ -1294,9 +2040,30 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           finalResponse = `Bạn muốn đặt lịch vào tuần sau${doctorName ? ' với ' + doctorName : ''}. Bạn muốn chọn thứ mấy? (Ví dụ: "thứ Hai", "thứ Ba", hoặc ngày cụ thể như "25/11/2025")`;
           // Keep the flag so we can handle the response
         }
-        // ⭐ FIX Case 4: Handle invalid time (outside working hours)
+        // ⭐ FIX Case 4 & 5: Handle invalid time (outside working hours or slot conflict)
         else if (preProcessedData.timeInvalid) {
-          finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (ngoài giờ làm việc của bác sĩ). Vui lòng chọn khung giờ khác.`;
+          if (preProcessedData.timeInvalidReason === 'past_time') {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} đã qua. Vui lòng chọn khung giờ khác trong tương lai.`;
+          } else if (preProcessedData.timeInvalidReason === 'booked' || preProcessedData.timeInvalidReason === 'slot_conflict') {
+            // ⭐ FIX Case 5: Show alternatives when slot is conflicting/booked
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (đã có lịch hẹn khác).`;
+            if (preProcessedData.availableSlots) {
+              finalResponse += `\n\nCác khung giờ khả dụng:`;
+              if (preProcessedData.availableSlots.morningDisplay) {
+                finalResponse += `\n- Buổi sáng: ${preProcessedData.availableSlots.morningDisplay}`;
+              }
+              if (preProcessedData.availableSlots.afternoonDisplay) {
+                finalResponse += `\n- Buổi chiều: ${preProcessedData.availableSlots.afternoonDisplay}`;
+              }
+              finalResponse += `\n\nBạn muốn chọn giờ nào?`;
+            } else {
+              finalResponse += ` Vui lòng chọn khung giờ khác.`;
+            }
+          } else if (preProcessedData.timeInvalidReason === 'reservation_failed') {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không thể đặt (${preProcessedData.reservationError || 'đã có người đặt trước'}). Vui lòng chọn giờ khác.`;
+          } else {
+            finalResponse = `❌ Khung giờ ${preProcessedData.timeValue} không khả dụng (ngoài giờ làm việc của bác sĩ). Vui lòng chọn khung giờ khác.`;
+          }
           try {
             const slotsResult = await tools[4].func({
               doctorId: updatedContext.doctorId,
@@ -1305,12 +2072,20 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             });
             const slots = JSON.parse(slotsResult);
             if (slots.success) {
-              finalResponse += `\n\nKhung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning && slots.morning.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.workingHours.morningStart} - ${slots.workingHours.morningEnd}`;
+              finalResponse += `\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
+              if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+                finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+              } else if (slots.morning && slots.morning.isFull) {
+                finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+              } else {
+                finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
               }
-              if (slots.afternoon && slots.afternoon.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.workingHours.afternoonStart} - ${slots.workingHours.afternoonEnd}`;
+              if (slots.afternoon && !slots.afternoon.isFull) {
+                finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
+              } else if (slots.afternoon && slots.afternoon.isFull) {
+                finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+              } else {
+                finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
               }
             }
           } catch (e) {
@@ -1327,7 +2102,14 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           const doctorName = doctor?.fullName || 'bác sĩ';
           const serviceName = service?.serviceName || 'dịch vụ';
           
-          finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${serviceName}\n- Bác sĩ: ${doctorName}\n- Giờ: ${updatedContext.time}\nBạn xác nhận đặt lịch?`;
+          // Calculate end time
+          const [h, m] = updatedContext.time.split(':').map(Number);
+          const endTimeMinutes = h * 60 + m + (service?.durationMinutes || 30);
+          const endH = Math.floor(endTimeMinutes / 60);
+          const endM = endTimeMinutes % 60;
+          const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+          
+          finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${serviceName}\n- Bác sĩ: ${doctorName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
         }
         // ⭐ FIX Case 1: Handle doctor changes
         else if (preProcessedData.doctorChanged && preProcessedData.doctorResult?.found) {
@@ -1383,6 +2165,69 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           const parsedDate = userPrompt.toLowerCase().includes('ngày mai') ? tomorrowStr : 
                            userPrompt.toLowerCase().includes('hôm nay') ? todayStr : updatedContext.date;
           
+          // ⭐ NEW: Check if doctor is on leave immediately
+          if (updatedContext.doctorId && parsedDate) {
+            try {
+              const checkLeaveDate = new Date(parsedDate);
+              checkLeaveDate.setHours(12, 0, 0, 0);
+              const isOnLeave = await leaveRequestService.isDoctorOnLeave(updatedContext.doctorId, checkLeaveDate);
+              
+              if (isOnLeave) {
+                console.log(`⚠️ [Fallback] Doctor ${updatedContext.doctorId} is on leave on ${parsedDate}, returning error immediately`);
+                
+                // Get doctor name
+                const doctorInfo = await User.findById(updatedContext.doctorId).select('fullName');
+                const doctorName = doctorInfo ? doctorInfo.fullName : 'Bác sĩ bạn chọn';
+                
+                // Get alternatives
+                let alternativeDoctorsMessage = '';
+                try {
+                  // Use a default serviceId if none selected (e.g. first active service) or just list doctors available for ANY service?
+                  // availableSlotService.getAvailableDoctors requires serviceId.
+                  // If we don't have serviceId, we can't accurately check availability.
+                  // However, we can try to find a default service or just list active doctors who are not on leave.
+                  
+                  // Let's try to find "Làm sạch răng" or any service to use as proxy, or just skip alternatives if no service.
+                  // Better: Just say doctor is on leave and ask to choose another doctor (and show list of doctors).
+                  
+                  // Actually, we can fetch all doctors and check if they are on leave.
+                  const allDoctors = await User.find({ role: 'Doctor', status: 'Active' }).select('fullName _id');
+                  const availableDocs = [];
+                  
+                  for (const doc of allDoctors) {
+                    if (doc._id.toString() === updatedContext.doctorId) continue;
+                    
+                    const isDocOnLeave = await leaveRequestService.isDoctorOnLeave(doc._id, checkLeaveDate);
+                    if (!isDocOnLeave) {
+                      availableDocs.push(doc);
+                    }
+                  }
+                  
+                  if (availableDocs.length > 0) {
+                    alternativeDoctorsMessage = '\n\nCác bác sĩ khác đang hoạt động trong hệ thống:';
+                    availableDocs.slice(0, 5).forEach((doc, idx) => {
+                      alternativeDoctorsMessage += `\n${idx + 1}. ${doc.fullName}`;
+                    });
+                    alternativeDoctorsMessage += '\n\nVui lòng chọn bác sĩ khác bên dưới.';
+                  } else {
+                    alternativeDoctorsMessage = '\n\nKhông có bác sĩ nào khác khả dụng vào ngày này. Vui lòng chọn ngày khác.';
+                  }
+                } catch (e) {
+                  console.error('❌ [Fallback] Error getting alternatives:', e);
+                }
+                
+                finalResponse = `Bác sĩ ${doctorName} đã có lịch nghỉ phép vào ngày ${parsedDate}.${alternativeDoctorsMessage}`;
+                return {
+                  message: finalResponse,
+                  intermediateSteps: result.intermediateSteps,
+                  needsMoreInfo: true // ⭐ Prevent frontend from treating this as success
+                };
+              }
+            } catch (e) {
+              console.error('❌ [Fallback] Error checking leave status:', e);
+            }
+          }
+
           // Get doctor name from pre-processed result
           const doctorName = preProcessedData.doctorResult?.doctor?.name || 'bác sĩ bạn chọn';
           
@@ -1403,12 +2248,58 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             console.log('🔧 [Fallback] Services array length:', services?.length || 0);
             
             if (services && services.length > 0) {
+              // ⭐ NEW: Filter services based on user's general keywords
+              let filteredServices = services;
+              const lowerPrompt = userPrompt.toLowerCase();
+              
+              // Special case: "khám răng" or general dental terms → show all dental services (exclude general health)
+              if (lowerPrompt.includes('khám răng') || 
+                  (lowerPrompt.includes('khám') && lowerPrompt.includes('răng'))) {
+                console.log('🔍 [Fallback] Detected "khám răng" - showing all dental services');
+                filteredServices = services.filter(s => 
+                  s.category === 'Examination' && 
+                  !s.name.toLowerCase().includes('tổng quát')
+                );
+                console.log(`✅ [Fallback] Filtered to ${filteredServices.length} dental services`);
+              } else {
+                // Define specific keyword mappings for other cases
+                const serviceKeywords = {
+                  'làm sạch': ['làm sạch', 'vệ sinh', 'cạo vôi'],
+                  'tẩy trắng': ['tẩy trắng', 'trắng răng', 'làm trắng'],
+                  'nhổ': ['nhổ', 'rút răng'],
+                  'trồng': ['trồng', 'cấy ghép', 'implant'],
+                  'niềng': ['niềng', 'chỉnh nha', 'thẳng răng'],
+                  'bọc': ['bọc', 'răng sứ', 'veneer'],
+                  'lấy tủy': ['lấy tủy', 'điều trị tủy', 'chữa tủy'],
+                  'mài': ['mài', 'đánh bóng'],
+                };
+                
+                // Check if user mentioned any specific keyword
+                for (const [category, keywords] of Object.entries(serviceKeywords)) {
+                  if (keywords.some(kw => lowerPrompt.includes(kw))) {
+                    console.log(`🔍 [Fallback] Detected keyword category: ${category}`);
+                    filteredServices = services.filter(s => 
+                      keywords.some(kw => s.name.toLowerCase().includes(kw))
+                    );
+                    if (filteredServices.length > 0) {
+                      console.log(`✅ [Fallback] Filtered to ${filteredServices.length} services`);
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              // If no match or empty result, use all services
+              if (filteredServices.length === 0) {
+                filteredServices = services;
+              }
+              
               finalResponse += '\n\nDưới đây là danh sách dịch vụ:';
-              services.slice(0, 10).forEach((s, idx) => {
+              filteredServices.slice(0, 10).forEach((s, idx) => {
                 finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
               });
-              if (services.length > 10) {
-                finalResponse += `\n... và ${services.length - 10} dịch vụ khác`;
+              if (filteredServices.length > 10) {
+                finalResponse += `\n... và ${filteredServices.length - 10} dịch vụ khác`;
               }
               finalResponse += '\n\nBạn muốn chọn dịch vụ nào?';
               console.log('✅ [Fallback] Services list appended to response');
@@ -1420,6 +2311,18 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             console.error('❌ [Fallback] Error stack:', e.stack);
             finalResponse += '\n\nVui lòng cho tôi biết dịch vụ bạn muốn đặt.';
           }
+        } else if ((preProcessedData.doctorCalled || toolsCalled.includes('find_doctor_by_name')) && 
+                   updatedContext.doctorId && updatedContext.serviceId && !updatedContext.date) {
+          // ⭐ NEW: Doctor was just selected, already have service, need date
+          const doctorName = preProcessedData.doctorResult?.doctor?.name || 'bác sĩ';
+          const service = await Service.findById(updatedContext.serviceId);
+          const serviceName = service?.serviceName || 'dịch vụ bạn đã chọn';
+          finalResponse = `Bạn đã chọn ${doctorName} cho dịch vụ "${serviceName}". Bạn muốn đặt lịch vào ngày nào? (Ví dụ: "ngày mai", "hôm nay", hoặc "22/11/2025")`;
+        } else if ((preProcessedData.serviceCalled || toolsCalled.includes('find_service_by_name')) && 
+                   updatedContext.serviceId && !updatedContext.doctorId) {
+          // ⭐ NEW: Service was just selected, but no doctor yet - ask for doctor
+          const serviceName = preProcessedData.serviceResult?.service?.name || 'dịch vụ bạn chọn';
+          finalResponse = `Bạn đã chọn dịch vụ "${serviceName}". Bạn muốn đặt lịch với bác sĩ nào? (Ví dụ: "bác sĩ Hải", "bác sĩ Dương")`;
         } else if ((preProcessedData.serviceCalled || toolsCalled.includes('find_service_by_name')) && 
                    updatedContext.serviceId && updatedContext.doctorId && !updatedContext.date) {
           // ⭐ NEW: Service was just selected, but no date yet - ask for date
@@ -1441,16 +2344,45 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             const slots = JSON.parse(slotsResult);
             if (slots.success) {
               const serviceName = slots.serviceName || preProcessedData.serviceResult?.service?.name || 'dịch vụ';
-              finalResponse = `Dịch vụ: ${serviceName} (${slots.durationMinutes} phút).\n\nKhung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning && slots.morning.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.workingHours.morningStart} - ${slots.workingHours.morningEnd}`;
+              
+              // ⭐ NEW: Check if both shifts are unavailable (no time or full)
+              // Use the presence of slots array to determine availability
+              const morningAvailable = slots.morning && slots.morning.slots && slots.morning.slots.length > 0;
+              const afternoonAvailable = slots.afternoon && slots.afternoon.slots && slots.afternoon.slots.length > 0;
+              
+              if (!morningAvailable && !afternoonAvailable) {
+                // Both shifts are unavailable - suggest choosing another date
+                const todayStr = DateHelper.getTodayVN();
+                const tomorrowStr = DateHelper.getTomorrowVN();
+                const isToday = updatedContext.date === todayStr;
+                
+                if (isToday) {
+                  finalResponse = `⚠️ Dịch vụ "${serviceName}" cần ${slots.durationMinutes} phút để thực hiện, nhưng hôm nay không còn đủ thời gian khả dụng.\n\nBạn có muốn đặt lịch vào ngày mai (${tomorrowStr}) hoặc ngày khác không?`;
+                } else {
+                  finalResponse = `⚠️ Ngày ${updatedContext.date} không có khung giờ khả dụng cho dịch vụ "${serviceName}".\n\nBạn có muốn chọn ngày khác không? (Ví dụ: "ngày mai", "hôm nay", hoặc ngày cụ thể)`;
+                }
+                // Clear date from context so user can choose another date
+                this.updateConversationContext(patientUserId, { date: null });
+              } else {
+                // At least one shift has available time - show slots
+                finalResponse = `Dịch vụ: ${serviceName} (${slots.durationMinutes} phút).\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
+                
+                if (morningAvailable) {
+                  finalResponse += `\n- Buổi sáng: ${slots.morningDisplay}`;
+                } else {
+                  finalResponse += `\n- Buổi sáng: ${slots.morningDisplay || 'Không có thời gian khả dụng'}`;
+                }
+                
+                if (afternoonAvailable) {
+                  finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay}`;
+                } else {
+                  finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay || 'Không có thời gian khả dụng'}`;
+                }
+                
+                finalResponse += `\n\nBạn muốn chọn giờ nào?`;
               }
-              if (slots.afternoon && slots.afternoon.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.workingHours.afternoonStart} - ${slots.workingHours.afternoonEnd}`;
-              }
-              finalResponse += '\n\nBạn muốn chọn giờ nào?';
             } else {
-              finalResponse = slots.message || 'Không có khung giờ khả dụng. Vui lòng chọn ngày khác.';
+              finalResponse = slots.error || slots.message || 'Không có khung giờ khả dụng. Vui lòng chọn ngày khác.';
             }
           } catch (e) {
             console.error('❌ [Fallback] Error calling get_available_slots:', e);
@@ -1467,13 +2399,31 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
               serviceId: updatedContext.serviceId,
             });
             const slots = JSON.parse(slotsResult);
-            if (slots.success && slots.morning && slots.afternoon) {
-              finalResponse = `Khung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning.length > 0) {
-                finalResponse += `\n- Buổi sáng: ${slots.workingHours.morningStart} - ${slots.workingHours.morningEnd}`;
+            if (slots.success) {
+              finalResponse = `Các khung giờ khả dụng ngày ${updatedContext.date}:`;
+              if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+                // ⭐ Use pre-calculated gaps if available, otherwise show range
+                if (slots.morning.gaps && slots.morning.gaps.length > 0) {
+                  finalResponse += `\n- Buổi sáng: ${slots.morning.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
+                } else {
+                  finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+                }
+              } else if (slots.morning && slots.morning.isFull) {
+                finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+              } else {
+                finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
               }
-              if (slots.afternoon.length > 0) {
-                finalResponse += `\n- Buổi chiều: ${slots.workingHours.afternoonStart} - ${slots.workingHours.afternoonEnd}`;
+              if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
+                // ⭐ Use pre-calculated gaps if available, otherwise show range
+                if (slots.afternoon.gaps && slots.afternoon.gaps.length > 0) {
+                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
+                } else {
+                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
+                }
+              } else if (slots.afternoon && slots.afternoon.isFull) {
+                finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+              } else if (!slots.morning || !slots.morning.start) {
+                finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
               }
               finalResponse += '\n\nBạn muốn chọn giờ nào?';
             } else {
@@ -1486,58 +2436,135 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         } else if (updatedContext.doctorId && updatedContext.serviceId && updatedContext.date && updatedContext.time) {
           // ⭐ NEW: Time was selected, validate and create appointment
           console.log('🔧 [Fallback] Time detected, validating and creating appointment...');
-          try {
-            // First, check if time is available
-            const slotsResult = await tools[4].func({
-              doctorId: updatedContext.doctorId,
-              date: updatedContext.date,
-              serviceId: updatedContext.serviceId,
-            });
-            const slots = JSON.parse(slotsResult);
-            
-            if (slots.success) {
-              // Check if selected time is in available slots
-              const selectedTime = updatedContext.time; // e.g., "09:00"
-              const allSlots = [...(slots.morning || []), ...(slots.afternoon || [])];
-              const isValidTime = allSlots.some(slot => slot.startTime === selectedTime);
+          
+          // ⭐ FIX: If there's already a reservation, skip validation and create appointment directly
+          if (updatedContext.reservedTimeslotId) {
+            console.log('✅ [Fallback] Found existing reservation, creating appointment directly...');
+            try {
+              const createResult = await tools[5].func({
+                serviceId: updatedContext.serviceId,
+                doctorId: updatedContext.doctorId,
+                date: updatedContext.date,
+                time: updatedContext.time,
+                notes: '',
+              });
+              console.log('🔧 [Fallback] Create appointment result:', createResult);
+              const appointmentResult = JSON.parse(createResult);
               
-              console.log('🔧 [Fallback] Selected time:', selectedTime);
-              console.log('🔧 [Fallback] Available slots:', allSlots.map(s => s.startTime));
-              console.log('🔧 [Fallback] Time is valid:', isValidTime);
-              
-              if (isValidTime) {
-                // Time is valid, create appointment
-                console.log('✅ [Fallback] Time is valid, creating appointment...');
-                const createResult = await tools[5].func({
-                  serviceId: updatedContext.serviceId,
-                  doctorId: updatedContext.doctorId,
-                  date: updatedContext.date,
-                  time: selectedTime,
-                  notes: '',
-                });
-                console.log('🔧 [Fallback] Create appointment result:', createResult);
-                const appointmentResult = JSON.parse(createResult);
+              if (appointmentResult.success) {
+                const appt = appointmentResult.appointment;
+                console.log('✅ [Fallback] Appointment created successfully:', appt);
                 
-                if (appointmentResult.success) {
-                  const appt = appointmentResult.appointment;
-                  console.log('✅ [Fallback] Appointment created successfully:', appt);
-                  
-                  finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Mã lịch: #${appt?.appointmentId || appt?._id || 'N/A'}\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
-                  // Clear context after successful booking
-                  this.clearConversationContext(patientUserId);
-                } else {
-                  console.error('❌ [Fallback] Appointment creation failed:', appointmentResult);
-                  finalResponse = `❌ Không thể đặt lịch: ${appointmentResult.error || appointmentResult.message || 'Lỗi không xác định'}. Vui lòng thử lại.`;
-                }
+                // Calculate end time for display
+                const service = await Service.findById(updatedContext.serviceId);
+                const [h, m] = updatedContext.time.split(':').map(Number);
+                const selectedTimeMinutes = h * 60 + m;
+                const endTimeMinutes = selectedTimeMinutes + (service?.durationMinutes || 30);
+                const endH = Math.floor(endTimeMinutes / 60);
+                const endM = endTimeMinutes % 60;
+                const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+                
+                finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Mã lịch: #${appt?.appointmentId || appt?._id || 'N/A'}\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${updatedContext.time}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
+                // Clear context after successful booking
+                this.clearConversationContext(patientUserId);
               } else {
-                // Time is not valid, show available slots again
-                finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng.\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
-                if (slots.morning && slots.morning.length > 0) {
-                  finalResponse += `\n- Buổi sáng: ${slots.workingHours.morningStart} - ${slots.workingHours.morningEnd}`;
+                console.error('❌ [Fallback] Appointment creation failed:', appointmentResult);
+                finalResponse = `❌ Không thể đặt lịch: ${appointmentResult.error || appointmentResult.message || 'Lỗi không xác định'}. Vui lòng thử lại.`;
+              }
+            } catch (e) {
+              console.error('❌ [Fallback] Error creating appointment:', e);
+              finalResponse = 'Có lỗi xảy ra khi đặt lịch. Vui lòng thử lại.';
+            }
+          } else {
+            // No reservation yet, need to validate first
+            try {
+              // First, check if time is available
+              const slotsResult = await tools[4].func({
+                doctorId: updatedContext.doctorId,
+                date: updatedContext.date,
+                serviceId: updatedContext.serviceId,
+              });
+              const slots = JSON.parse(slotsResult);
+              
+              if (slots.success) {
+                // ⭐ FIX: Check if selected time is within available time ranges (not arrays)
+                const selectedTime = updatedContext.time; // e.g., "09:00"
+                const [h, m] = selectedTime.split(':').map(Number);
+                const selectedTimeMinutes = h * 60 + m;
+                
+                let isValidTime = false;
+                
+                // Check morning range
+                if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+                  const [startH, startM] = slots.morning.start.split(':').map(Number);
+                  const [endH, endM] = slots.morning.end.split(':').map(Number);
+                  const morningStartMin = startH * 60 + startM;
+                  const morningEndMin = endH * 60 + endM;
+                  
+                  if (selectedTimeMinutes >= morningStartMin && selectedTimeMinutes < morningEndMin) {
+                    isValidTime = true;
+                  }
                 }
-                if (slots.afternoon && slots.afternoon.length > 0) {
-                  finalResponse += `\n- Buổi chiều: ${slots.workingHours.afternoonStart} - ${slots.workingHours.afternoonEnd}`;
+                
+                // Check afternoon range
+                if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
+                  const [startH, startM] = slots.afternoon.start.split(':').map(Number);
+                  const [endH, endM] = slots.afternoon.end.split(':').map(Number);
+                  const afternoonStartMin = startH * 60 + startM;
+                  const afternoonEndMin = endH * 60 + endM;
+                  
+                  if (selectedTimeMinutes >= afternoonStartMin && selectedTimeMinutes < afternoonEndMin) {
+                    isValidTime = true;
+                  }
                 }
+                
+                console.log('🔧 [Fallback] Selected time:', selectedTime);
+                console.log('🔧 [Fallback] Time is valid:', isValidTime);
+                
+                if (isValidTime) {
+                  // Time is valid, create appointment
+                  console.log('✅ [Fallback] Time is valid, creating appointment...');
+                  const createResult = await tools[5].func({
+                    serviceId: updatedContext.serviceId,
+                    doctorId: updatedContext.doctorId,
+                    date: updatedContext.date,
+                    time: selectedTime,
+                    notes: '',
+                  });
+                  console.log('🔧 [Fallback] Create appointment result:', createResult);
+                  const appointmentResult = JSON.parse(createResult);
+                  
+                  if (appointmentResult.success) {
+                    const appt = appointmentResult.appointment;
+                    console.log('✅ [Fallback] Appointment created successfully:', appt);
+                    
+                    // Calculate end time for display
+                    const service = await Service.findById(updatedContext.serviceId);
+                    const endTimeMinutes = selectedTimeMinutes + (service?.durationMinutes || 30);
+                    const endH = Math.floor(endTimeMinutes / 60);
+                    const endM = endTimeMinutes % 60;
+                    const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+                    
+                    finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Mã lịch: #${appt?.appointmentId || appt?._id || 'N/A'}\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
+                    // Clear context after successful booking
+                    this.clearConversationContext(patientUserId);
+                  } else {
+                    console.error('❌ [Fallback] Appointment creation failed:', appointmentResult);
+                    finalResponse = `❌ Không thể đặt lịch: ${appointmentResult.error || appointmentResult.message || 'Lỗi không xác định'}. Vui lòng thử lại.`;
+                  }
+                } else {
+                  // Time is not valid, show available slots again
+                  finalResponse = `❌ Khung giờ ${selectedTime} không khả dụng.\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:`;
+                  if (slots.morning && slots.morning.start && !slots.morning.isFull) {
+                    finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
+                  } else if (slots.morning && slots.morning.isFull) {
+                    finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+                  }
+                  if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
+                    finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
+                  } else if (slots.afternoon && slots.afternoon.isFull) {
+                    finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
+                  }
                 finalResponse += '\n\nVui lòng chọn khung giờ khác.';
                 // Clear invalid time from context
                 this.updateConversationContext(patientUserId, { time: null });
@@ -1550,6 +2577,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             console.error('❌ [Fallback] Error stack:', e.stack);
             finalResponse = 'Có lỗi xảy ra khi đặt lịch. Vui lòng thử lại.';
           }
+        }
         } else if (preProcessedData.shouldShowServices) {
           // User asked for services list
           try {
@@ -1568,6 +2596,42 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           } catch (e) {
             console.error('❌ [Fallback] Error calling get_services:', e);
             finalResponse = 'Vui lòng cho tôi biết dịch vụ bạn muốn đặt.';
+          }
+        } else if (preProcessedData.shouldShowServices && !updatedContext.doctorId) {
+          // ⭐ NEW: User mentioned service keyword (e.g., "khám răng") but no doctor yet
+          console.log('🔧 [Fallback] Service keyword detected, showing filtered services...');
+          try {
+            const servicesResult = await tools[0].func({});
+            const servicesParsed = JSON.parse(servicesResult);
+            const services = servicesParsed.services;
+            
+            if (services && services.length > 0) {
+              // Filter services based on user's keywords
+              let filteredServices = services;
+              const lowerPrompt = userPrompt.toLowerCase();
+              
+              if (lowerPrompt.includes('khám răng') || 
+                  (lowerPrompt.includes('khám') && lowerPrompt.includes('răng'))) {
+                console.log('🔍 [Fallback] Detected "khám răng" - showing all dental services');
+                filteredServices = services.filter(s => 
+                  s.category === 'Examination' && 
+                  !s.name.toLowerCase().includes('tổng quát')
+                );
+              }
+              
+              if (filteredServices.length === 0) {
+                filteredServices = services;
+              }
+              
+              finalResponse = 'Dưới đây là danh sách dịch vụ:';
+              filteredServices.slice(0, 10).forEach((s, idx) => {
+                finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
+              });
+              finalResponse += '\n\nBạn muốn chọn dịch vụ nào? Và bạn muốn đặt lịch với bác sĩ nào?';
+            }
+          } catch (e) {
+            console.error('❌ [Fallback] Error showing services:', e);
+            finalResponse = 'Vui lòng cho tôi biết bác sĩ và dịch vụ bạn muốn đặt.';
           }
         } else {
           finalResponse = 'Vui lòng cung cấp thêm thông tin để tôi có thể giúp bạn đặt lịch. Bạn có thể cho tôi biết dịch vụ và ngày bạn muốn khám.';
@@ -1615,6 +2679,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         conversationHistory: updatedHistory,
         needsMoreInfo: needsMoreInfo,
         appointment: appointmentCreated ? { success: true } : null,
+        reservationExpiresAt: finalContext.reservationExpiresAt || null, // ⭐ NEW: For countdown timer
       };
     } catch (error) {
       console.error('❌ [LangChain] Error:', error);
@@ -1623,26 +2688,27 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
   }
 
   /**
-   * Main entry point - matches the existing interface
-   */
-  async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = []) {
-    try {
-      const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory);
-      
-      return {
-        success: result.success,
-        appointment: result.appointment || null,
-        needsMoreInfo: result.needsMoreInfo || false,
-        followUpQuestion: result.response,
-        response: result.response,
-        conversationHistory: result.conversationHistory,
-        parsedData: { conversationHistory: result.conversationHistory },
-      };
-    } catch (error) {
-      console.error('❌ [AI Booking LangChain] Error:', error);
-      throw error;
-    }
+ * Main entry point - matches the existing interface
+ */
+async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self', conversationHistory = [], conversationContext = {}, isNewConversation = false) {
+  try {
+    const result = await this.chatWithAI(userPrompt, patientUserId, conversationHistory, isNewConversation);
+    
+    return {
+      success: result.success,
+      appointment: result.appointment || null,
+      needsMoreInfo: result.needsMoreInfo || false,
+      message: result.message || result.response, // ⭐ Preserve message field for controller
+      followUpQuestion: result.response,
+      response: result.response,
+      conversationHistory: result.conversationHistory,
+      parsedData: { conversationHistory: result.conversationHistory },
+    };
+  } catch (error) {
+    console.error('❌ [AI Booking LangChain] Error:', error);
+    throw error;
   }
+}
 }
 
 // Export both the class and a singleton instance

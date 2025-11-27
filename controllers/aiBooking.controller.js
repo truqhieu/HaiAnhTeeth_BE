@@ -16,7 +16,7 @@ const createAppointmentByAI = async (req, res) => {
     console.log('📋 User:', JSON.stringify(req.user || null, null, 2));
     console.log('📋 Origin:', req.headers.origin || 'No origin header');
     
-    const { prompt, appointmentFor, conversationHistory, conversationContext } = req.body;
+    const { prompt, appointmentFor, conversationHistory, conversationContext, isNewConversation } = req.body;
     const patientUserId = req.user?.userId;
 
     if (!patientUserId) {
@@ -40,6 +40,7 @@ const createAppointmentByAI = async (req, res) => {
     console.log('🤖 [AI Booking] Patient ID:', patientUserId);
     console.log('🤖 [AI Booking] Appointment for:', appointmentFor || 'self');
     console.log('🤖 [AI Booking] Conversation history:', conversationHistory ? `${conversationHistory.length} messages` : 'None');
+    console.log('🤖 [AI Booking] Is new conversation:', isNewConversation || false);
     console.log('🤖 [AI Booking] Using LangChain:', USE_LANGCHAIN);
 
     // Chọn service để sử dụng (LangChain hoặc original)
@@ -51,7 +52,8 @@ const createAppointmentByAI = async (req, res) => {
       patientUserId,
       appointmentFor || 'self',
       conversationHistory || [], // Pass conversation history
-      conversationContext || {}
+      conversationContext || {},
+      isNewConversation || false // Pass isNewConversation flag
     );
 
     // Check if appointment was successfully created
@@ -91,7 +93,9 @@ const createAppointmentByAI = async (req, res) => {
     // Check if AI needs more information (multi-turn conversation)
     if (result.needsMoreInfo) {
       console.log('🤖 [AI Booking] Needs more info.');
-      const followUpQuestion = result.followUpQuestion || result.response || 'Cần thêm thông tin để đặt lịch';
+      console.log('📊 [AI Booking] Result object:', JSON.stringify(result, null, 2));
+      const followUpQuestion = result.message || result.followUpQuestion || result.response || 'Cần thêm thông tin để đặt lịch';
+      console.log('📤 [AI Booking] Sending message:', followUpQuestion);
       return res.status(200).json({
         success: false,
         needsMoreInfo: true,

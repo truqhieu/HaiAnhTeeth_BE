@@ -224,28 +224,50 @@ class AvailableSlotService {
       }
     }
 
-    // 6. Tạo danh sách khoảng thời gian đã bận (KHÔNG cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
-    const busySlots = validAppointments.map(apt => {
-      if (apt.timeslotId) {
-        return {
-          start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() // Không cộng break time nữa
-        };
-      }
-      return null;
-    }).filter(slot => slot !== null);
-
-    // ⭐ KHÔNG THÊM appointments của bệnh nhân vào busy slots
-    // Cho phép bệnh nhân đặt nhiều slots liên tiếp cho chính họ
-    // Không cần exclude patient appointments nữa vì họ có thể đặt liên tiếp
-
-    // ⭐ THÊM: Thêm Reserved/Booked timeslots vào busySlots
-    const reservedBusySlots = reservedTimeslots.map(ts => ({
-      start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() // Không cộng break time nữa
-    }));
+    // 6. Tạo danh sách khoảng thời gian đã bận (giống getDoctorScheduleRange)
+    // ⭐ FIX: Sử dụng logic giống getDoctorScheduleRange để đảm bảo consistency
     
-    busySlots.push(...reservedBusySlots);
+    // Lấy booked slots từ appointments
+    const bookedSlotsFromAppointments = validAppointments
+      .filter(apt => apt.timeslotId !== null)
+      .map(apt => ({
+        start: new Date(apt.timeslotId.startTime),
+        end: new Date(apt.timeslotId.endTime)
+      }));
+
+    // Lấy booked slots từ timeslots (Reserved/Booked)
+    const bookedSlotsFromTimeslots = reservedTimeslots.map(timeslot => ({
+      start: new Date(timeslot.startTime),
+      end: new Date(timeslot.endTime)
+    }));
+
+    // Gộp tất cả booked slots và merge các slots có overlap (giống getDoctorScheduleRange)
+    const allBookedSlots = [...bookedSlotsFromAppointments, ...bookedSlotsFromTimeslots];
+    
+    // ⭐ FIX: Merge các slots có overlap thay vì chỉ push vào array
+    allBookedSlots.sort((a, b) => a.start.getTime() - b.start.getTime());
+    
+    const mergedBookedSlots = [];
+    for (const slot of allBookedSlots) {
+      if (mergedBookedSlots.length === 0) {
+        mergedBookedSlots.push({ ...slot });
+        continue;
+      }
+      
+      const lastSlot = mergedBookedSlots[mergedBookedSlots.length - 1];
+      
+      // ⭐ Check overlap: slot.start < lastSlot.end && slot.end > lastSlot.start
+      if (slot.start.getTime() < lastSlot.end.getTime() && slot.end.getTime() > lastSlot.start.getTime()) {
+        // Có overlap → merge: mở rộng lastSlot để bao phủ cả slot mới
+        lastSlot.end = new Date(Math.max(lastSlot.end.getTime(), slot.end.getTime()));
+        lastSlot.start = new Date(Math.min(lastSlot.start.getTime(), slot.start.getTime()));
+      } else {
+        // Không overlap → thêm slot mới
+        mergedBookedSlots.push({ ...slot });
+      }
+    }
+    
+    const busySlots = mergedBookedSlots;
 
     console.log('📅 Tính toán available slots:');
     console.log('   - Bác sĩ:', doctorUserId);
@@ -257,8 +279,8 @@ class AvailableSlotService {
     console.log('   - Số timeslots của bệnh nhân cần exclude:', patientTimeslots.length);
     console.log('   - Số timeslots Reserved/Booked:', reservedTimeslots.length);
     console.log('🔴 DEBUG busySlots:', busySlots.map(b => ({
-      start: new Date(b.start).toISOString(),
-      end: new Date(b.end).toISOString()
+      start: b.start.toISOString(),
+      end: b.end.toISOString()
     })));
 
     // 7. Tạo danh sách slots available
@@ -342,13 +364,10 @@ class AvailableSlotService {
         break;
       }
 
-      // Kiểm tra slot có trùng với busy slots không
+      // Kiểm tra slot có trùng với busy slots không (giống getDoctorScheduleRange)
       const isConflict = busySlots.some(busy => {
-        return (
-          (currentStart >= busy.start && currentStart < busy.end) ||
-          (currentEnd > busy.start && currentEnd <= busy.end) ||
-          (currentStart <= busy.start && currentEnd >= busy.end)
-        );
+        // Conflict nếu: slotStart < busy.end && slotEnd > busy.start
+        return currentStart.getTime() < busy.end.getTime() && currentEnd.getTime() > busy.start.getTime();
       });
 
       if (!isConflict) {
@@ -462,11 +481,15 @@ class AvailableSlotService {
 
     for (const doctor of availableDoctorsUser) {
       try {
+        console.log(`\n🔍 Checking doctor: ${doctor.fullName} (${doctor._id})`);
+        
         // ⭐ THÊM: Kiểm tra xem bác sĩ có leave request approved trong ngày này không
         // Tạo một Date object với giờ 12:00 để kiểm tra nghỉ phép (isDoctorOnLeave cần startTime)
         const checkLeaveDate = new Date(searchDate);
         checkLeaveDate.setUTCHours(12, 0, 0, 0);
         const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
+        
+        console.log(`   - On leave: ${isOnLeave}`);
         
         if (isOnLeave) {
           console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) đang nghỉ phép vào ngày ${searchDate.toISOString().split('T')[0]}, skip...`);
@@ -479,6 +502,8 @@ class AvailableSlotService {
           date: searchDate,
           status: 'Available'
         });
+        
+        console.log(`   - Available schedules found: ${schedules.length}`);
 
         // ⭐ Nếu không có schedule Available → kiểm tra xem có schedule nào không (có thể là Unavailable)
         if (!schedules || schedules.length === 0) {
@@ -486,21 +511,48 @@ class AvailableSlotService {
             doctorUserId: doctor._id,
             date: searchDate
           });
+          
+          console.log(`   - Any schedule found: ${anySchedule ? 'Yes (status: ' + anySchedule.status + ')' : 'No'}`);
 
-              // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
+          // Nếu hoàn toàn không có schedule → tạo schedule cho bác sĩ này
           if (!anySchedule) {
             console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có schedule, tự động tạo...`);
-            await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+            const createdSchedule = await ScheduleHelper.ensureScheduleForDoctor(doctor._id, searchDate);
+            console.log(`   - Schedule created: ${createdSchedule ? 'Yes' : 'No (failed)'}`);
+            
             // Tìm lại schedule sau khi tạo
             schedules = await DoctorSchedule.find({
               doctorUserId: doctor._id,
               date: searchDate,
               status: 'Available'
             });
+            console.log(`   - Available schedules after creation: ${schedules.length}`);
+          } else if (anySchedule.status === 'Unavailable') {
+            // ⭐ FIX: Có schedule Unavailable nhưng bác sĩ KHÔNG on leave
+            // → Có thể là schedule cũ từ leave request đã hết hạn
+            // → Update status thành Available
+            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule Unavailable nhưng không on leave, updating to Available...`);
+            await DoctorSchedule.updateMany(
+              {
+                doctorUserId: doctor._id,
+                date: searchDate,
+                status: 'Unavailable'
+              },
+              {
+                $set: { status: 'Available' }
+              }
+            );
+            
+            // Tìm lại schedule sau khi update
+            schedules = await DoctorSchedule.find({
+              doctorUserId: doctor._id,
+              date: searchDate,
+              status: 'Available'
+            });
+            console.log(`   - Available schedules after update: ${schedules.length}`);
           } else {
-            // Có schedule nhưng không phải Available → có thể là Unavailable (do leave)
-            // Không cần tạo mới, chỉ skip
-            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule nhưng status không phải Available`);
+            // Có schedule với status khác (không phải Available hay Unavailable)
+            console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) có schedule với status: ${anySchedule.status}`);
           }
         }
 
@@ -512,6 +564,7 @@ class AvailableSlotService {
 
         // Bác sĩ này có schedule vào ngày đó → thêm vào danh sách
         // (FE sẽ chọn bác sĩ, sau đó lấy schedule range của bác sĩ đó)
+        console.log(`✅ Adding doctor ${doctor.fullName} to available list`);
         availableDoctors.push({
           doctorId: doctor._id,
           doctorName: doctor.fullName,
@@ -522,7 +575,8 @@ class AvailableSlotService {
         });
 
       } catch (error) {
-        console.warn(`⚠️  Lỗi kiểm tra bác sĩ ${doctor._id}:`, error.message);
+        console.warn(`⚠️  Lỗi kiểm tra bác sĩ ${doctor.fullName} (${doctor._id}):`, error.message);
+        console.error(error);
       }
     }
 
@@ -1447,7 +1501,7 @@ async getDoctorScheduleRange({
       .lean();
     const doctorHasWorkingHours = hasCompleteWorkingHours(doctorProfile?.workingHours);
 
-    const schedules = await DoctorSchedule.find({
+    let schedules = await DoctorSchedule.find({
       doctorUserId,
       date: searchDate,
       status: 'Available'
