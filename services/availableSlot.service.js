@@ -224,28 +224,50 @@ class AvailableSlotService {
       }
     }
 
-    // 6. Tạo danh sách khoảng thời gian đã bận (KHÔNG cộng break time - slot tiếp theo có thể bắt đầu ngay sau)
-    const busySlots = validAppointments.map(apt => {
-      if (apt.timeslotId) {
-        return {
-          start: new Date(apt.timeslotId.startTime),
-          end: new Date(apt.timeslotId.endTime).getTime() // Không cộng break time nữa
-        };
-      }
-      return null;
-    }).filter(slot => slot !== null);
-
-    // ⭐ KHÔNG THÊM appointments của bệnh nhân vào busy slots
-    // Cho phép bệnh nhân đặt nhiều slots liên tiếp cho chính họ
-    // Không cần exclude patient appointments nữa vì họ có thể đặt liên tiếp
-
-    // ⭐ THÊM: Thêm Reserved/Booked timeslots vào busySlots
-    const reservedBusySlots = reservedTimeslots.map(ts => ({
-      start: new Date(ts.startTime),
-      end: new Date(ts.endTime).getTime() // Không cộng break time nữa
-    }));
+    // 6. Tạo danh sách khoảng thời gian đã bận (giống getDoctorScheduleRange)
+    // ⭐ FIX: Sử dụng logic giống getDoctorScheduleRange để đảm bảo consistency
     
-    busySlots.push(...reservedBusySlots);
+    // Lấy booked slots từ appointments
+    const bookedSlotsFromAppointments = validAppointments
+      .filter(apt => apt.timeslotId !== null)
+      .map(apt => ({
+        start: new Date(apt.timeslotId.startTime),
+        end: new Date(apt.timeslotId.endTime)
+      }));
+
+    // Lấy booked slots từ timeslots (Reserved/Booked)
+    const bookedSlotsFromTimeslots = reservedTimeslots.map(timeslot => ({
+      start: new Date(timeslot.startTime),
+      end: new Date(timeslot.endTime)
+    }));
+
+    // Gộp tất cả booked slots và merge các slots có overlap (giống getDoctorScheduleRange)
+    const allBookedSlots = [...bookedSlotsFromAppointments, ...bookedSlotsFromTimeslots];
+    
+    // ⭐ FIX: Merge các slots có overlap thay vì chỉ push vào array
+    allBookedSlots.sort((a, b) => a.start.getTime() - b.start.getTime());
+    
+    const mergedBookedSlots = [];
+    for (const slot of allBookedSlots) {
+      if (mergedBookedSlots.length === 0) {
+        mergedBookedSlots.push({ ...slot });
+        continue;
+      }
+      
+      const lastSlot = mergedBookedSlots[mergedBookedSlots.length - 1];
+      
+      // ⭐ Check overlap: slot.start < lastSlot.end && slot.end > lastSlot.start
+      if (slot.start.getTime() < lastSlot.end.getTime() && slot.end.getTime() > lastSlot.start.getTime()) {
+        // Có overlap → merge: mở rộng lastSlot để bao phủ cả slot mới
+        lastSlot.end = new Date(Math.max(lastSlot.end.getTime(), slot.end.getTime()));
+        lastSlot.start = new Date(Math.min(lastSlot.start.getTime(), slot.start.getTime()));
+      } else {
+        // Không overlap → thêm slot mới
+        mergedBookedSlots.push({ ...slot });
+      }
+    }
+    
+    const busySlots = mergedBookedSlots;
 
     console.log('📅 Tính toán available slots:');
     console.log('   - Bác sĩ:', doctorUserId);
@@ -257,8 +279,8 @@ class AvailableSlotService {
     console.log('   - Số timeslots của bệnh nhân cần exclude:', patientTimeslots.length);
     console.log('   - Số timeslots Reserved/Booked:', reservedTimeslots.length);
     console.log('🔴 DEBUG busySlots:', busySlots.map(b => ({
-      start: new Date(b.start).toISOString(),
-      end: new Date(b.end).toISOString()
+      start: b.start.toISOString(),
+      end: b.end.toISOString()
     })));
 
     // 7. Tạo danh sách slots available
@@ -342,13 +364,10 @@ class AvailableSlotService {
         break;
       }
 
-      // Kiểm tra slot có trùng với busy slots không
+      // Kiểm tra slot có trùng với busy slots không (giống getDoctorScheduleRange)
       const isConflict = busySlots.some(busy => {
-        return (
-          (currentStart >= busy.start && currentStart < busy.end) ||
-          (currentEnd > busy.start && currentEnd <= busy.end) ||
-          (currentStart <= busy.start && currentEnd >= busy.end)
-        );
+        // Conflict nếu: slotStart < busy.end && slotEnd > busy.start
+        return currentStart.getTime() < busy.end.getTime() && currentEnd.getTime() > busy.start.getTime();
       });
 
       if (!isConflict) {

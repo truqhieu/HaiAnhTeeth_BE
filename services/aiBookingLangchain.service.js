@@ -662,52 +662,60 @@ class AIBookingLangchainService {
           console.log(`📅 [Tool] Found ${bookedTimeslots.length} booked timeslots for doctor ${doctorId} on ${date}`);
           bookedTimeslots.forEach(ts => console.log(`   - ${ts.startTime.toISOString()} to ${ts.endTime.toISOString()} (${ts.status})`));
 
-          // ⭐ USE PATIENT BOOKING SERVICE DIRECTLY - ensures identical logic
+          // ⭐ USE getDoctorScheduleRange - EXACT same logic as Patient BookingModal
+          // This ensures AI shows the same available slots as the Patient booking form
           console.log(`🔧 [Tool] Calling availableSlotService.getDoctorScheduleRange...`);
-          
-          // Use getDoctorScheduleRange which returns pre-calculated gaps matching Patient UI
           const scheduleResult = await availableSlotService.getDoctorScheduleRange({
             doctorUserId: doctorId,
             serviceId: serviceId,
             date: date,
-            patientUserId: null // Don't exclude self-appointments for AI view to avoid confusion
+            patientUserId: null, // Don't exclude self-appointments for AI view
+            appointmentFor: 'self' // Default to 'self' for AI
           });
 
           console.log(`✅ [Tool] getDoctorScheduleRange result:`, JSON.stringify(scheduleResult, null, 2));
 
-          // Format the result
+          // ⭐ Format the result - use displayRange directly from scheduleRanges (EXACT same as Patient BookingModal)
+          // scheduleRanges structure: [{ shift: 'Morning'|'Afternoon', displayRange: '08:30-10:00, 10:30-11:00', ... }, ...]
           let morningDisplay = '';
           let afternoonDisplay = '';
           let morningSlots = [];
           let afternoonSlots = [];
           
-          if (scheduleResult.scheduleRanges && scheduleResult.scheduleRanges.length > 0) {
+          if (scheduleResult && scheduleResult.scheduleRanges && Array.isArray(scheduleResult.scheduleRanges)) {
             for (const range of scheduleResult.scheduleRanges) {
-              // Check if this is morning or afternoon shift
-              // We can guess based on start time (e.g., starts before 12:00 is morning)
-              const rangeStartHour = parseInt(range.start.split(':')[0]);
-              const isMorning = rangeStartHour < 12;
-              
-              const displayStr = range.availableGaps && range.availableGaps.length > 0
-                ? range.availableGaps.map(g => `${g.start}-${g.end}`).join(', ')
-                : 'Đã hết chỗ';
+              // Use shift field to determine morning/afternoon (EXACT same as Patient BookingModal)
+              if (range.shift === 'Morning') {
+                // ⭐ Use displayRange directly - already formatted correctly by getDoctorScheduleRange
+                morningDisplay = range.displayRange || 'Đã hết chỗ';
                 
-              if (isMorning) {
-                morningDisplay = displayStr;
-                // Create dummy slots object for fallback logic compatibility
-                if (range.availableGaps && range.availableGaps.length > 0) {
-                   morningSlots = range.availableGaps.map(g => ({ start: g.start, end: g.end }));
+                // Convert availableGaps to slots format for compatibility (if needed)
+                if (range.availableGaps && Array.isArray(range.availableGaps) && range.availableGaps.length > 0) {
+                  morningSlots = range.availableGaps.map(gap => ({
+                    startTime: gap.start, // ISO string
+                    endTime: gap.end, // ISO string
+                    displayTime: gap.display || `${gap.start}-${gap.end}` // "08:30-10:00"
+                  }));
                 }
-              } else {
-                afternoonDisplay = displayStr;
-                if (range.availableGaps && range.availableGaps.length > 0) {
-                   afternoonSlots = range.availableGaps.map(g => ({ start: g.start, end: g.end }));
+              } else if (range.shift === 'Afternoon') {
+                // ⭐ Use displayRange directly - already formatted correctly by getDoctorScheduleRange
+                afternoonDisplay = range.displayRange || 'Không có thời gian khả dụng';
+                
+                // Convert availableGaps to slots format for compatibility (if needed)
+                if (range.availableGaps && Array.isArray(range.availableGaps) && range.availableGaps.length > 0) {
+                  afternoonSlots = range.availableGaps.map(gap => ({
+                    startTime: gap.start, // ISO string
+                    endTime: gap.end, // ISO string
+                    displayTime: gap.display || `${gap.start}-${gap.end}` // "14:00-18:00"
+                  }));
                 }
               }
             }
+          } else {
+            console.warn('⚠️ [Tool] scheduleResult.scheduleRanges is missing or not an array:', scheduleResult);
           }
           
-          // Handle missing shifts
+          // Handle missing shifts (EXACT same as Patient BookingModal fallback)
           if (!morningDisplay) morningDisplay = 'Đã qua thời gian làm việc hoặc không có lịch';
           if (!afternoonDisplay) afternoonDisplay = 'Không có thời gian khả dụng';
 
