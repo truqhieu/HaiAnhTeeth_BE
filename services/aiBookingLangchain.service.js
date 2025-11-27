@@ -773,11 +773,50 @@ class AIBookingLangchainService {
           console.log(`🔧 [Tool] create_appointment: Found ${schedules.length} schedules for doctorId ${doctorId}, date ${date}`);
           
           if (!schedules || schedules.length === 0) {
-            console.error(`❌ [Tool] create_appointment: No schedules found`);
-            return JSON.stringify({ 
-              success: false, 
-              error: 'Không tìm thấy lịch làm việc của bác sĩ vào ngày này.' 
+            console.log(`⚠️ [Tool] create_appointment: No schedules found. Auto-creating schedule for doctorId ${doctorId}, date ${date}...`);
+            
+            // ⭐ Auto-create schedule logic (copied from get_available_slots)
+            const todayDateStr = DateHelper.getTodayVN();
+            const searchDateFormatter = new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'Asia/Ho_Chi_Minh',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit'
             });
+            const searchDateStr = searchDateFormatter.format(searchDate);
+
+            if (searchDateStr >= todayDateStr) {
+              try {
+                await ScheduleHelper.ensureScheduleForDoctor(doctorId, searchDate);
+                await new Promise(resolve => setTimeout(resolve, 100)); // Wait for DB propagation
+
+                // Query again after creating
+                schedules = await DoctorSchedule.find({
+                  doctorUserId: doctorId,
+                  date: searchDate
+                }).lean();
+                
+                console.log(`✅ [Tool] create_appointment: Auto-created schedule, found ${schedules.length} shifts`);
+              } catch (createError) {
+                console.error(`❌ [Tool] create_appointment: Error auto-creating schedule:`, createError);
+                return JSON.stringify({ 
+                  success: false, 
+                  error: 'Không thể tạo lịch làm việc cho bác sĩ vào ngày này.' 
+                });
+              }
+            } else {
+              return JSON.stringify({ 
+                success: false, 
+                error: 'Không tìm thấy lịch làm việc của bác sĩ vào ngày này.' 
+              });
+            }
+            
+            if (!schedules || schedules.length === 0) {
+               return JSON.stringify({ 
+                success: false, 
+                error: 'Không tìm thấy lịch làm việc của bác sĩ vào ngày này (sau khi thử tạo).' 
+              });
+            }
           }
 
           // Determine which schedule (morning or afternoon) based on time
@@ -2040,6 +2079,35 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           return {
             message: finalResponse,
             intermediateSteps: result.intermediateSteps,
+            needsMoreInfo: true
+          };
+        }
+
+        // ⭐ FIX Case 25: Handle doctor not found explicitly
+        if (preProcessedData.doctorCalled && preProcessedData.doctorResult && !preProcessedData.doctorResult.found) {
+          console.log('⚠️ [Fallback] Doctor not found, returning tool message');
+          finalResponse = preProcessedData.doctorResult.message || 'Không tìm thấy bác sĩ bạn yêu cầu.';
+          
+          // Add suggestions if available
+          if (preProcessedData.doctorResult.suggestions && preProcessedData.doctorResult.suggestions.length > 0) {
+            finalResponse += '\n\nDưới đây là một số bác sĩ khác có thể bạn quan tâm:';
+            preProcessedData.doctorResult.suggestions.forEach((d, idx) => {
+              finalResponse += `\n${idx + 1}. ${d.name}`;
+            });
+            finalResponse += '\n\nBạn muốn chọn bác sĩ nào?';
+          } else {
+            finalResponse += ' Vui lòng kiểm tra lại tên bác sĩ hoặc chọn bác sĩ khác.';
+          }
+          
+          // Return immediately to prevent other fallbacks from overriding
+          return {
+            success: true,
+            response: finalResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: finalResponse },
+            ],
             needsMoreInfo: true
           };
         }
