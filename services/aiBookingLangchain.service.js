@@ -839,8 +839,14 @@ class AIBookingLangchainService {
 
           // Create startTime and endTime as Date objects
           const [startHour, startMinute] = time.split(':').map(Number);
+          
+          // ⭐ FIX: Convert VN time (UTC+7) to UTC for database storage
+          // User input is in VN timezone, we need to subtract 7 hours to get UTC time
+          // Example: User selects 07:50 VN → Store as 00:50 UTC → Display as 07:50 VN ✅
           const startTime = new Date(searchDate);
-          startTime.setHours(startHour, startMinute, 0, 0);
+          startTime.setUTCHours(startHour - 7, startMinute, 0, 0);
+          
+          console.log(`🔧 [Tool] create_appointment: Converting VN time ${time} to UTC: ${startTime.toISOString()}`);
 
           const endTime = new Date(startTime);
           endTime.setMinutes(endTime.getMinutes() + service.durationMinutes);
@@ -1607,8 +1613,16 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
                     const slotStart = new Date(slot.startTime);
                     const slotEnd = new Date(slot.endTime);
                     
-                    const slotStartMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
-                    const slotEndMinutes = slotEnd.getHours() * 60 + slotEnd.getMinutes();
+                    // ⭐ FIX: Convert UTC to VN time (UTC+7)
+                    const slotStartHour = (slotStart.getUTCHours() + 7) % 24;
+                    const slotStartMinute = slotStart.getUTCMinutes();
+                    const slotEndHour = (slotEnd.getUTCHours() + 7) % 24;
+                    const slotEndMinute = slotEnd.getUTCMinutes();
+                    
+                    const slotStartMinutes = slotStartHour * 60 + slotStartMinute;
+                    const slotEndMinutes = slotEndHour * 60 + slotEndMinute;
+                    
+                    console.log(`  🔍 [Pre-process] Checking slot: ${slotStartHour}:${String(slotStartMinute).padStart(2, '0')}-${slotEndHour}:${String(slotEndMinute).padStart(2, '0')} (${slotStartMinutes}-${slotEndMinutes} min) vs selected ${timeStr} (${selectedTimeMinutes} min)`);
                     
                     // Check if selected time + service duration fits within this gap
                     const serviceDuration = slots.durationMinutes || 30;
@@ -1616,6 +1630,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
                     
                     if (selectedTimeMinutes >= slotStartMinutes && selectedEndTimeMinutes <= slotEndMinutes) {
                       isTimeAvailable = true;
+                      console.log(`  ✅ [Pre-process] Time ${timeStr} is valid in slot ${slotStartHour}:${String(slotStartMinute).padStart(2, '0')}-${slotEndHour}:${String(slotEndMinute).padStart(2, '0')}`);
                       break;
                     }
                   }
