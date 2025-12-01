@@ -12,7 +12,7 @@ const notificationSchema = new mongoose.Schema({
     },
     message : {
         type : String,
-        required : [true, 'Vui lòng điền tóm tắt blog'],
+        required : [true, 'Vui lòng nhập nội dung thông báo'],
         trim : true,
     },
     isRead : {
@@ -21,11 +21,13 @@ const notificationSchema = new mongoose.Schema({
     },
     relatedAppointmentId : {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Appointment'
+        ref: 'Appointment',
+        default : null,
     },
     leaveRequestId : {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'LeaveRequest'
+        ref: 'LeaveRequest',
+        default : null,
     },
     link : {
         type : String,

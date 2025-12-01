@@ -6,6 +6,8 @@ const User = require('../models/user.model');
 const notificationService = require('./notification.service');
 
 const STATUS = LeaveRequest.schema.path('status').enumValues;
+const DateHelper = require('../utils/dateHelper'); 
+
 
 class LeaveRequestService {
 
@@ -19,86 +21,80 @@ async createLeaveRequest(userId, data) {
     throw new Error('Vui lòng nhập đầy đủ thông tin');
   }
 
-  // Parse input dates
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  let startUtc;
+  let endUtc;
 
-  if (isNaN(start.getTime())) {
+  try {
+    startUtc = DateHelper.parseVNDateOnlyStart(startDate);
+    endUtc   = DateHelper.parseVNDateOnlyEnd(endDate);
+  } catch (e) {
+    console.error('❌ Lỗi parse ngày nghỉ:', e.message);
+    throw new Error('Ngày nghỉ không hợp lệ');
+  }
+
+  if (isNaN(startUtc.getTime())) {
     throw new Error('Ngày bắt đầu không hợp lệ');
   }
 
-  if (isNaN(end.getTime())) {
+  if (isNaN(endUtc.getTime())) {
     throw new Error('Ngày kết thúc không hợp lệ');
   }
 
-  // Normalize to start of day in LOCAL timezone
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
+  const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
 
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-
-  if (start < now) {
+  if (startUtc < todayVNStartUtc) {
     throw new Error('Ngày bắt đầu phải tính từ hiện tại');
   }
 
-  if (end < start) {
-    throw new Error('Ngày kết thúc phải lớn hơn ngày bắt đầu');
+  if (endUtc < startUtc) {
+    throw new Error('Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu');
   }
 
-  // Validate lý do
   const cleanReason = reason.trim();
   if (cleanReason.length === 0) {
-    throw new Error("Lý do nghỉ không thể để trống");
+    throw new Error('Lý do nghỉ không thể để trống');
   }
   if (cleanReason.length < 3) {
     throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
   }
   if (!/^[a-zA-ZÀ-ỹ0-9\s.,!?;:'"()_-]+$/.test(cleanReason)) {
-    throw new Error('Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -');
+    throw new Error(
+      'Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -'
+    );
   }
 
-  // ✅ TẠO THỜI GIAN LƯU VÀO DB (giờ local, MongoDB tự convert sang UTC)
-  const startToSave = new Date(start);
-  startToSave.setHours(0, 0, 0, 0); // 00:00:00 giờ VN
-
-  const endToSave = new Date(end);
-  endToSave.setHours(23, 59, 59, 999); // 23:59:59 giờ VN
-
-  // Check xung đột lịch nghỉ
   const existingApprovedLeave = await LeaveRequest.findOne({
-    userId: userId,
+    userId,
     status: { $in: ['Approved', 'Pending'] },
-    $or: [
-      { startDate: { $lte: endToSave }, endDate: { $gte: startToSave } }
-    ]
+    startDate: { $lte: endUtc },
+    endDate:   { $gte: startUtc },
   });
 
   if (existingApprovedLeave) {
     throw new Error('Bạn đã có đơn nghỉ trong khoảng thời gian này');
   }
 
-  // Tạo đơn nghỉ mới
   const newRequest = new LeaveRequest({
     userId,
-    startDate: startToSave,  // MongoDB tự convert: VN 28/11 00:00 → UTC 27/11 17:00
-    endDate: endToSave,      // MongoDB tự convert: VN 30/11 23:59 → UTC 30/11 16:59
+    startDate: startUtc,
+    endDate: endUtc,
     reason: cleanReason,
+    status: 'Pending',
   });
 
   await newRequest.save();
-  
-  // Gửi thông báo cho Manager
-  const listManager = await User.find({ role: "Manager" });
+
+  const listManager = await User.find({ role: 'Manager' });
   try {
     await Promise.all(
-      listManager.map(manager =>
+      listManager.map((manager) =>
         notificationService.createNotification({
           userId: manager._id,
           createdByUserId: userId,
           title: 'Đơn xin nghỉ phép',
-          message: `Có đơn xin nghỉ phép mới cần duyệt`,
+          message: 'Có đơn xin nghỉ phép mới cần duyệt',
           relatedAppointmentId: null,
+          leaveRequestId: newRequest._id,
           link: null,
         })
       )
@@ -106,9 +102,11 @@ async createLeaveRequest(userId, data) {
   } catch (notifError) {
     console.warn('⚠️ Lỗi gửi notification cho manager:', notifError.message);
   }
-  
+
   return newRequest;
 }
+
+
 
   /**
    * Lấy danh sách leave requests

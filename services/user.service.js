@@ -360,10 +360,10 @@ async updateProfile(userId, data, file) {
       if (!allowedFields.includes(key)) continue;
       const value = data[key];
 
-      // === Validate fullName ===
+      // === fullName ===
       if (key === 'fullName') {
-        const cleanFullName = value.trim();
-        if (cleanFullName.length === 0) {
+        const cleanFullName = (value || '').trim();
+        if (!cleanFullName) {
           throw new Error('Họ tên không được để trống');
         }
         if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(cleanFullName)) {
@@ -375,10 +375,10 @@ async updateProfile(userId, data, file) {
         updates.fullName = cleanFullName;
       }
 
-      // === Validate phone ===
+      // === phoneNumber ===
       if (key === 'phoneNumber') {
-        const cleanPhone = value.trim();
-        if (cleanPhone.length === 0) {
+        const cleanPhone = (value || '').trim();
+        if (!cleanPhone) {
           updates.phoneNumber = null;
         } else {
           if (!/^[0-9]{10}$/.test(cleanPhone) || !cleanPhone.startsWith('0')) {
@@ -388,10 +388,10 @@ async updateProfile(userId, data, file) {
         }
       }
 
-      // === Validate address ===
+      // === address ===
       if (key === 'address') {
-        const cleanAddress = value.trim();
-        if (cleanAddress.length === 0) {
+        const cleanAddress = (value || '').trim();
+        if (!cleanAddress) {
           updates.address = null;
         } else {
           if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanAddress)) {
@@ -404,7 +404,7 @@ async updateProfile(userId, data, file) {
         }
       }
 
-      // === Validate dob ===
+      // === dob ===
       if (key === 'dob') {
         const birthDate = new Date(value);
         if (isNaN(birthDate.getTime())) {
@@ -421,24 +421,26 @@ async updateProfile(userId, data, file) {
         updates.dob = value;
       }
 
-      // === Validate gender ===
+      // === gender ===
       if (key === 'gender') {
         updates.gender = value;
       }
 
-      // === Validate emergencyContact (chỉ cho Patient) ===
+      // === emergencyContact ===
       if (key === 'emergencyContact') {
         let ec = value;
 
-        if(typeof ec === 'string') {
+        // Trong controller đã parse JSON rồi, nên tới đây `ec` thường là object
+        // Nhưng mình vẫn check thêm cho an toàn
+        if (typeof ec === 'string') {
           try {
             ec = JSON.parse(ec);
-          } catch (error) {
+          } catch (e) {
             throw new Error('Lỗi định dạng emergencyContact');
           }
         }
 
-        if (ec) {
+        if (ec && typeof ec === 'object') {
           if (!ec.name || ec.name.trim().length === 0) {
             throw new Error('emergencyContact.name không được để trống');
           }
@@ -446,9 +448,10 @@ async updateProfile(userId, data, file) {
             throw new Error('emergencyContact.phone không được để trống');
           }
 
+          const phoneDigits = ec.phone.replace(/\D/g, '');
           const phoneRegex = /^[0-9]{10,11}$/;
-          if (!phoneRegex.test(ec.phone.replace(/\D/g, ''))) {
-            throw new Error('emergencyContact.phone phải là 10-11 số');
+          if (!phoneRegex.test(phoneDigits) || !phoneDigits.startsWith('0')) {
+            throw new Error('emergencyContact.phone phải bắt đầu bằng 0 và có 10-11 số');
           }
 
           const validRelationships = ['Father', 'Mother', 'Brother', 'Sister', 'Spouse', 'Friend', 'Other'];
@@ -465,7 +468,7 @@ async updateProfile(userId, data, file) {
       }
     }
 
-    // ✅ Upload ảnh mới trước (nếu có)
+    // ✅ Upload avatar nếu có
     if (file) {
       tempFilePath = file.path;
       const result = await this.uploadImage(file.path);
@@ -474,69 +477,57 @@ async updateProfile(userId, data, file) {
       updates.avatarId = result.public_id;
     }
 
-    // Không có gì để cập nhật
     if (Object.keys(updates).length === 0 && !emergencyContactUpdate) {
       throw new Error('Không có trường hợp lệ để cập nhật');
     }
 
-    // ✅ Update User (database)
-    const updatedUser = await User.findByIdAndUpdate(
+    // ✅ Update user
+    const updatedUserDoc = await User.findByIdAndUpdate(
       userId,
       { $set: updates },
       { new: true, runValidators: true }
     ).select('-passwordHash -__v');
 
-    if (!updatedUser) {
+    if (!updatedUserDoc) {
       throw new Error('Không tìm thấy người dùng');
     }
 
-    // ✅ Xóa ảnh cũ SAU khi update database thành công
     if (file && user.avatarId && user.avatarId !== uploadedImageId) {
       await deleteOldImage(user.avatarId);
     }
 
-    // Update emergency contact trong Patient
+    // ✅ Upsert emergencyContact vào Patient nếu là Patient
     let emergencyContactResponse = null;
 
-    if (updatedUser.role === 'Patient') {
-      const Patient = require('../models/patient.model');
-      let patient = await Patient.findOne({ patientUserId: updatedUser._id });
+    if (updatedUserDoc.role === 'Patient' && emergencyContactUpdate) {
+      const patient = await Patient.findOneAndUpdate(
+        { patientUserId: updatedUserDoc._id },
+        { $set: { emergencyContact: emergencyContactUpdate } },
+        { new: true, upsert: true }
+      );
 
-      if (!patient) {
-        patient = new Patient({
-          patientUserId: updatedUser._id,
-          emergencyContact: emergencyContactUpdate
-        });
-        await patient.save();
-      } else if (emergencyContactUpdate) {
-        patient.emergencyContact = emergencyContactUpdate;
-        await patient.save();
-      }
-
-      emergencyContactResponse = patient?.emergencyContact || null;
+      emergencyContactResponse = patient.emergencyContact;
     }
 
-    const responseData = updatedUser.toObject ? updatedUser.toObject() : { ...updatedUser };
+    // build object trả về (thêm emergencyContact cho FE)
+    const responseData = updatedUserDoc.toObject ? updatedUserDoc.toObject() : { ...updatedUserDoc };
 
-    if (updatedUser.role === 'Patient') {
+    if (updatedUserDoc.role === 'Patient') {
       responseData.emergencyContact = emergencyContactResponse;
     }
 
     return responseData;
 
   } catch (error) {
-    console.error("Lỗi cập nhật profile:", error);
-    
-    // ❌ Nếu có lỗi, xóa ảnh vừa upload
+    console.error('Lỗi cập nhật profile:', error);
+
     if (uploadedImageId) {
-      console.warn(`⚠️  Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
+      console.warn(`⚠️ Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
       await deleteOldImage(uploadedImageId);
     }
-    
-    throw new Error(error.message || "Lỗi server. Vui lòng thử lại sau");
 
+    throw new Error(error.message || 'Lỗi server. Vui lòng thử lại sau');
   } finally {
-    // ✅ Cleanup file tạm thời (an toàn)
     if (tempFilePath) {
       try {
         if (fs.existsSync(tempFilePath)) {
@@ -548,6 +539,7 @@ async updateProfile(userId, data, file) {
     }
   }
 }
+
 
 
 async changePassword(userId, data) {

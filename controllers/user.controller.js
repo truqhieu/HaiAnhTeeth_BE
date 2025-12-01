@@ -427,14 +427,19 @@ const updateProfile = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Các trường sẽ validate giống updateAccount
     const allowedFields = ['fullName', 'phoneNumber', 'address','dob', 'gender', 'emergencyContact'];
     const updates = {};
+
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        if(field === 'emergencyContact' && typeof req.body[field] === 'string') {
+      if (req.body[field] === undefined) continue;
+
+      if (field === 'emergencyContact') {
+        let ec = req.body[field];
+
+        // Nếu FE gửi form-data → emergencyContact là string JSON
+        if (typeof ec === 'string') {
           try {
-            req.body[field] = JSON.parse(req.body[field]);
+            ec = JSON.parse(ec);
           } catch (error) {
             return res.status(400).json({
               success: false,
@@ -442,13 +447,14 @@ const updateProfile = async (req, res) => {
             });
           }
         }
-        else {
-          updates[field] = req.body[field];
-        }
+
+        updates.emergencyContact = ec;   // ⭐ QUAN TRỌNG: phải set vào updates
+      } else {
+        updates[field] = req.body[field];
       }
     }
 
-    const updatedUser = await userService.updateProfile(userId,updates, req.file)
+    const updatedUser = await userService.updateProfile(userId, updates, req.file);
 
     res.status(200).json({
       success: true,
@@ -478,6 +484,7 @@ const updateProfile = async (req, res) => {
     res.status(500).json({ success: false, message: 'Lỗi server. Vui lòng thử lại sau' });
   }
 };
+
 
 
 // Middleware xác thực JWT

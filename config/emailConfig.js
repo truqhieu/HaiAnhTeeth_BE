@@ -764,17 +764,6 @@ HaiAnhTeeth Team
         </h3>
         
         <table style="width: 100%; border-collapse: collapse;">
-          <tr style="border-bottom: 1px solid #fecaca;">
-            <td style="padding: 12px 0; vertical-align: top; width: 36px;">
-              <span style="font-size: 20px;">🆔</span>
-            </td>
-            <td style="padding: 12px 0; vertical-align: top; width: 100px;">
-              <span style="color: #7f1d1d; font-size: 14px; font-weight: 400;">Mã lịch hẹn</span>
-            </td>
-            <td style="padding: 12px 0; vertical-align: top;">
-              <span style="color: #991b1b; font-size: 15px; font-weight: 500; font-family: monospace;">${appointmentId || 'N/A'}</span>
-            </td>
-          </tr>
           
           <tr style="border-bottom: 1px solid #fecaca;">
             <td style="padding: 12px 0; vertical-align: top; width: 36px;">

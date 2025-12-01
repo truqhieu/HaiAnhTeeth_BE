@@ -1,7 +1,8 @@
 /**
  * Date Helper - Xử lý timezone Việt Nam (UTC+7)
+ * 
  */
-
+const VN_UTC_OFFSET = 7;
 class DateHelper {
   
   /**
@@ -411,6 +412,64 @@ class DateHelper {
     // Format về YYYY-MM-DD
     return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nextDay).padStart(2, '0')}`;
   }
+
+// Giả sử vẫn có const VN_UTC_OFFSET = 7; ở đâu đó, nhưng 3 hàm này không dùng nữa.
+
+/**
+ * Parse "YYYY-MM-DD" → Date UTC với đúng ngày đó (dùng như nhãn ngày)
+ * VD: "2025-12-03" → 2025-12-03T00:00:00.000Z
+ */
+static parseVNDateOnlyStart(dateStr) {
+  if (typeof dateStr !== 'string') {
+    throw new Error('Ngày không hợp lệ');
+  }
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (!year || !month || !day) {
+    throw new Error('Ngày không hợp lệ');
+  }
+
+  // Không trừ 7h nữa, giữ nguyên "ngày" theo dạng YYYY-MM-DD
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+}
+
+/**
+ * Parse "YYYY-MM-DD" → Date UTC tương ứng 23:59:59.999 của chính ngày đó
+ * VD: "2025-12-03" → 2025-12-03T23:59:59.999Z
+ */
+static parseVNDateOnlyEnd(dateStr) {
+  if (typeof dateStr !== 'string') {
+    throw new Error('Ngày không hợp lệ');
+  }
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (!year || !month || !day) {
+    throw new Error('Ngày không hợp lệ');
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+}
+
+/**
+ * Lấy "hôm nay 00:00" theo NGÀY VIỆT NAM nhưng biểu diễn dạng UTC
+ * (dùng cùng style với parseVNDateOnlyStart để so sánh ngày)
+ */
+static getTodayVNStartUTC() {
+  // Lấy ngày hôm nay theo timezone VN, dưới dạng "YYYY-MM-DD"
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  const todayStr = formatter.format(new Date()); // ví dụ "2025-12-03"
+  const [year, month, day] = todayStr.split('-').map(Number);
+
+  // Dùng cùng style với parseVNDateOnlyStart: 00:00 của đúng ngày đó
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+}
+
 }
 
 module.exports = DateHelper;
