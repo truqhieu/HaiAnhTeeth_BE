@@ -2346,7 +2346,7 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
         serviceName: appointment.serviceId.serviceName,
         oldDoctorName: oldDoctorName,
         newDoctorName: newDoctor.fullName,
-        appointmentDate: appointment.timeslotId.date,
+        appointmentDate: appointment.timeslotId.endTime,
         appointmentStart: appointment.timeslotId.startTime,
         appointmentEnd: appointment.timeslotId.endTime,
         clinicName: 'Phòng khám Hải Anh'
