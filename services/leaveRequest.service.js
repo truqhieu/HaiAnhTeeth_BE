@@ -57,9 +57,9 @@ async createLeaveRequest(userId, data) {
   if (cleanReason.length < 3) {
     throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
   }
-  if (!/^[a-zA-ZÀ-ỹ0-9\s.,!?;:'"()_-]+$/.test(cleanReason)) {
+  if (/[<>]/.test(cleanReason)) {
     throw new Error(
-      'Lí do nghỉ không hợp lệ. Vui lòng chỉ nhập chữ, số và các ký tự . , ! ? ; : ( ) _ -'
+      'Lý do nghỉ không hợp lệ. Vui lòng không sử dụng ký tự < hoặc >'
     );
   }
 
@@ -112,79 +112,101 @@ async createLeaveRequest(userId, data) {
    * Lấy danh sách leave requests
    */
   async getAllLeaveRequests(filters = {}, userRole = null, userId = null) {
-    const {
-      page = 1,
-      limit = 10,
-      status,
-      search,
-      startDate,
-      endDate,
-      sort = 'desc',
-    } = filters;
+  const {
+    page = 1,
+    limit = 10,
+    status,
+    search,
+    startDate,
+    endDate,
+    sort = 'desc',
+  } = filters;
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
-    const skip = (pageNum - 1) * limitNum;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+  const skip = (pageNum - 1) * limitNum;
 
-    const filter = {};
-    if (userRole && ['Doctor', 'Nurse', 'Staff'].includes(userRole)) {
-      filter.userId = userId;
+  const filter = {};
+
+  // Chỉ xem được đơn của chính mình nếu là Doctor/Nurse/Staff
+  if (userRole && ['Doctor', 'Nurse', 'Staff'].includes(userRole)) {
+    filter.userId = userId;
+  }
+
+  if (status && STATUS.includes(status)) {
+    filter.status = status;
+  }
+
+  // 🔍 SEARCH: theo lý do + tên người gửi đơn
+  if (search && String(search).trim().length > 0) {
+    const searchKey = String(search).trim();
+    const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(safe, 'i');
+
+    // 1) Tìm userId có fullName khớp
+    const matchedUsers = await User.find({
+      fullName: { $regex: regex }
+    }).select('_id').lean();
+
+    const userIds = matchedUsers.map(u => u._id);
+
+    // 2) Gộp điều kiện vào $or
+    const orConditions = [
+      { reason: { $regex: regex } } // search theo lý do
+    ];
+
+    if (userIds.length > 0) {
+      orConditions.push({ userId: { $in: userIds } }); // search theo tên người gửi
     }
-    if (status && STATUS.includes(status)) filter.status = status;
 
-    if (search && String(search).trim().length > 0) {
-      const searchKey = String(search).trim();
-      const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regax = new RegExp(safe, 'i');
-      filter.$or = [
-        { reason: { $regex: regax } }
-      ];
+    filter.$or = orConditions;
+  }
+
+  // Lọc theo khoảng ngày nghỉ
+  if (startDate || endDate) {
+    filter.startDate = {};
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      filter.startDate.$gte = start;
     }
-
-    if (startDate || endDate) {
-      filter.startDate = {};
-      if (startDate) {
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        filter.startDate.$gte = start;
-      }
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.startDate.$lte = end;
-      }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      filter.startDate.$lte = end;
     }
+  }
 
-    const sortOrder = sort === 'asc' ? 1 : -1;
+  const sortOrder = sort === 'asc' ? 1 : -1;
 
-    const [total, leaveRequests] = await Promise.all([
-      LeaveRequest.countDocuments(filter),
-      LeaveRequest.find(filter)
-        .populate({
-          path: 'userId',
-          select: '_id fullName role' // ⭐ Thêm _id để frontend có thể extract
-        })
-        .populate({
-          path: 'approvedByManager',
-          select: 'fullName'
-        })
-        .select('-__v')
-        .sort({ startDate: sortOrder })
-        .skip(skip)
-        .limit(limitNum)
-        .lean()
-    ]);
+  const [total, leaveRequests] = await Promise.all([
+    LeaveRequest.countDocuments(filter),
+    LeaveRequest.find(filter)
+      .populate({
+        path: 'userId',
+        select: '_id fullName role'
+      })
+      .populate({
+        path: 'approvedByManager',
+        select: 'fullName'
+      })
+      .select('-__v')
+      .sort({ startDate: sortOrder })
+      .skip(skip)
+      .limit(limitNum)
+      .lean()
+  ]);
 
-    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+  const totalPages = Math.max(1, Math.ceil(total / limitNum));
 
-    return {
-      success: true,
-      total,
-      totalPages,
-      page: pageNum,
-      limit: limitNum,
-      data: leaveRequests
-    };
+  return {
+    success: true,
+    total,
+    totalPages,
+    page: pageNum,
+    limit: limitNum,
+    data: leaveRequests
+  };
   }
 
   /**

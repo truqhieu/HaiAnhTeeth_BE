@@ -21,10 +21,16 @@ class ComplaintService {
     const cleanTitle = title.trim();
     const cleanDescription = description.trim();
 
-    if (!/^[a-zA-ZÀ-ỹ0-9\s\-\_\:\.()'"]{2,}$/.test(cleanTitle)) {
-      throw new Error('Tiêu đề phản ánh không hợp lệ (ít nhất 2 ký tự, không chứa ký tự lạ).');
+    if (/[<>]/.test(cleanTitle)) {
+      throw new Error('Tiêu đề phản ánh không hợp lệ.');
     }
-    if (!/^[a-zA-ZÀ-ỹ0-9\s\-\_\:\.\,\/\!\?\;\'\"\(\)\n\r]+$/.test(cleanDescription) || cleanDescription.length < 5) {
+    if (cleanTitle.length < 2) {
+      throw new Error('Tiêu đề phản ánh không hợp lệ (ít nhất 2 ký tự).');
+    }
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả phản ánh không hợp lệ');
+    }
+    if (cleanDescription.length < 5) {
       throw new Error('Mô tả phản ánh không hợp lệ (ít nhất 5 ký tự).');
     }
 

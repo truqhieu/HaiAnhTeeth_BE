@@ -17,8 +17,8 @@ class consultationInformationService {
 
             const cleanName = fullName.trim();
 
-            if (!/^[a-zA-ZÀ-ỹ\s]+$/.test(cleanName)) {
-                throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
+            if (/[<>]/.test(cleanName)) {
+                throw new Error('Họ tên không được chứa ký tự < hoặc >');
             }
 
             if (cleanName.length < 2) {

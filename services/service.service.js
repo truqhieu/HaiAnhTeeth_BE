@@ -21,8 +21,8 @@ class ServiceService {
     }
 
     const cleanServiceName = serviceName.trim();
-    if (!/^[a-zA-ZÀ-ỹĐđ0-9\s]+$/.test(cleanServiceName)) {
-      throw new Error('Tên dịch vụ không hợp lệ');
+    if (/[<>]/.test(cleanServiceName)) {
+      throw new Error('Tên dịch vụ không được chứa ký tự < hoặc >');
     }
 
     if (cleanServiceName.length < 2) {
@@ -40,8 +40,8 @@ class ServiceService {
     }
 
     const cleanDescription = description.trim();
-    if (!/^[a-zA-ZÀ-ỹĐđ0-9\s,.\-\/!@#%&()'"?:]+$/.test(cleanDescription)) {
-      throw new Error('Mô tả dịch vụ không hợp lệ');
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả dịch vụ không được chứa ký tự < hoặc >');
     }
 
     if (cleanDescription.length < 4) {
@@ -429,8 +429,8 @@ class ServiceService {
       if (!cleanServiceName) {
         throw new Error('Tên dịch vụ không được bỏ trống');
       }
-      if (!/^[a-zA-ZÀ-ỹĐđ0-9\s]+$/.test(cleanServiceName)) {
-        throw new Error('Tên dịch vụ không hợp lệ');
+      if (/[<>]/.test(cleanServiceName)) {
+        throw new Error('Tên dịch vụ không được chứa ký tự < hoặc >');
       }
       if (cleanServiceName.length < 2) {
         throw new Error('Độ dài tên dịch vụ không hợp lệ (tối thiểu 2 ký tự)');
@@ -453,8 +453,8 @@ class ServiceService {
       if (!cleanDescription) {
         throw new Error('Mô tả dịch vụ không được để trống');
       }
-      if (!/^[a-zA-ZÀ-ỹĐđ0-9\s.,!]+$/.test(cleanDescription)) {
-        throw new Error('Mô tả dịch vụ không hợp lệ');
+      if (/[<>]/.test(cleanDescription)) {
+        throw new Error('Mô tả dịch vụ không được chứa ký tự < hoặc >');
       }
       if (cleanDescription.length < 4) {
         throw new Error('Độ dài mô tả dịch vụ không hợp lệ (tối thiểu 4 ký tự)');

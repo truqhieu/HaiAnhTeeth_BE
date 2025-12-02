@@ -24,8 +24,8 @@ class AdminService {
       throw new Error("Họ và tên không được để trống");
     }
 
-    if (!/^[\p{L}\s]+$/u.test(cleanFullName)) {
-      throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
+    if (/[<>]/.test(cleanFullName)) {
+      throw new Error('Họ tên không được chứa ký tự đặc biệt < hoặc >');
     }
 
     if (cleanFullName.length < 2) {
@@ -83,9 +83,6 @@ class AdminService {
       age--;
     }
 
-    // if (age < 18) {
-    //   throw new Error('Người dùng phải đủ 18 tuổi trở lên');
-    // }
 
     // Validate role
     if (!role || !ROLE_ACCOUNT.includes(role)) {
@@ -118,7 +115,7 @@ class AdminService {
 
     const cleanAddress = address.trim();
 
-    if (!/^[a-zA-ZÀ-ỹ0-9\s,.\-\/]+$/.test(cleanAddress)) {
+    if (/[<>]/.test(cleanAddress)) {
       throw new Error('Địa chỉ không hợp lệ');
     }
 
@@ -304,8 +301,8 @@ class AdminService {
         if (cleanFullName.length === 0) {
           throw new Error('Họ tên không được để trống');
         }
-        if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(cleanFullName)) {
-          throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
+        if (/[<>]/.test(cleanFullName)) {
+          throw new Error('Họ tên không được chứa ký tự đặc biệt < hoặc >');
         }
         if (cleanFullName.length < 2) {
           throw new Error('Độ dài họ và tên không hợp lệ (tối thiểu 2 ký tự)');
@@ -332,8 +329,8 @@ class AdminService {
         if (cleanAddress.length === 0) {
           updates[key] = null;
         } else {
-          if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanAddress)) {
-            throw new Error('Địa chỉ không hợp lệ');
+          if (/[<>]/.test(cleanAddress)) {
+            throw new Error('Địa chỉ không được chứa ký tự đặc biệt < hoặc >');
           }
           if (cleanAddress.length < 2) {
             throw new Error('Độ dài địa chỉ không hợp lệ (tối thiểu 2 ký tự)');

@@ -253,12 +253,14 @@ class PromotionService {
    * Lấy danh sách promotions
    */
   async getAllPromotions(filters = {}) {
-      const {
+  const {
     search,
     status,
     sort = 'desc',
     page = 1,
-    limit = 10
+    limit = 10,
+    startDate,      
+    endDate         
   } = filters;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -266,17 +268,34 @@ class PromotionService {
   const skip = (pageNum - 1) * limitNum;
 
   const filter = {};
+
   if (status) filter.status = status;
 
+  // 🔍 search theo tiêu đề + mô tả
   if (search && String(search).trim().length > 0) {
-    const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const trimmed = String(search).trim();
+    const safe = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(safe, 'i');
     filter.$or = [{ title: regex }, { description: regex }];
   }
 
+  // 📅 filter theo khoảng ngày startDate
+  if (startDate || endDate) {
+    filter.startDate = {};
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      filter.startDate.$gte = start;
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      filter.startDate.$lte = end;
+    }
+  }
+
   const sortOrder = sort.toLowerCase() === 'asc' ? 1 : -1;
 
-  // 🧠 Lấy danh sách promotion
   const [total, promotions] = await Promise.all([
     Promotion.countDocuments(filter),
     Promotion.find(filter)
@@ -286,7 +305,6 @@ class PromotionService {
       .lean()
   ]);
 
-  // ⚙️ Lấy danh sách service cho từng promotion (nếu applyToAll = false)
   const promotionIds = promotions.map(p => p._id);
   const promoServices = await PromotionServiceModel.find({
     promotionId: { $in: promotionIds }
@@ -294,7 +312,6 @@ class PromotionService {
     .populate('serviceId', 'serviceName price category status')
     .lean();
 
-  // Gom các service theo promotionId
   const promoServiceMap = {};
   for (const ps of promoServices) {
     const pid = ps.promotionId.toString();
@@ -302,7 +319,6 @@ class PromotionService {
     promoServiceMap[pid].push(ps.serviceId);
   }
 
-  // 🧾 Format lại kết quả cuối
   const formattedPromotions = promotions.map(promo => {
     const promoId = promo._id.toString();
     if (promo.applyToAll) {
@@ -327,7 +343,7 @@ class PromotionService {
     limit: limitNum,
     data: formattedPromotions
   };
-  }
+}
 
   /**
    * Lấy chi tiết promotion
