@@ -1747,6 +1747,183 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+    // ==========================================================================
+    // CASE 35: Tìm bác sĩ rảnh theo thời gian cụ thể
+    // ==========================================================================
+    logTest(35, 'Tìm bác sĩ rảnh vào 7h sáng mai - Có bác sĩ rảnh');
+    
+    logStep(1, 'User: "Có bác sĩ nào rảnh vào 7h sáng mai không"');
+    result = await sendMessage('Có bác sĩ nào rảnh vào 7h sáng mai không');
+    
+    const responseText35_step1 = result.message || result.response || '';
+    
+    // Bước 1: Nên hiển thị danh sách bác sĩ có lịch rảnh
+    const showsAvailableDoctors35 = (responseText35_step1.includes('bác sĩ') || responseText35_step1.includes('Bác sĩ')) &&
+                                     (responseText35_step1.includes('Hải') || 
+                                      responseText35_step1.includes('Hiếu') ||
+                                      responseText35_step1.includes('Dương') ||
+                                      responseText35_step1.includes('Thảo'));
+    
+    const mentions7AM35 = responseText35_step1.includes('7') || 
+                          responseText35_step1.includes('07:00') ||
+                          responseText35_step1.includes('7h') ||
+                          responseText35_step1.includes('7 giờ');
+    
+    const asksToChooseDoctor35 = responseText35_step1.includes('chọn') || 
+                                  responseText35_step1.includes('muốn');
+    
+    logResult(showsAvailableDoctors35, showsAvailableDoctors35 ? 
+      '✅ Bước 1: Hiển thị danh sách bác sĩ rảnh' : 
+      '❌ Bước 1: Không hiển thị bác sĩ rảnh');
+    
+    logResult(mentions7AM35, mentions7AM35 ? 
+      '✅ Bước 1: Nhắc đến thời gian 7h sáng' : 
+      '❌ Bước 1: Không nhắc đến thời gian');
+    
+    // Bước 2: User chọn bác sĩ
+    logStep(2, 'User chọn bác sĩ: "bác sĩ Hiếu"');
+    result = await sendMessage('bác sĩ Hiếu');
+    
+    const responseText35_step2 = result.message || result.response || '';
+    
+    // Sau khi chọn bác sĩ, nên yêu cầu chọn dịch vụ
+    const confirmsDoctorSelection35 = responseText35_step2.includes('Hiếu');
+    const showsServiceList35_step2 = responseText35_step2.includes('1.') && 
+                                      responseText35_step2.includes('dịch vụ');
+    
+    logResult(confirmsDoctorSelection35, confirmsDoctorSelection35 ? 
+      '✅ Bước 2: Xác nhận chọn bác sĩ Hiếu' : 
+      '❌ Bước 2: Không xác nhận bác sĩ');
+    
+    logResult(showsServiceList35_step2, showsServiceList35_step2 ? 
+      '✅ Bước 2: Hiển thị danh sách dịch vụ' : 
+      '❌ Bước 2: Không hiển thị dịch vụ');
+    
+    // Bước 3: User chọn dịch vụ
+    logStep(3, 'User chọn dịch vụ: "Làm sạch răng"');
+    result = await sendMessage('Làm sạch răng');
+    
+    const responseText35_step3 = result.message || result.response || '';
+    
+    // Kiểm tra 2 trường hợp:
+    // TH1: Đã có lịch vào 9h sáng mai → Thông báo conflict + hiển thị slot khả dụng
+    const hasConflictNotification35 = responseText35_step3.includes('đã có lịch') || 
+                                       responseText35_step3.includes('đã có') ||
+                                       responseText35_step3.includes('Bạn đã');
+    
+    const showsAlternativeSlots35 = responseText35_step3.includes('khả dụng') || 
+                                     responseText35_step3.includes('Buổi sáng') ||
+                                     responseText35_step3.includes('Buổi chiều');
+    
+    // TH2: Chưa có lịch → Hiển thị confirmation
+    const showsConfirmation35 = responseText35_step3.includes('Xác nhận') || 
+                                 responseText35_step3.includes('xác nhận') ||
+                                 (responseText35_step3.includes('09:00') && 
+                                  responseText35_step3.includes('Hiếu') &&
+                                  responseText35_step3.includes('Làm sạch răng'));
+    
+    const validResponse35 = hasConflictNotification35 || showsConfirmation35;
+    
+    if (hasConflictNotification35) {
+      logResult(true, '✅ Bước 3: Phát hiện conflict - Thông báo đã có lịch');
+      logResult(showsAlternativeSlots35, showsAlternativeSlots35 ? 
+        '✅ Bước 3: Hiển thị slot khả dụng thay thế' : 
+        '❌ Bước 3: Không hiển thị slot thay thế');
+    } else if (showsConfirmation35) {
+      logResult(true, '✅ Bước 3: Không có conflict - Hiển thị confirmation');
+    } else {
+      logResult(false, '❌ Bước 3: Response không hợp lệ');
+    }
+    
+    const testPassed35 = showsAvailableDoctors35 && 
+                          mentions7AM35 &&
+                          confirmsDoctorSelection35 && 
+                          showsServiceList35_step2 &&
+                          validResponse35 &&
+                          (hasConflictNotification35 ? showsAlternativeSlots35 : true);
+    
+    if (testPassed35) {
+      log('  📋 Flow hoàn chỉnh:', colors.cyan);
+      log('    Bước 1: Tìm bác sĩ rảnh vào 7h sáng → Hiển thị danh sách', colors.yellow);
+      log('    Bước 2: Chọn bác sĩ → Hiển thị dịch vụ', colors.yellow);
+      log('    Bước 3: Chọn dịch vụ → Kiểm tra conflict', colors.yellow);
+      if (hasConflictNotification35) {
+        log('    → Có conflict: Thông báo + hiển thị slot khả dụng', colors.yellow);
+      } else {
+        log('    → Không conflict: Hiển thị confirmation', colors.yellow);
+      }
+    } else {
+      log('  ⚠️ Response preview (Step 1):', colors.red);
+      log(`    ${responseText35_step1.substring(0, 150)}...`, colors.yellow);
+      log('  ⚠️ Response preview (Step 2):', colors.red);
+      log(`    ${responseText35_step2.substring(0, 150)}...`, colors.yellow);
+      log('  ⚠️ Response preview (Step 3):', colors.red);
+      log(`    ${responseText35_step3.substring(0, 150)}...`, colors.yellow);
+    }
+    
+    recordTestResult(35, 'Tìm bác sĩ rảnh vào 7h sáng - Có bác sĩ rảnh', testPassed35,
+      testPassed35 ? 
+        'Find available doctors at 7h → Select doctor & service → Validation' : 
+        `Failed: doctors=${showsAvailableDoctors35}, time=${mentions7AM35}, confirm=${confirmsDoctorSelection35}, services=${showsServiceList35_step2}, valid=${validResponse35}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 36: Tìm bác sĩ rảnh vào 14h chiều - KHÔNG CÓ bác sĩ rảnh
+    // ==========================================================================
+    logTest(36, 'Tìm bác sĩ rảnh vào 14h chiều mai - Không có bác sĩ rảnh');
+    
+    logStep(1, 'User: "Có bác sĩ nào rảnh vào 14h chiều mai không"');
+    result = await sendMessage('Có bác sĩ nào rảnh vào 14h chiều mai không');
+    
+    const responseText36 = result.message || result.response || '';
+    
+    // Kiểm tra: Nên thông báo KHÔNG CÓ bác sĩ rảnh vào 9h sáng
+    const notifiesNoDoctorsAvailable36 = responseText36.includes('Không có bác sĩ') || 
+                                          responseText36.includes('không có bác sĩ') ||
+                                          responseText36.includes('Không có ai');
+    
+    const mentions14PM36 = responseText36.includes('14') || 
+                           responseText36.includes('14:00') ||
+                           (responseText36.includes('2') && responseText36.includes('chiều'));
+    
+    const suggestsChooseDifferentTime36 = responseText36.includes('chọn thời gian khác') || 
+                                           responseText36.includes('thời gian khác') ||
+                                           responseText36.includes('Vui lòng');
+    
+    logResult(notifiesNoDoctorsAvailable36, notifiesNoDoctorsAvailable36 ? 
+      '✅ Thông báo không có bác sĩ rảnh' : 
+      '❌ Không thông báo không có bác sĩ rảnh');
+    
+    logResult(mentions14PM36, mentions14PM36 ? 
+      '✅ Nhắc đến thời gian 14h chiều' : 
+      '❌ Không nhắc đến thời gian');
+    
+    logResult(suggestsChooseDifferentTime36, suggestsChooseDifferentTime36 ? 
+      '✅ Đề xuất chọn thời gian khác' : 
+      '❌ Không đề xuất chọn thời gian khác');
+    
+    const testPassed36 = notifiesNoDoctorsAvailable36 && 
+                          mentions14PM36 &&
+                          suggestsChooseDifferentTime36;
+    
+    if (testPassed36) {
+      log('  📋 Flow hoàn chỉnh:', colors.cyan);
+      log('    User hỏi bác sĩ rảnh vào 14h chiều mai', colors.yellow);
+      log('    → AI thông báo: Không có bác sĩ rảnh', colors.yellow);
+      log('    → AI đề xuất: Chọn thời gian khác', colors.yellow);
+    } else {
+      log('  ⚠️ Response preview:', colors.red);
+      log(`    ${responseText36.substring(0, 200)}...`, colors.yellow);
+    }
+    
+    recordTestResult(36, 'Tìm bác sĩ rảnh vào 14h chiều - Không có bác sĩ rảnh', testPassed36,
+      testPassed36 ? 
+        'Correctly notifies when no doctors are available at requested time' : 
+        `Failed: notifies=${notifiesNoDoctorsAvailable36}, mentions_time=${mentions14PM36}, suggests_different_time=${suggestsChooseDifferentTime36}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
 
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);

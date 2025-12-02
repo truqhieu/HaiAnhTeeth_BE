@@ -938,6 +938,107 @@ class AIBookingLangchainService {
       },
     });
 
+    // ⭐ NEW (Case 35): Tool to find available doctors by time
+    const findAvailableDoctorsByTimeTool = new DynamicStructuredTool({
+      name: 'find_available_doctors_by_time',
+      description: `Tìm bác sĩ có lịch rảnh vào thời gian cụ thể.
+      GỌI TOOL NÀY KHI: User hỏi "Có bác sĩ nào rảnh vào [thời gian]"
+      SAU KHI GỌI: Hiển thị danh sách bác sĩ rảnh và yêu cầu user chọn.`,
+      schema: z.object({
+        time: z.string().describe('Thời gian (định dạng HH:mm, ví dụ: 09:00)'),
+        date: z.string().describe('Ngày (định dạng YYYY-MM-DD)'),
+      }),
+      func: async ({ time, date }) => {
+        try {
+          console.log(`🔧 [Tool] find_available_doctors_by_time called with: { time: ${time}, date: ${date} }`);
+          
+          // ⭐ FIX: Get all active doctors from User model (not Doctor model)
+          // Doctors are stored as Users with role='Doctor'
+          const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+            .select('_id fullName specialization email phoneNumber')
+            .lean();
+          
+          if (!doctors || doctors.length === 0) {
+            return JSON.stringify({
+              success: false,
+              found: false,
+              message: 'Không tìm thấy bác sĩ nào trong hệ thống.'
+            });
+          }
+          
+          console.log(`🔍 [Tool] Found ${doctors.length} active doctors to check`);
+          
+          // Check each doctor's availability
+          const availableDoctors = [];
+          
+          for (const doctor of doctors) {
+            // Check if doctor has leave on this date using leaveRequestService
+            const hasLeave = await leaveRequestService.isDoctorOnLeave(doctor._id.toString(), date);
+            
+            if (hasLeave) {
+              console.log(`⏭️ [Tool] Doctor ${doctor.fullName} has leave on ${date}`);
+              continue; // Skip this doctor
+            }
+            
+            // Check if doctor has appointment at this time
+            const [hour, minute] = time.split(':').map(Number);
+            const requestedMinutes = hour * 60 + minute;
+            
+            const appointments = await Appointment.find({
+              doctorId: doctor._id,
+              date: date,
+              status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] }
+            }).lean();
+            
+            let hasConflict = false;
+            for (const apt of appointments) {
+              const [aptHour, aptMinute] = apt.time.split(':').map(Number);
+              const aptStartMinutes = aptHour * 60 + aptMinute;
+              const aptEndMinutes = aptStartMinutes + (apt.durationMinutes || 30);
+              
+              // Check if requested time overlaps with appointment
+              if (requestedMinutes >= aptStartMinutes && requestedMinutes < aptEndMinutes) {
+                hasConflict = true;
+                console.log(`⏭️ [Tool] Doctor ${doctor.fullName} has appointment at ${apt.time}`);
+                break;
+              }
+            }
+            
+            if (!hasConflict) {
+              availableDoctors.push({
+                id: doctor._id.toString(),
+                name: doctor.fullName,
+                specialization: doctor.specialization || '',
+                email: doctor.email,
+                phoneNumber: doctor.phoneNumber
+              });
+            }
+          }
+          
+          if (availableDoctors.length === 0) {
+            return JSON.stringify({
+              success: true,
+              found: false,
+              message: `Không có bác sĩ nào rảnh vào ${time} ngày ${date}.`
+            });
+          }
+          
+          console.log(`✅ [Tool] Found ${availableDoctors.length} available doctors`);
+          return JSON.stringify({
+            success: true,
+            found: true,
+            doctors: availableDoctors,
+            time: time,
+            date: date
+          });
+          
+        } catch (error) {
+          console.error('❌ [Tool] find_available_doctors_by_time error:', error);
+          return JSON.stringify({ success: false, error: error.message });
+        }
+      },
+    });
+
     return [
       getServicesTool,
       findServiceByNameTool,
@@ -945,6 +1046,7 @@ class AIBookingLangchainService {
       findDoctorByNameTool,
       getAvailableSlotsTool,
       createAppointmentTool,
+      findAvailableDoctorsByTimeTool, // ⭐ NEW tool
     ];
   }
 
@@ -1701,6 +1803,28 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       results.shouldShowServices = true;
     }
     
+    // ⭐ NEW (Case 35): Detect "find available doctors by time" pattern
+    // Pattern: "Có bác sĩ nào rảnh vào [time]"
+    const findDoctorByTimePatterns = [
+      /có\s+bác\s*sĩ\s+(?:nào|ai)\s+rảnh\s+vào\s+(.+?)(?:\s+không|\?|$)/iu,
+      /bác\s*sĩ\s+(?:nào|ai)\s+(?:có\s+)?rảnh\s+(?:vào|lúc)\s+(.+?)(?:\s+không|\?|$)/iu,
+    ];
+    
+    for (const pattern of findDoctorByTimePatterns) {
+      const match = userPrompt.match(pattern);
+      if (match && match[1]) {
+        const timePhrase = match[1].trim();
+        console.log(`🔍 [Pre-process] Detected "find doctor by time" request: "${timePhrase}"`);
+        
+        results.findDoctorByTime = true;
+        results.requestedTimePhrase = timePhrase;
+        
+        // Note: We'll parse the time phrase and call the tool in the main chatWithAI logic
+        // This is because we need to handle date parsing first (e.g., "mai" -> tomorrow's date)
+        break;
+      }
+    }
+    
     return results;
   }
 
@@ -2124,6 +2248,85 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             intermediateSteps: result.intermediateSteps,
             needsMoreInfo: true
           };
+        }
+
+        // ⭐ NEW (Case 35): Handle "find doctor by time" request
+        if (preProcessedData.findDoctorByTime && preProcessedData.requestedTimePhrase) {
+          console.log(`🔍 [Fallback] Handling "find doctor by time" request: "${preProcessedData.requestedTimePhrase}"`);
+          
+          try {
+            // Parse time phrase to extract time and date
+            // Examples: "9h sáng mai", "2 giờ chiều hôm nay", "09:00 ngày mai"
+            const timePhrase = preProcessedData.requestedTimePhrase.toLowerCase();
+            
+            // Extract time
+            let timeStr = null;
+            const timeMatch = timePhrase.match(/(\d{1,2})[h:]?(\d{2})?/);
+            if (timeMatch) {
+              let hour = parseInt(timeMatch[1]);
+              const minute = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+              
+              // Adjust for afternoon/evening
+              if (timePhrase.includes('chiều') && hour < 12) {
+                hour += 12;
+              } else if (timePhrase.includes('tối') && hour < 12) {
+                hour += 12;
+              }
+              
+              timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+            }
+            
+            // Extract date (use existing date parsing logic)
+            let dateStr = updatedContext.date || DateHelper.getTodayVN();
+            if (timePhrase.includes('mai') || timePhrase.includes('ngày mai')) {
+              dateStr = DateHelper.getTomorrowVN();
+            } else if (timePhrase.includes('kia') || timePhrase.includes('ngày kia')) {
+              dateStr = DateHelper.getDayAfterTomorrowVN();
+            }
+            
+            if (!timeStr) {
+              finalResponse = 'Xin lỗi, tôi không hiểu thời gian bạn yêu cầu. Vui lòng nhập lại theo định dạng "9h sáng" hoặc "14:00".';
+            } else {
+              console.log(`📅 [Fallback] Parsed time: ${timeStr}, date: ${dateStr}`);
+              
+              // Call find_available_doctors_by_time tool
+              const result = await tools[6].func({ time: timeStr, date: dateStr });
+              const parsed = JSON.parse(result);
+              
+              if (parsed.success && parsed.found && parsed.doctors && parsed.doctors.length > 0) {
+                finalResponse = `Dưới đây là một số bác sĩ có lịch rảnh vào ${timeStr} ngày ${dateStr}:`;
+                parsed.doctors.forEach((doctor, idx) => {
+                  finalResponse += `\n${idx + 1}. ${doctor.name}`;
+                  if (doctor.specialization) {
+                    finalResponse += ` - ${doctor.specialization}`;
+                  }
+                });
+                finalResponse += '\n\nBạn muốn chọn bác sĩ nào?';
+                
+                // Save requested time to context for later use
+                this.updateConversationContext(patientUserId, {
+                  time: timeStr,
+                  date: dateStr
+                });
+              } else {
+                finalResponse = parsed.message || `Không có bác sĩ nào rảnh vào ${timeStr} ngày ${dateStr}. Vui lòng chọn thời gian khác.`;
+              }
+            }
+            
+            return {
+              success: true,
+              response: finalResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: finalResponse },
+              ],
+              needsMoreInfo: true
+            };
+          } catch (error) {
+            console.error('❌ [Fallback] Error handling find doctor by time:', error);
+            finalResponse = 'Xin lỗi, có lỗi xảy ra khi tìm bác sĩ rảnh. Vui lòng thử lại.';
+          }
         }
 
         // ⭐ FIX Case 25: Handle doctor not found explicitly
