@@ -138,7 +138,7 @@ async function runTests() {
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
     // ==========================================================================
-    // CASE 3: Xử lý thời gian tương đối (tuần sau, tuần kia)
+    // CASE 3: Xử lý thời gian tương đối (tuần sau, tuần kia) (failed)
     // ==========================================================================
     logTest(3, 'Xử lý thời gian tương đối (tuần sau, thứ 3 tuần sau)');
     
@@ -374,9 +374,7 @@ async function runTests() {
     // ==========================================================================
     // CASE 11: Thời gian đã qua trong ngày hiện tại
     // ==========================================================================
-    // ==========================================================================
-    // CASE 11: Thời gian đã qua trong ngày hiện tại
-    // ==========================================================================
+
     logTest(11, 'Thời gian đã qua trong ngày hiện tại');
     
     const currentHour11 = new Date().getHours();
@@ -386,8 +384,8 @@ async function runTests() {
       logResult(true, 'Skipped (Time condition not met)');
       recordTestResult(11, 'Thời gian đã qua trong ngày', true, 'Skipped - Too early in the day');
     } else {
-      logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ Hải vào 8 giờ hôm nay"');
-      result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Hải vào 8 giờ hôm nay');
+      logStep(1, 'User: "Tôi muốn đặt lịch vào 2 giờ chiều hôm nay"');
+      result = await sendMessage('Tôi muốn đặt lịch vào 2 giờ chiều hôm nay');
       
       const rejectsPastTime = result.message.includes('không khả dụng') || 
                               result.message.includes('đã qua') ||
@@ -515,25 +513,29 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+
     // ==========================================================================
     // CASE 15: Filter services khi user nói "khám răng"
     // ==========================================================================
     logTest(15, 'Lọc dịch vụ nha khoa khi user nói "khám răng"');
     
-    logStep(1, 'User: "Tôi muốn đặt lịch khám răng với bác sĩ Hải"');
-    result = await sendMessage('Tôi muốn đặt lịch khám răng với bác sĩ Hải');
+    logStep(1, 'User: "Tôi muốn đặt lịch khám răng với bác sĩ hiếu vào hôm nay"');
+    result = await sendMessage('Tôi muốn đặt lịch khám răng với bác sĩ hiếu vào hôm nay');
     
     const responseText15 = result.message || result.response || '';
     
-    // Nên hiển thị dịch vụ nha khoa (KHÔNG bao gồm "Khám tổng quát")
-    const showsDentalServices = responseText15.includes('Làm sạch răng') || 
-                                 responseText15.includes('Nhổ răng') ||
-                                 responseText15.includes('Bọc răng');
+    // Nên hiển thị TẤT CẢ dịch vụ liên quan đến răng (KHÔNG bao gồm "Khám tổng quát")
+    // Check for various dental services
+    const hasDentalServices = responseText15.includes('răng') || 
+                               responseText15.includes('Răng');
+    const showsMultipleDentalServices = (responseText15.match(/răng/gi) || []).length >= 3; // At least 3 dental services
     const excludesGeneralCheckup = !responseText15.includes('Khám tổng quát');
-    const correctFiltering = showsDentalServices && excludesGeneralCheckup;
+    // ⭐ NEW: Should NOT show "Không tìm thấy" for general dental request
+    const noNotFoundMessage = !responseText15.includes('Không tìm thấy');
+    const correctFiltering = hasDentalServices && showsMultipleDentalServices && excludesGeneralCheckup && noNotFoundMessage;
     
     logResult(correctFiltering, correctFiltering ? 
-      'Hiển thị dịch vụ nha khoa, loại trừ "Khám tổng quát"' : 
+      'Hiển thị TẤT CẢ dịch vụ nha khoa (răng), loại trừ "Khám tổng quát", KHÔNG báo "Không tìm thấy"' : 
       'Lọc không đúng');
     
     recordTestResult(15, 'Lọc dịch vụ nha khoa cho "khám răng"', correctFiltering,
@@ -1476,6 +1478,272 @@ async function runTests() {
           `Unexpected result: ${responseText29_3.substring(0, 100)}`);
       }
     }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 30: Hiển thị TẤT CẢ dịch vụ - Không truncate danh sách
+    // ==========================================================================
+    logTest(30, 'Hiển thị TẤT CẢ dịch vụ - Không có "... và X dịch vụ khác"');
+    
+    logStep(1, 'User: "Hiện tại có những dịch vụ gì nào"');
+    result = await sendMessage('Hiện tại có những dịch vụ gì nào');
+    
+    const responseText30 = result.message || result.response || '';
+    
+    // Kiểm tra xem có hiển thị danh sách dịch vụ không
+    const showsServiceList30 = responseText30.includes('1.') && responseText30.includes('dịch vụ');
+    
+    // Kiểm tra xem có bị truncate không (KHÔNG nên có "... và X dịch vụ khác")
+    const noTruncation = !responseText30.includes('dịch vụ khác') && 
+                         !responseText30.includes('... và');
+    
+    // Đếm số dịch vụ được hiển thị
+    const serviceMatches = responseText30.match(/^\d+\.\s/gm);
+    const displayedServiceCount = serviceMatches ? serviceMatches.length : 0;
+    
+    // Lấy tổng số dịch vụ từ database để so sánh
+    const totalServices = await Service.countDocuments({ status: 'Active' });
+    
+    logResult(showsServiceList30, showsServiceList30 ? 
+      `✅ Hiển thị danh sách dịch vụ (${displayedServiceCount} dịch vụ)` : 
+      '❌ Không hiển thị danh sách dịch vụ');
+    
+    logResult(noTruncation, noTruncation ? 
+      '✅ Không có truncation - Hiển thị đầy đủ' : 
+      '❌ Có truncation "... và X dịch vụ khác"');
+    
+    // Kiểm tra xem số lượng hiển thị có khớp với database không
+    const countMatches = displayedServiceCount === totalServices;
+    logResult(countMatches, countMatches ? 
+      `✅ Số lượng khớp: ${displayedServiceCount}/${totalServices} dịch vụ` : 
+      `⚠️ Số lượng không khớp: ${displayedServiceCount}/${totalServices} dịch vụ`);
+    
+    const testPassed30 = showsServiceList30 && noTruncation && (displayedServiceCount >= totalServices - 1); // Allow 1 service difference for inactive
+    
+    if (testPassed30) {
+      log('  📋 Response hiển thị TẤT CẢ dịch vụ:', colors.cyan);
+      log(`    - Tổng số dịch vụ trong DB: ${totalServices}`, colors.yellow);
+      log(`    - Số dịch vụ được hiển thị: ${displayedServiceCount}`, colors.yellow);
+      log(`    - Không có message "... và X dịch vụ khác"`, colors.yellow);
+    } else {
+      log('  ⚠️ Response preview:', colors.red);
+      log(`    ${responseText30.substring(0, 500)}...`, colors.yellow);
+    }
+    
+    recordTestResult(30, 'Hiển thị TẤT CẢ dịch vụ - No truncation', testPassed30,
+      testPassed30 ? 
+        `All ${displayedServiceCount} services displayed without truncation` : 
+        `Truncation detected or count mismatch: ${displayedServiceCount}/${totalServices}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 31: Xử lý yêu cầu dịch vụ không có trong danh mục
+    // ==========================================================================
+    logTest(31, 'Xử lý yêu cầu dịch vụ không có trong danh mục (Tim mạch)');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch khám tim mạch với bác sĩ Hải"');
+    result = await sendMessage('Tôi muốn đặt lịch khám tim mạch với bác sĩ Hải');
+    
+    const responseText31 = result.message || result.response || '';
+    
+    // Kiểm tra xem có thông báo không tìm thấy dịch vụ
+    const notifiesServiceNotFound = responseText31.includes('Không tìm thấy') || 
+                                     responseText31.includes('không có') ||
+                                     responseText31.includes('không tồn tại') ||
+                                     responseText31.toLowerCase().includes('tim mạch');
+    
+    // Kiểm tra xem có hiển thị danh sách dịch vụ thay thế
+    const showsServiceList31 = responseText31.includes('1.') && 
+                               (responseText31.includes('dịch vụ') || responseText31.includes('Dịch vụ'));
+    
+    // Kiểm tra xem có đề xuất chọn lại dịch vụ
+    const suggestsAlternative = responseText31.includes('chọn') || 
+                                 responseText31.includes('Vui lòng') ||
+                                 responseText31.includes('danh sách');
+    
+    // Đếm số dịch vụ được hiển thị
+    const serviceMatches31 = responseText31.match(/^\d+\.\s/gm);
+    const displayedCount31 = serviceMatches31 ? serviceMatches31.length : 0;
+    
+    // Kiểm tra xem có truncate không (KHÔNG nên có)
+    const noTruncation31 = !responseText31.includes('dịch vụ khác') && 
+                           !responseText31.includes('... và');
+    
+    logResult(notifiesServiceNotFound, notifiesServiceNotFound ? 
+      '✅ Thông báo không tìm thấy dịch vụ "Tim mạch"' : 
+      '❌ Không thông báo dịch vụ không tồn tại');
+    
+    logResult(showsServiceList31, showsServiceList31 ? 
+      `✅ Hiển thị danh sách dịch vụ thay thế (${displayedCount31} dịch vụ)` : 
+      '❌ Không hiển thị danh sách dịch vụ');
+    
+    logResult(noTruncation31, noTruncation31 ? 
+      '✅ Hiển thị đầy đủ tất cả dịch vụ (không truncate)' : 
+      '❌ Có truncation trong danh sách');
+    
+    logResult(suggestsAlternative, suggestsAlternative ? 
+      '✅ Đề xuất người dùng chọn lại' : 
+      '❌ Không có đề xuất');
+    
+    const testPassed31 = notifiesServiceNotFound && showsServiceList31 && noTruncation31 && suggestsAlternative;
+    
+    if (testPassed31) {
+      log('  📋 Response bao gồm:', colors.cyan);
+      log('    - Thông báo: "Không tìm thấy dịch vụ Tim mạch"', colors.yellow);
+      log('    - Hiển thị danh sách TẤT CẢ dịch vụ có sẵn', colors.yellow);
+      log(`    - Tổng số dịch vụ hiển thị: ${displayedCount31}`, colors.yellow);
+      log('    - Đề xuất: "Vui lòng chọn dịch vụ từ danh sách"', colors.yellow);
+    } else {
+      log('  ⚠️ Response preview:', colors.red);
+      log(`    ${responseText31.substring(0, 500)}...`, colors.yellow);
+    }
+    
+    recordTestResult(31, 'Xử lý dịch vụ không tồn tại - Hiển thị danh sách', testPassed31,
+      testPassed31 ? 
+        `Service not found handled correctly, showed ${displayedCount31} alternatives` : 
+        `Failed: notFound=${notifiesServiceNotFound}, showsList=${showsServiceList31}, noTrunc=${noTruncation31}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 32: Bác sĩ nghỉ phép VÀ thời gian đã qua
+    // ==========================================================================
+
+    logTest(32, 'Bác sĩ nghỉ phép VÀ thời gian đã qua - Validate cả hai');
+    
+    const currentHour32 = new Date().getHours();
+    
+    if (currentHour32 < 9) {
+      log(`  ⚠️ Skipping test: Current time (${currentHour32}h) is too early to test past time.`, colors.yellow);
+      logResult(true, 'Skipped (Time condition not met)');
+      recordTestResult(32, 'Bác sĩ nghỉ phép + Thời gian đã qua', true, 'Skipped - Too early in the day');
+    } else {
+      // Bác sĩ Thao nghỉ phép hôm nay, và 2 giờ chiều đã qua
+      logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ Thao vào 2 giờ chiều hôm nay"');
+      result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Thao vào 2 giờ chiều hôm nay');
+      
+      // Hệ thống nên thông báo bác sĩ nghỉ phép
+      const notifiesDoctorOnLeave = result.message.includes('nghỉ phép') || 
+                                     result.message.includes('on leave');
+      
+      logResult(notifiesDoctorOnLeave, notifiesDoctorOnLeave ? 
+        'Thông báo bác sĩ nghỉ phép' : 
+        'Không thông báo bác sĩ nghỉ phép');
+      
+      if (notifiesDoctorOnLeave) {
+        // User chọn bác sĩ khác
+        logStep(2, 'User: "bác sĩ Hiếu"');
+        result = await sendMessage('bác sĩ Hiếu');
+        
+        // ⭐ QUAN TRỌNG: Hệ thống phải kiểm tra thời gian đã qua
+        // Không được hỏi về dịch vụ nếu thời gian đã qua!
+        const rejectsPastTime = result.message.includes('không khả dụng') || 
+                                result.message.includes('đã qua') ||
+                                result.message.includes('tương lai') ||
+                                result.message.includes('quá khứ');
+        
+        const asksForService = result.message.includes('dịch vụ') && 
+                               result.message.includes('chọn');
+        
+        // Test PASS nếu: Từ chối thời gian đã qua HOẶC (chấp nhận nhưng không hỏi dịch vụ)
+        // Test FAIL nếu: Hỏi về dịch vụ mà không kiểm tra thời gian
+        const testPassed32 = rejectsPastTime || !asksForService;
+        
+        logResult(testPassed32, testPassed32 ? 
+          'Kiểm tra thời gian đã qua sau khi đổi bác sĩ ✅' : 
+          'Bỏ qua kiểm tra thời gian đã qua ❌');
+        
+        recordTestResult(32, 'Bác sĩ nghỉ phép + Thời gian đã qua', testPassed32,
+          testPassed32 ? 
+            'Validates past time after doctor change' : 
+            'Skips past time validation after doctor change');
+      } else {
+        recordTestResult(32, 'Bác sĩ nghỉ phép + Thời gian đã qua', false,
+          'Doctor on leave not detected');
+      }
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 34: Bác sĩ nghỉ phép + Dịch vụ không tồn tại (2-step validation)
+    // ==========================================================================
+    logTest(34, 'Xử lý khi bác sĩ nghỉ phép VÀ dịch vụ không tồn tại (2 bước)');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch khám tim mạch với bác sĩ Hải vào hôm nay"');
+    result = await sendMessage('Tôi muốn đặt lịch khám tim mạch với bác sĩ Hải vào hôm nay');
+    
+    const responseText34_step1 = result.message || result.response || '';
+    
+    // BƯỚC 1: Nên thông báo bác sĩ nghỉ phép trước
+    const notifiesDoctorOnLeave34 = responseText34_step1.includes('nghỉ phép') || 
+                                     responseText34_step1.includes('nghỉ');
+    
+    const showsAlternativeDoctors34 = responseText34_step1.includes('Hiếu') || 
+                                       responseText34_step1.includes('Dương') ||
+                                       responseText34_step1.includes('Thảo');
+    
+    logResult(notifiesDoctorOnLeave34, notifiesDoctorOnLeave34 ? 
+      '✅ Bước 1: Thông báo bác sĩ nghỉ phép' : 
+      '❌ Bước 1: Không thông báo bác sĩ nghỉ phép');
+    
+    logResult(showsAlternativeDoctors34, showsAlternativeDoctors34 ? 
+      '✅ Bước 1: Hiển thị danh sách bác sĩ thay thế' : 
+      '❌ Bước 1: Không hiển thị bác sĩ thay thế');
+    
+    // BƯỚC 2: User chọn bác sĩ khác (Hiếu)
+    logStep(2, 'User chọn bác sĩ khác: "bác sĩ Hiếu"');
+    result = await sendMessage('bác sĩ Hiếu');
+    
+    const responseText34_step2 = result.message || result.response || '';
+    
+    // Sau khi chọn bác sĩ mới, nên kiểm tra dịch vụ
+    const notifiesServiceNotFound34 = responseText34_step2.includes('Không tìm thấy dịch vụ') ||
+                                       responseText34_step2.includes('Không tìm thấy') ||
+                                       responseText34_step2.toLowerCase().includes('tim mạch');
+    
+    const showsServiceList34 = responseText34_step2.includes('1.') && 
+                                (responseText34_step2.includes('dịch vụ') || 
+                                 responseText34_step2.includes('Dịch vụ'));
+    
+    const asksToChooseService34 = responseText34_step2.includes('chọn') || 
+                                   responseText34_step2.includes('Vui lòng');
+    
+    logResult(notifiesServiceNotFound34, notifiesServiceNotFound34 ? 
+      '✅ Bước 2: Thông báo dịch vụ "tim mạch" không tồn tại' : 
+      '❌ Bước 2: Không thông báo dịch vụ không tồn tại');
+    
+    logResult(showsServiceList34, showsServiceList34 ? 
+      '✅ Bước 2: Hiển thị danh sách dịch vụ' : 
+      '❌ Bước 2: Không hiển thị danh sách dịch vụ');
+    
+    logResult(asksToChooseService34, asksToChooseService34 ? 
+      '✅ Bước 2: Yêu cầu chọn dịch vụ' : 
+      '❌ Bước 2: Không yêu cầu chọn dịch vụ');
+    
+    const testPassed34 = notifiesDoctorOnLeave34 && 
+                          showsAlternativeDoctors34 && 
+                          notifiesServiceNotFound34 &&
+                          showsServiceList34 &&
+                          asksToChooseService34;
+    
+    if (testPassed34) {
+      log('  📋 Flow hoàn chỉnh:', colors.cyan);
+      log('    Bước 1: Thông báo bác sĩ nghỉ phép → Hiển thị bác sĩ thay thế', colors.yellow);
+      log('    Bước 2: Thông báo dịch vụ không tồn tại → Hiển thị danh sách dịch vụ', colors.yellow);
+    } else {
+      log('  ⚠️ Response preview (Step 1):', colors.red);
+      log(`    ${responseText34_step1.substring(0, 200)}...`, colors.yellow);
+      log('  ⚠️ Response preview (Step 2):', colors.red);
+      log(`    ${responseText34_step2.substring(0, 200)}...`, colors.yellow);
+    }
+    
+    recordTestResult(34, 'Bác sĩ nghỉ phép + Dịch vụ không tồn tại (2-step)', testPassed34,
+      testPassed34 ? 
+        '2-step validation: doctor leave → service not found' : 
+        `Failed: doctorLeave=${notifiesDoctorOnLeave34}, alternatives=${showsAlternativeDoctors34}, serviceNotFound=${notifiesServiceNotFound34}, serviceList=${showsServiceList34}`);
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 

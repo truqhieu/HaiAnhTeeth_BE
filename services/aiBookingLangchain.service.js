@@ -758,8 +758,11 @@ class AIBookingLangchainService {
           }
 
           // Parse date and time
-          const searchDate = new Date(date);
-          searchDate.setHours(0, 0, 0, 0);
+          // ⭐ FIX: Parse date string as UTC to avoid timezone shift
+          // Input format: "YYYY-MM-DD" (e.g., "2025-12-03")
+          // We need to create a Date object at midnight UTC for this date
+          const [year, month, day] = date.split('-').map(Number);
+          const searchDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 
           // Find doctor schedule for this date (don't filter by status - match get_available_slots behavior)
           const schedules = await DoctorSchedule.find({
@@ -841,12 +844,14 @@ class AIBookingLangchainService {
           const [startHour, startMinute] = time.split(':').map(Number);
           
           // ⭐ FIX: Convert VN time (UTC+7) to UTC for database storage
-          // User input is in VN timezone, we need to subtract 7 hours to get UTC time
-          // Example: User selects 07:50 VN → Store as 00:50 UTC → Display as 07:50 VN ✅
-          const startTime = new Date(searchDate);
-          startTime.setUTCHours(startHour - 7, startMinute, 0, 0);
+          // User input is in VN timezone (e.g., "07:00" means 07:00 in Vietnam)
+          // Vietnam is UTC+7, so 07:00 VN = 00:00 UTC
+          // We need to create a UTC timestamp for the same calendar date + time in Vietnam
+          // Example: 2025-12-03 07:00 VN → 2025-12-03 00:00 UTC
+          const [yearTime, monthTime, dayTime] = date.split('-').map(Number);
+          const startTime = new Date(Date.UTC(yearTime, monthTime - 1, dayTime, startHour - 7, startMinute, 0, 0));
           
-          console.log(`🔧 [Tool] create_appointment: Converting VN time ${time} to UTC: ${startTime.toISOString()}`);
+          console.log(`🔧 [Tool] create_appointment: Converting VN time ${time} on ${date} to UTC: ${startTime.toISOString()}`);
 
           const endTime = new Date(startTime);
           endTime.setMinutes(endTime.getMinutes() + service.durationMinutes);
@@ -1425,8 +1430,12 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
     
     // Detect service mention (support Vietnamese)
     const servicePatterns = [
-      /dịch\s*vụ\s+([^,\.]+)/iu,
-      /(làm\s*sạch\s*răng|khám\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu,
+      // Pattern 1: "dịch vụ [service name]" - stop before time keywords
+      /dịch\s*vụ\s+(.+?)(?=\s+(?:vào|lúc|ngày|với)|$)/iu,
+      // Pattern 2: "khám [service type]" - stop before time/doctor keywords
+      /khám\s+(.+?)(?=\s+(?:với|vào|lúc|ngày)|$)/iu,
+      // Pattern 3: Match specific known services
+      /(làm\s*sạch\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu,
     ];
     
     for (const pattern of servicePatterns) {
@@ -1448,6 +1457,9 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             // Service not found - show services list instead
             console.log(`⚠️ [Pre-process] Service "${serviceName}" not found, will show services list`);
             results.shouldShowServices = true;
+            results.serviceNotFoundName = serviceName; // ⭐ Store service name for error message
+            // ⭐ NEW: Store requested service name to remember it for later validation
+            results.requestedServiceName = serviceName;
           }
         } catch (e) {
           console.error(`❌ [Pre-process] Error finding service:`, e);
@@ -1542,6 +1554,9 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             // Only reject if the selected time is actually in the past (with 1 min tolerance for processing)
             if (selectedTimeMinutes < currentTimeMinutes - 1) {
               console.log('❌ [Pre-process] Time is in the past');
+              // ⭐ IMPORTANT: Store time in context even if invalid
+              // This allows re-validation when user changes doctor
+              this.updateConversationContext(patientUserId, { time: timeStr });
               results.timeDetected = true;
               results.timeValue = timeStr;
               results.timeInvalid = true;
@@ -1857,6 +1872,14 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
       const preProcessedData = await this.preProcessUserInput(userPrompt, patientUserId, tools);
       console.log('🔍 [LangChain] Pre-processed data:', preProcessedData);
       
+      // ⭐ NEW: Save requested service name to context if service not found
+      if (preProcessedData.requestedServiceName) {
+        console.log(`💾 [LangChain] Saving requested service name to context: "${preProcessedData.requestedServiceName}"`);
+        this.updateConversationContext(patientUserId, { 
+          requestedServiceName: preProcessedData.requestedServiceName 
+        });
+      }
+      
       // Create prompt
       const prompt = this.createPrompt();
       
@@ -2132,6 +2155,67 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           };
         }
         
+        // ⭐ FIX Case 31 & 15: Handle service not found explicitly
+        if (preProcessedData.serviceCalled && preProcessedData.serviceResult && !preProcessedData.serviceResult.found && preProcessedData.serviceNotFoundName) {
+          console.log('⚠️ [Fallback] Service not found, checking if it\'s a general request or truly not found');
+          
+          const lowerServiceName = preProcessedData.serviceNotFoundName.toLowerCase();
+          const isGeneralDentalRequest = lowerServiceName === 'răng' || lowerServiceName === 'rang';
+          
+          // Show full list of available services
+          try {
+            const servicesResult = await tools[0].func({});
+            const servicesParsed = JSON.parse(servicesResult);
+            let services = servicesParsed.services;
+            
+            if (services && services.length > 0) {
+              // ⭐ FIX Case 15: Filter dental services if user requested "răng"
+              if (lowerServiceName.includes('răng') || lowerServiceName.includes('rang')) {
+                console.log('🔍 [Fallback] Service contains "răng" - filtering to ALL dental services');
+                // Show ALL services that have "răng" in the name (dental services)
+                // Exclude only general health services like "Khám tổng quát"
+                services = services.filter(s => 
+                  s.name.toLowerCase().includes('răng') || 
+                  (s.category === 'Examination' && !s.name.toLowerCase().includes('tổng quát'))
+                );
+                console.log(`✅ [Fallback] Filtered to ${services.length} dental services`);
+              }
+              
+              // ⭐ Different message for general dental request vs truly not found
+              if (isGeneralDentalRequest) {
+                // Case 15: General dental request - don't say "not found", just show services
+                finalResponse = 'Dưới đây là danh sách dịch vụ liên quan đến răng:';
+              } else {
+                // Case 31: Truly not found service
+                finalResponse = `Không tìm thấy dịch vụ "${preProcessedData.serviceNotFoundName}".\n\nDưới đây là danh sách dịch vụ có sẵn:`;
+              }
+              
+              // ⭐ Show ALL services without truncation
+              services.forEach((s, idx) => {
+                finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
+              });
+              finalResponse += '\n\nVui lòng chọn dịch vụ từ danh sách trên.';
+            } else {
+              finalResponse = 'Vui lòng liên hệ với chúng tôi để biết thêm thông tin.';
+            }
+          } catch (e) {
+            console.error('❌ [Fallback] Error getting services for not found case:', e);
+            finalResponse = 'Vui lòng liên hệ với chúng tôi để biết thêm thông tin.';
+          }
+          
+          // Return immediately to prevent other fallbacks from overriding
+          return {
+            success: true,
+            response: finalResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: finalResponse },
+            ],
+            needsMoreInfo: true
+          };
+        }
+        
         // ⭐ FIX Case 7: Handle past date rejection
         if (updatedContext.rejectedPastDate) {
           finalResponse = '❌ Không thể đặt lịch cho ngày trong quá khứ. Vui lòng chọn ngày trong tương lai (ví dụ: "ngày mai", "hôm nay", hoặc ngày cụ thể như "25/11/2025").';
@@ -2209,6 +2293,52 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         else if (preProcessedData.doctorChanged && preProcessedData.doctorResult?.found) {
           console.log('🔄 [Fallback] Doctor change detected');
           const newDoctorName = preProcessedData.doctorResult.doctor.name;
+          
+          // ⭐ NEW: Check if previously selected time is in the past
+          if (updatedContext.time && updatedContext.date) {
+            const todayStr = DateHelper.getTodayVN();
+            const isToday = updatedContext.date === todayStr;
+            
+            if (isToday) {
+              const [h, m] = updatedContext.time.split(':').map(Number);
+              const selectedTimeMinutes = h * 60 + m;
+              
+              // Get current VN time
+              const now = new Date();
+              const vnHour = parseInt(new Intl.DateTimeFormat('en-US', { 
+                timeZone: 'Asia/Ho_Chi_Minh', 
+                hour: '2-digit', 
+                hour12: false 
+              }).format(now));
+              const vnMinute = parseInt(new Intl.DateTimeFormat('en-US', { 
+                timeZone: 'Asia/Ho_Chi_Minh', 
+                minute: '2-digit' 
+              }).format(now));
+              const currentTimeMinutes = vnHour * 60 + vnMinute;
+              
+              console.log(`🕐 [Fallback] Doctor change - checking time: ${updatedContext.time} (${selectedTimeMinutes} min) vs current ${vnHour}:${vnMinute} (${currentTimeMinutes} min)`);
+              
+              if (selectedTimeMinutes < currentTimeMinutes - 1) {
+                console.log('❌ [Fallback] Doctor change - time is in the past!');
+                finalResponse = `Đã thay đổi bác sĩ sang ${newDoctorName}.\n\n❌ Tuy nhiên, khung giờ ${updatedContext.time} đã qua. Vui lòng chọn khung giờ khác trong tương lai.`;
+                // Clear invalid time
+                this.updateConversationContext(patientUserId, { time: null });
+                
+                // Return immediately to prevent showing services
+                return {
+                  success: true,
+                  response: finalResponse,
+                  conversationHistory: [
+                    ...conversationHistory,
+                    { role: 'user', content: userPrompt },
+                    { role: 'assistant', content: finalResponse },
+                  ],
+                  needsMoreInfo: true
+                };
+              }
+            }
+          }
+          
           finalResponse = `Đã thay đổi bác sĩ sang ${newDoctorName}.`;
           
           // If already had service and date, show new doctor's available slots
@@ -2234,13 +2364,60 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               console.error('❌ [Fallback] Error getting slots for new doctor:', e);
             }
           } else if (!updatedContext.serviceId) {
-            // Show services for new doctor
+            // ⭐ NEW: Check if there's a requested service name from previous interaction
+            if (updatedContext.requestedServiceName) {
+              console.log(`🔍 [Fallback] Doctor changed, checking previously requested service: "${updatedContext.requestedServiceName}"`);
+              
+              try {
+                // Validate the previously requested service
+                const serviceResult = await tools[1].func({ serviceName: updatedContext.requestedServiceName });
+                const serviceParsed = JSON.parse(serviceResult);
+                
+                if (!serviceParsed.found) {
+                  // Service still not found - notify user
+                  console.log(`⚠️ [Fallback] Previously requested service "${updatedContext.requestedServiceName}" not found`);
+                  
+                  finalResponse += `\n\nKhông tìm thấy dịch vụ "${updatedContext.requestedServiceName}".`;
+                  
+                  // Show service list
+                  const servicesResult = await tools[0].func({});
+                  const services = JSON.parse(servicesResult).services;
+                  
+                  if (services && services.length > 0) {
+                    finalResponse += '\n\nDưới đây là danh sách dịch vụ có sẵn:';
+                    services.forEach((s, idx) => {
+                      finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
+                    });
+                    finalResponse += '\n\nVui lòng chọn dịch vụ từ danh sách trên.';
+                  }
+                  
+                  // Clear requested service name from context
+                  this.updateConversationContext(patientUserId, { requestedServiceName: null });
+                  
+                  return {
+                    success: true,
+                    response: finalResponse,
+                    conversationHistory: [
+                      ...conversationHistory,
+                      { role: 'user', content: userPrompt },
+                      { role: 'assistant', content: finalResponse },
+                    ],
+                    needsMoreInfo: true
+                  };
+                }
+              } catch (e) {
+                console.error('❌ [Fallback] Error validating requested service:', e);
+              }
+            }
+            
+            // Show services for new doctor (original logic)
             try {
               const servicesResult = await tools[0].func({});
               const services = JSON.parse(servicesResult).services;
               if (services && services.length > 0) {
                 finalResponse += '\n\nDưới đây là danh sách dịch vụ:';
-                services.slice(0, 10).forEach((s, idx) => {
+                // ⭐ FIX: Hiển thị TẤT CẢ dịch vụ thay vì chỉ 10 dịch vụ đầu
+                services.forEach((s, idx) => {
                   finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
                 });
                 finalResponse += '\n\nBạn muốn chọn dịch vụ nào?';
@@ -2389,12 +2566,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               }
               
               finalResponse += '\n\nDưới đây là danh sách dịch vụ:';
-              filteredServices.slice(0, 10).forEach((s, idx) => {
+              // ⭐ FIX: Hiển thị TẤT CẢ dịch vụ thay vì chỉ 10 dịch vụ đầu
+              filteredServices.forEach((s, idx) => {
                 finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
               });
-              if (filteredServices.length > 10) {
-                finalResponse += `\n... và ${filteredServices.length - 10} dịch vụ khác`;
-              }
               finalResponse += '\n\nBạn muốn chọn dịch vụ nào?';
               console.log('✅ [Fallback] Services list appended to response');
             } else {
@@ -2673,13 +2848,16 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             const servicesResult = await tools[0].func({});
             const services = JSON.parse(servicesResult).services;
             if (services && services.length > 0) {
-              finalResponse = 'Dưới đây là danh sách dịch vụ:';
-              services.slice(0, 10).forEach((s, idx) => {
+              // ⭐ NEW: Add notification if service was not found
+              if (preProcessedData.serviceNotFoundName) {
+                finalResponse = `Không tìm thấy dịch vụ "${preProcessedData.serviceNotFoundName}".\n\nDưới đây là danh sách dịch vụ:`;
+              } else {
+                finalResponse = 'Dưới đây là danh sách dịch vụ:';
+              }
+              // ⭐ FIX: Hiển thị TẤT CẢ dịch vụ thay vì chỉ 10 dịch vụ đầu
+              services.forEach((s, idx) => {
                 finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
               });
-              if (services.length > 10) {
-                finalResponse += `\n... và ${services.length - 10} dịch vụ khác`;
-              }
               finalResponse += '\n\nBạn muốn chọn dịch vụ nào?';
             }
           } catch (e) {
@@ -2713,7 +2891,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               }
               
               finalResponse = 'Dưới đây là danh sách dịch vụ:';
-              filteredServices.slice(0, 10).forEach((s, idx) => {
+              // ⭐ FIX: Hiển thị TẤT CẢ dịch vụ thay vì chỉ 10 dịch vụ đầu
+              filteredServices.forEach((s, idx) => {
                 finalResponse += `\n${idx + 1}. ${s.name} (${s.durationMinutes} phút)`;
               });
               finalResponse += '\n\nBạn muốn chọn dịch vụ nào? Và bạn muốn đặt lịch với bác sĩ nào?';
