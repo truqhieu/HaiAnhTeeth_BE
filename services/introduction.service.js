@@ -203,13 +203,13 @@ async updateIntroduction(id, data, file) {
 
       const cleanValue = value.trim();
 
-      if (!/^[a-zA-ZÀ-ỹ0-9\s]+$/.test(cleanValue)) {
+      if (/[<>]/.test(cleanValue)) {
         const fieldNames = {
           title: 'Tiêu đề',
           summary: 'Nội dung',
           status: 'Trạng thái'
         };
-        throw new Error(`${fieldNames[field]} không được chứa ký tự đặc biệt`);
+        throw new Error(`${fieldNames[field]} không được chứa ký tự < hoặc >`);
       }
 
       const minLength = field === 'title' ? 3 :

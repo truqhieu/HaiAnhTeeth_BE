@@ -16,8 +16,8 @@ class ClinicService {
 
     const cleanName = name.trim();
 
-    if (!/^[a-zA-ZÀ-ỹĐđ0-9\s]+$/.test(cleanName)) {
-      throw new Error('Tên phòng khám không hợp lệ');
+    if (/[<>]/.test(cleanName)) {
+      throw new Error('Tên phòng khám không được chứa ký tự < hoặc >');
     }
 
     if (cleanName.length < 2) {
@@ -37,8 +37,8 @@ class ClinicService {
 
     const cleanDescription = description.trim();
 
-    if (!/^[a-zA-ZÀ-ỹĐđ0-9\s,.\-\/]+$/.test(cleanDescription)) {
-      throw new Error('Mô tả phòng khám không hợp lệ');
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả phòng khám không được chứa ký tự < hoặc >');
     }
 
     if (cleanDescription.length < 4) {
@@ -168,8 +168,8 @@ class ClinicService {
         if (cleanName.length === 0) {
           throw new Error('Tên phòng khám không được để trống');
         }
-        if (!/^[a-zA-ZÀ-ỹĐđ0-9\s]+$/.test(cleanName)) {
-          throw new Error('Tên phòng khám không hợp lệ');
+        if (/[<>]/.test(cleanName)) {
+          throw new Error('Tên phòng khám không được chứa ký tự < hoặc >');
         }
         if (cleanName.length < 2) {
           throw new Error('Độ dài tên phòng khám không hợp lệ (tối thiểu 2 ký tự)');
@@ -182,8 +182,8 @@ class ClinicService {
         if (cleanDescription.length === 0) {
           throw new Error('Mô tả phòng khám không được để trống');
         }
-        if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanDescription)) {
-          throw new Error('Địa chỉ không hợp lệ');
+        if (/[<>]/.test(cleanDescription)) {
+          throw new Error('Mô tả phòng khám không được chứa ký tự < hoặc >');
         }
         if (cleanDescription.length < 4) {
           throw new Error('Độ dài mô tả phòng khám không hợp lệ (tối thiểu 4 ký tự)');

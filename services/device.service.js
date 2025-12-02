@@ -14,8 +14,8 @@ class DeviceService {
 
     const cleanName = name.trim();
 
-    if (!/^[a-zA-ZÀ-ỹ0-9\s]+$/.test(cleanName)) {
-      throw new Error('Tên thiết bị không được chứa số hoặc ký tự đặc biệt');
+    if (/[<>]/.test(cleanName)) {
+      throw new Error('Tên thiết bị không được chứa ký tự < hoặc >');
     }
 
     if (cleanName.length < 3) {
@@ -35,8 +35,8 @@ class DeviceService {
 
     const cleanDescription = description.trim();
 
-    if (!/^[a-zA-ZÀ-ỹ0-9\s]+$/.test(cleanDescription)) {
-      throw new Error('Mô tả thiết bị không được chứa ký tự đặc biệt');
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả thiết bị không được chứa ký tự < hoặc >');
     }
 
     if (cleanDescription.length < 3) {
@@ -197,8 +197,8 @@ class DeviceService {
       }
 
       const cleanDescription = description.trim();
-      if (!/^[a-zA-ZÀ-ỹ0-9\s.,!?;:'"()_-]+$/.test(cleanDescription)) {
-        throw new Error('Mô tả thiết bị không hợp lệ');
+      if (/[<>]/.test(cleanDescription)) {
+        throw new Error('Mô tả thiết bị không được chứa ký tự < hoặc >');
       }
 
       if (cleanDescription.length < 3) {
