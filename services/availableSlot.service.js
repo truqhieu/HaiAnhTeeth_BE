@@ -2316,6 +2316,80 @@ async getDoctorScheduleRange({
       }
     }
 
+    // ⭐ 3.8. Validate against workingHours boundaries (CRITICAL FIX)
+    // This prevents bookings outside actual working hours (e.g., 20:00 when afternoon ends at 18:00)
+    if (scheduleRangeResult.scheduleRanges && scheduleRangeResult.scheduleRanges.length > 0) {
+      // Find morning and afternoon ranges
+      let morningRange = null;
+      let afternoonRange = null;
+      
+      for (const range of scheduleRangeResult.scheduleRanges) {
+        if (range.shift === 'Morning') morningRange = range;
+        else if (range.shift === 'Afternoon') afternoonRange = range;
+      }
+      
+      // Check if time falls within any working hours shift
+      let isWithinWorkingHours = false;
+      let violatedShift = null;
+      
+      if (morningRange) {
+        const morningStart = new Date(morningRange.startTime);
+        const morningEnd = new Date(morningRange.endTime);
+        
+        if (startTimeObj >= morningStart && endTimeObj <= morningEnd) {
+          isWithinWorkingHours = true;
+        } else if (startTimeObj >= morningStart && startTimeObj < morningEnd) {
+          violatedShift = 'morning';
+        }
+      }
+      
+      if (afternoonRange && !isWithinWorkingHours) {
+        const afternoonStart = new Date(afternoonRange.startTime);
+        const afternoonEnd = new Date(afternoonRange.endTime);
+        
+        if (startTimeObj >= afternoonStart && endTimeObj <= afternoonEnd) {
+          isWithinWorkingHours = true;
+        } else if (startTimeObj >= afternoonStart && startTimeObj < afternoonEnd) {
+          violatedShift = 'afternoon';
+        }
+      }
+      
+      if (!isWithinWorkingHours) {
+        const formatTimeVN = (dateObj) => {
+          const vnHours = (new Date(dateObj).getUTCHours() + 7) % 24;
+          const vnMinutes = new Date(dateObj).getUTCMinutes();
+          return `${String(vnHours).padStart(2, '0')}:${String(vnMinutes).padStart(2, '0')}`;
+        };
+        
+        const startHourVN = (startTimeObj.getUTCHours() + 7) % 24;
+        const endHourVN = (endTimeObj.getUTCHours() + 7) % 24;
+        const endMinute = endTimeObj.getUTCMinutes();
+        
+        let errorMessage = 'Thời gian bạn chọn nằm ngoài giờ làm việc của bác sĩ. ';
+        
+        if (violatedShift === 'afternoon' && afternoonRange) {
+          const afternoonEndTime = formatTimeVN(afternoonRange.endTime);
+          const endTimeDisplay = `${String(endHourVN).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
+          errorMessage += `Buổi chiều chỉ làm việc đến ${afternoonEndTime}, nhưng dịch vụ của bạn sẽ kết thúc lúc ${endTimeDisplay}. Vui lòng chọn thời gian sớm hơn.`;
+        } else if (violatedShift === 'morning' && morningRange) {
+          const morningEndTime = formatTimeVN(morningRange.endTime);
+          const endTimeDisplay = `${String(endHourVN).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
+          errorMessage += `Buổi sáng chỉ làm việc đến ${morningEndTime}, nhưng dịch vụ của bạn sẽ kết thúc lúc ${endTimeDisplay}. Vui lòng chọn thời gian sớm hơn hoặc chọn buổi chiều.`;
+        } else {
+          const workingHoursText = [];
+          if (morningRange) {
+            workingHoursText.push(`Buổi sáng: ${formatTimeVN(morningRange.startTime)}-${formatTimeVN(morningRange.endTime)}`);
+          }
+          if (afternoonRange) {
+            workingHoursText.push(`Buổi chiều: ${formatTimeVN(afternoonRange.startTime)}-${formatTimeVN(afternoonRange.endTime)}`);
+          }
+          errorMessage += workingHoursText.join(', ') + '. Vui lòng chọn thời gian trong khung giờ làm việc.';
+        }
+        
+        throw new Error(errorMessage);
+      }
+    }
+
     // 4. Validate: startTime và endTime phải nằm trong một trong các schedule ranges
     const scheduleRanges = scheduleRangeResult.scheduleRanges;
     

@@ -217,6 +217,32 @@ class AppointmentService {
       }
     }
 
+    // ⭐ CRITICAL: Validate appointment time against working hours
+    // This prevents bookings outside working hours (e.g., 20:00 when afternoon ends at 18:00)
+    console.log('🔍 [createConsultationAppointment] Validating appointment time against working hours...');
+    try {
+      // Extract date from selectedSlot.startTime
+      const slotDate = new Date(selectedSlot.startTime);
+      slotDate.setUTCHours(0, 0, 0, 0);
+      
+      await availableSlotService.validateAppointmentTime({
+        doctorUserId,
+        serviceId,
+        date: slotDate,
+        startTime: selectedSlot.startTime,
+        patientUserId,
+        appointmentFor: appointmentFor || 'self',
+        customerFullName: fullName,
+        customerEmail: email,
+        reservedByUserId: patientUserId
+      });
+      
+      console.log('✅ [createConsultationAppointment] Time validation passed');
+    } catch (validationError) {
+      console.error('❌ [createConsultationAppointment] Time validation failed:', validationError.message);
+      throw validationError; // Re-throw to stop appointment creation
+    }
+
     // ⭐ THÊM: CHECK TIMESLOT TRƯỚC KHI TẠO ❌
     // Để tránh race condition: 2 request cùng lúc
     const slotStartTime = new Date(selectedSlot.startTime);
