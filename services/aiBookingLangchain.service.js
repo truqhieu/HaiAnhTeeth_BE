@@ -125,6 +125,46 @@ class AIBookingLangchainService {
   }
 
   /**
+   * ⭐ FIX Case 35: Check if a specific time slot is available for booking
+   */
+  async checkTimeSlotAvailability(doctorId, date, time, durationMinutes) {
+    try {
+      console.log(`🔍 [checkTimeSlotAvailability] Checking ${time} on ${date} for ${durationMinutes} minutes`);
+      
+      const [year, month, day] = date.split('-').map(Number);
+      const searchDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+      
+      const [hour, minute] = time.split(':').map(Number);
+      const startTime = new Date(searchDate);
+      startTime.setUTCHours(hour, minute, 0, 0);
+      
+      const endTime = new Date(startTime);
+      endTime.setUTCMinutes(endTime.getUTCMinutes() + durationMinutes);
+      
+      console.log(`🔍 [checkTimeSlotAvailability] Checking range: ${startTime.toISOString()} to ${endTime.toISOString()}`);
+      
+      // Check for conflicting timeslots
+      const conflicts = await Timeslot.find({
+        doctorUserId: doctorId,
+        status: { $in: ['Reserved', 'Booked'] },
+        $or: [
+          { startTime: { $lt: endTime }, endTime: { $gt: startTime } }
+        ]
+      }).lean();
+      
+      console.log(`🔍 [checkTimeSlotAvailability] Found ${conflicts.length} conflicts`);
+      
+      const isAvailable = conflicts.length === 0;
+      console.log(`✅ [checkTimeSlotAvailability] Time ${time} is ${isAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
+      
+      return isAvailable;
+    } catch (error) {
+      console.error('❌ [checkTimeSlotAvailability] Error:', error);
+      return false;
+    }
+  }
+
+  /**
    * Create LangChain tools from the existing function implementations
    */
   createTools(patientUserId) {
@@ -739,7 +779,10 @@ class AIBookingLangchainService {
     // Tool 6: Create Appointment
     const createAppointmentTool = new DynamicStructuredTool({
       name: 'create_appointment',
-      description: 'Tạo lịch hẹn khám. Chỉ gọi khi đã có đầy đủ: serviceId, doctorId, date, time và user đã xác nhận.',
+      description: `Tạo lịch hẹn khám. 
+      GỌI TOOL NÀY KHI: Đã có đầy đủ serviceId, doctorId, date, time VÀ user đã xác nhận.
+      SAU KHI GỌI: PHẢI TRẢ LỜI "✅ Đặt lịch thành công!" kèm thông tin lịch hẹn (bác sĩ, dịch vụ, ngày, giờ).
+      CỰC KỲ QUAN TRỌNG: LUÔN LUÔN trả lời sau khi gọi tool này!`,
       schema: z.object({
         serviceId: z.string().describe('ID của dịch vụ'),
         doctorId: z.string().describe('ID của bác sĩ'),
@@ -920,8 +963,8 @@ class AIBookingLangchainService {
                 status: result.payment.status
               } : null,
               message: requiresPayment 
-                ? 'Đặt lịch thành công! Vui lòng thanh toán để hoàn tất đặt lịch.' 
-                : 'Đặt lịch thành công!',
+                ? '✅ Đặt lịch thành công! Vui lòng thanh toán để hoàn tất đặt lịch.' 
+                : '✅ Đặt lịch thành công!',
             });
           } else {
             console.error('❌ [Tool] create_appointment: Invalid response from service:', result);
@@ -952,7 +995,34 @@ class AIBookingLangchainService {
         try {
           console.log(`🔧 [Tool] find_available_doctors_by_time called with: { time: ${time}, date: ${date} }`);
           
-          // ⭐ FIX: Get all active doctors from User model (not Doctor model)
+          // ⭐ CHECK 1: Validate working hours first
+          const [hour, minute] = time.split(':').map(Number);
+          const requestedMinutes = hour * 60 + minute;
+          
+          // Standard working hours: 08:00-12:00 (morning), 14:00-18:00 (afternoon)
+          const morningStart = 8 * 60; // 08:00
+          const morningEnd = 12 * 60;   // 12:00
+          const afternoonStart = 14 * 60; // 14:00
+          const afternoonEnd = 18 * 60;   // 18:00
+          
+          const isWithinWorkingHours = (requestedMinutes >= morningStart && requestedMinutes < morningEnd) ||
+                                        (requestedMinutes >= afternoonStart && requestedMinutes < afternoonEnd);
+          
+          if (!isWithinWorkingHours) {
+            console.log(`⏰ [Tool] Time ${time} is outside working hours`);
+            return JSON.stringify({
+              success: false,
+              found: false,
+              outsideWorkingHours: true,
+              message: `Khung giờ ${time} không khả dụng (ngoài giờ làm việc). Vui lòng chọn khung giờ khác.`,
+              workingHours: {
+                morning: '08:00-12:00',
+                afternoon: '14:00-18:00'
+              }
+            });
+          }
+          
+          // ⭐ CHECK 2: Get all active doctors from User model
           // Doctors are stored as Users with role='Doctor'
           const doctors = await User.find({ role: 'Doctor', status: 'Active' })
             .select('_id fullName specialization email phoneNumber')
@@ -1358,7 +1428,7 @@ class AIBookingLangchainService {
 
 **BƯỚC 4: Khi user XÁC NHẬN (nói "có", "đồng ý", "yes")**
 - GỌI: create_appointment(serviceId, doctorId, date, time)
-- SAU KHI THÀNH CÔNG → NÓI: "✅ Đặt lịch thành công! Mã lịch: #[id]"
+- SAU KHI THÀNH CÔNG → NÓI: "✅ Đặt lịch thành công!"
 
 **CỰC KỲ QUAN TRỌNG:**
 1. SAU MỖI LẦN GỌI TOOL → PHẢI TRẢ LỜI DỰA VÀO KẾT QUẢ TOOL
@@ -1808,8 +1878,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
     const findDoctorByTimePatterns = [
       /có\s+bác\s*sĩ\s+(?:nào|ai)\s+rảnh\s+vào\s+(.+?)(?:\s+không|\?|$)/iu,
       /bác\s*sĩ\s+(?:nào|ai)\s+(?:có\s+)?rảnh\s+(?:vào|lúc)\s+(.+?)(?:\s+không|\?|$)/iu,
-    ];
-    
+    ];  
     for (const pattern of findDoctorByTimePatterns) {
       const match = userPrompt.match(pattern);
       if (match && match[1]) {
@@ -1819,10 +1888,23 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         results.findDoctorByTime = true;
         results.requestedTimePhrase = timePhrase;
         
+        // ⭐ Save flag to context so we remember this is a "find doctor by time" conversation
+        this.updateConversationContext(patientUserId, { 
+          findDoctorByTime: true 
+        });
+        
         // Note: We'll parse the time phrase and call the tool in the main chatWithAI logic
         // This is because we need to handle date parsing first (e.g., "mai" -> tomorrow's date)
         break;
       }
+    }
+    
+    // ⭐ NEW (Case 37): If user previously asked "find doctor by time" and now asks about different time
+    // Example: "Có bác sĩ rảnh vào 7h không" -> "Vậy 9h thì sao"
+    if (!results.findDoctorByTime && context.findDoctorByTime && results.timeDetected) {
+      console.log(`🔍 [Pre-process] User previously asked to find doctors by time, continuing that flow with new time: ${results.timeValue}`);
+      results.findDoctorByTime = true;
+      results.requestedTimePhrase = results.timeValue;
     }
     
     return results;
@@ -2802,11 +2884,72 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           finalResponse = `Bạn đã chọn dịch vụ "${serviceName}". Bạn muốn đặt lịch vào ngày nào? (Ví dụ: "ngày mai", "hôm nay", hoặc "22/11/2025")`;
         } else if ((preProcessedData.serviceCalled || toolsCalled.includes('find_service_by_name')) && 
                    updatedContext.serviceId && updatedContext.doctorId && updatedContext.date) {
-          // Service found, have doctor and date, should show time slots
-          console.log('🔧 [Fallback] Service + Doctor + Date detected, showing available slots...');
+          // Service found, have doctor and date
+          console.log('🔧 [Fallback] Service + Doctor + Date detected');
           
-          // Actually call get_available_slots
-          try {
+          // ⭐ FIX Case 35: Check if user has a requested time from "find doctor by time" flow
+          if (updatedContext.time && updatedContext.findDoctorByTime) {
+            console.log(`🎯 [Fallback] User requested specific time ${updatedContext.time} from "find doctor by time" flow, checking availability first...`);
+            
+            try {
+              // Get service and doctor info
+              const service = await Service.findById(updatedContext.serviceId);
+              const doctor = await User.findById(updatedContext.doctorId);
+              
+              if (!service || !doctor) {
+                console.error('❌ [Fallback] Service or doctor not found');
+                finalResponse = 'Đã có lỗi xảy ra. Vui lòng thử lại.';
+              } else {
+                // Check if the requested time slot is available
+                const isTimeAvailable = await this.checkTimeSlotAvailability(
+                  updatedContext.doctorId,
+                  updatedContext.date,
+                  updatedContext.time,
+                  service.durationMinutes
+                );
+                
+                if (isTimeAvailable) {
+                  // ✅ Requested time is available → Show confirmation
+                  console.log(`✅ [Fallback] Requested time ${updatedContext.time} is AVAILABLE, showing confirmation`);
+                  
+                  const [h, m] = updatedContext.time.split(':').map(Number);
+                  const endTimeMinutes = h * 60 + m + service.durationMinutes;
+                  const endH = Math.floor(endTimeMinutes / 60);
+                  const endM = endTimeMinutes % 60;
+                  const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+                  
+                  finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${service.serviceName} (${service.durationMinutes} phút)\n- Bác sĩ: ${doctor.fullName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
+                } else {
+                  // ❌ Requested time is NOT available → Show all available slots
+                  console.log(`⚠️ [Fallback] Requested time ${updatedContext.time} is NOT AVAILABLE, showing all slots...`);
+                  
+                  // Call get_available_slots to show alternatives
+                  const slotsResult = await tools[4].func({
+                    doctorId: updatedContext.doctorId,
+                    date: updatedContext.date,
+                    serviceId: updatedContext.serviceId,
+                  });
+                  
+                  const slots = JSON.parse(slotsResult);
+                  if (slots.success) {
+                    finalResponse = `⚠️ Khung giờ ${updatedContext.time} đã có lịch hẹn khác.\n\nCác khung giờ khả dụng ngày ${updatedContext.date}:\n- Buổi sáng: ${slots.morningDisplay}\n- Buổi chiều: ${slots.afternoonDisplay}\n\nBạn muốn chọn giờ nào?`;
+                  } else {
+                    finalResponse = `⚠️ Khung giờ ${updatedContext.time} đã có lịch hẹn khác và không có khung giờ khả dụng khác. Vui lòng chọn ngày khác.`;
+                  }
+                  
+                  // Clear the requested time since it's not available
+                  this.updateConversationContext(patientUserId, { time: null, findDoctorByTime: false });
+                }
+              }
+            } catch (e) {
+              console.error('❌ [Fallback] Error checking requested time availability:', e);
+              finalResponse = 'Đã có lỗi xảy ra khi kiểm tra khung giờ. Vui lòng thử lại.';
+            }
+          } else {
+            // Original logic: No requested time, show all available slots
+            console.log('🔧 [Fallback] No requested time, showing all available slots...');
+          
+            try {
             const slotsResult = await tools[4].func({
               doctorId: updatedContext.doctorId,
               date: updatedContext.date,
@@ -2859,7 +3002,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           } catch (e) {
             console.error('❌ [Fallback] Error calling get_available_slots:', e);
             console.error('❌ [Fallback] Error stack:', e.stack);
-            finalResponse = 'Vui lòng cho biết giờ bạn muốn đặt lịch.';
+              finalResponse = 'Vui lòng cho biết giờ bạn muốn đặt lịch.';
+            }
           }
         } else if (updatedContext.doctorId && updatedContext.serviceId && updatedContext.date && !updatedContext.time) {
           // Have all info except time - should show slots if not already shown
@@ -3014,7 +3158,16 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                     const endM = endTimeMinutes % 60;
                     const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
                     
-                    finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Mã lịch: #${appt?.appointmentId || appt?._id || 'N/A'}\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
+                    // ⭐ NEW: Check if payment is required
+                    const requiresPayment = appointmentResult.requirePayment || false;
+                    
+                    if (requiresPayment) {
+                      // Payment required - do NOT show appointment code
+                      finalResponse = `✅ Đặt lịch thành công! Vui lòng thanh toán để hoàn tất đặt lịch.\n\n📅 Thông tin lịch hẹn:\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Chờ thanh toán'}\n\nVui lòng quét mã QR để thanh toán.`;
+                    } else {
+                      // No payment required - do NOT show appointment code
+                      finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
+                    }
                     // Clear context after successful booking
                     this.clearConversationContext(patientUserId);
                   } else {

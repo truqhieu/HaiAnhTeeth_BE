@@ -24,6 +24,34 @@ const mail = require('@sendgrid/mail');
 const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1 minute drift for "past" validation
 
+/**
+ * Helper: Parse date string/object to ensure proper UTC conversion
+ * Prevents timezone misinterpretation when creating timeslots
+ * @param {string|Date} dateInput - Date string or Date object
+ * @returns {Date} - Properly parsed Date object in UTC
+ */
+function parseTimezoneAwareDate(dateInput) {
+  if (!dateInput) {
+    throw new Error('Date input is required');
+  }
+  
+  const parsedDate = new Date(dateInput);
+  
+  if (isNaN(parsedDate.getTime())) {
+    throw new Error(`Invalid date format: ${dateInput}`);
+  }
+  
+  // Log for debugging timezone issues
+  console.log(`📅 [Timezone] Parsing date:`, {
+    input: dateInput,
+    parsed: parsedDate.toISOString(),
+    utc: parsedDate.toUTCString(),
+    vnTime: parsedDate.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
+  });
+  
+  return parsedDate;
+}
+
 const fonts = {
   Roboto: {
     normal: path.join(__dirname, '../fonts/Roboto-Regular.ttf'),   
@@ -526,12 +554,16 @@ class AppointmentService {
       console.log('✅ Sử dụng timeslot đã giữ chỗ:', timeslotRecord._id);
     } else {
       // Tạo Timeslot mới từ slot được chọn
+      // ⭐ FIX: Use timezone-aware parsing to prevent UTC conversion issues
+      const startTimeUTC = parseTimezoneAwareDate(selectedSlot.startTime);
+      const endTimeUTC = parseTimezoneAwareDate(selectedSlot.endTime);
+      
       timeslotRecord = await Timeslot.create({
         doctorScheduleId: schedule._id,
         doctorUserId,
         serviceId,
-        startTime: new Date(selectedSlot.startTime),
-        endTime: new Date(selectedSlot.endTime),
+        startTime: startTimeUTC,
+        endTime: endTimeUTC,
         breakAfterMinutes: 0, // ⭐ Đặt = 0 vì đã bỏ logic nghỉ 10 phút - cho phép đặt liên tiếp
         // ⭐ FIXED: Nếu dịch vụ cần thanh toán trước, slot là "Reserved" (chưa xác nhận)
         // Khi thanh toán xong mới thành "Booked"
@@ -542,6 +574,10 @@ class AppointmentService {
       });
 
       console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
+      console.log('   - Start Time (UTC):', startTimeUTC.toISOString());
+      console.log('   - End Time (UTC):', endTimeUTC.toISOString());
+      console.log('   - Start Time (VN):', startTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
+      console.log('   - End Time (VN):', endTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
     }
 
     // Xác định type dựa vào category
@@ -844,6 +880,11 @@ class AppointmentService {
     timeslot.serviceId = serviceId;
 
     await timeslot.save();
+    
+    console.log('✅ Timeslot reserved:', timeslot._id);
+    console.log('   - Start Time (UTC):', validatedStart.toISOString());
+    console.log('   - End Time (UTC):', validatedEnd.toISOString());
+    console.log('   - Reserved until:', holdUntil.toISOString());
 
     return {
       timeslotId: timeslot._id,
@@ -1133,6 +1174,8 @@ class AppointmentService {
       });
 
       console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
+      console.log('   - Start Time (UTC):', slotStartTime.toISOString());
+      console.log('   - End Time (UTC):', slotEndTime.toISOString());
     }
 
     // Giá với promotion (nếu có) chỉ để lưu price info, không cần payment hold
