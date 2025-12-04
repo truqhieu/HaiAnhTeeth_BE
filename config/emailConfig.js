@@ -167,17 +167,6 @@ HaiAnhTeeth Team
           🔄 Đặt lại mật khẩu
         </a>
       </div>
-
-      <p style="margin: 0 0 25px 0; color: #94a3b8; font-size: 13px; line-height: 1.5; text-align: center;">
-        hoặc sao chép link bên dưới vào trình duyệt của bạn:
-      </p>
-
-      <!-- Link Copy Box -->
-      <div style="background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 15px; margin: 25px 0; word-break: break-all;">
-        <p style="margin: 0; color: #64748b; font-size: 12px; line-height: 1.4;">
-          <code style="color: #0369a1; font-family: 'Courier New', monospace;">${resetLink}</code>
-        </p>
-      </div>
       
       <!-- Security Info Box -->
       <div style="background: #fee2e2; border-left: 4px solid #dc2626; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
