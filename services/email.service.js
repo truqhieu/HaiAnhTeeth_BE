@@ -39,25 +39,33 @@ class EmailService {
   }
 
   async sendVerificationEmail(fullName, email, verificationLink) {
-    if (this.useSendGrid) {
+    try {
+      if (this.useSendGrid) {
+        const emailTemplate = getVerificationEmailTemplate(fullName, verificationLink);
+        return this._sendViaSendGrid(
+          email,
+          emailTemplate.subject,
+          emailTemplate.text,
+          emailTemplate.html
+        );
+      }
+      
+      const transporter = createTransporter();
       const emailTemplate = getVerificationEmailTemplate(fullName, verificationLink);
-      return this._sendViaSendGrid(
-        email,
-        emailTemplate.subject,
-        emailTemplate.text,
-        emailTemplate.html
-      );
+      const result = await transporter.sendMail({
+        from: process.env.EMAIL_USER || 'noreply@healingmedicine.com',
+        to: email,
+        subject: emailTemplate.subject,
+        text: emailTemplate.text,
+        html: emailTemplate.html
+      });
+      
+      console.log(`✅ Email xác thực đã được gửi đến: ${email}`);
+      return result;
+    } catch (error) {
+      console.error('❌ Lỗi gửi email xác thực:', error.message);
+      throw error;
     }
-    
-    const transporter = createTransporter();
-    const emailTemplate = getVerificationEmailTemplate(fullName, verificationLink);
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER || 'noreply@healingmedicine.com',
-      to: email,
-      subject: emailTemplate.subject,
-      text: emailTemplate.text,
-      html: emailTemplate.html
-    });
   }
 
   async resendVerificationEmail(fullName, email, verificationLink) {

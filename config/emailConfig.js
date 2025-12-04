@@ -3,8 +3,13 @@ const DateHelper = require('../utils/dateHelper');
 
 const createTransporter = () => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    console.error('⚠️ Thiếu EMAIL_USER hoặc EMAIL_PASSWORD trong file .env');
-    throw new Error('Email configuration missing');
+    const missingVars = [];
+    if (!process.env.EMAIL_USER) missingVars.push('EMAIL_USER');
+    if (!process.env.EMAIL_PASSWORD) missingVars.push('EMAIL_PASSWORD');
+    
+    console.error(`⚠️ Thiếu biến môi trường: ${missingVars.join(', ')} trong file .env`);
+    console.error('💡 Hướng dẫn: Thêm EMAIL_USER và EMAIL_PASSWORD vào file .env');
+    throw new Error(`Email configuration missing: ${missingVars.join(', ')}`);
   }
 
   console.log('📧 Tạo email transporter với:', process.env.EMAIL_USER);
@@ -23,7 +28,7 @@ const createTransporter = () => {
 
 const getVerificationEmailTemplate = (fullName, verificationLink) => {
   return {
-    subject: `Xác thực tài khoản HealingMedicine`,
+    subject: `Xác thực tài khoản HaiAnhTeeth`,
     text: `
 Xin chào ${fullName}!
 
@@ -32,7 +37,7 @@ ${verificationLink}
 
 Link có hiệu lực trong 24 giờ.
 
-HealingMedicine Team
+HaiAnhTeeth Team
     `.trim(),
     html: `
 <!DOCTYPE html>
@@ -46,12 +51,12 @@ HealingMedicine Team
   <div style="max-width: 500px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);">
     
     <!-- Header -->
-    <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 30px; text-align: center;">
+    <div style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); padding: 30px; text-align: center;">
       <h1 style="margin: 0; color: white; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">
-        🏥 HealingMedicine
+        🦷 HaiAnhTeeth
       </h1>
-      <p style="margin: 8px 0 0 0; color: #e0e7ff; font-size: 14px; opacity: 0.9;">
-        Hệ thống chăm sóc sức khỏe
+      <p style="margin: 8px 0 0 0; color: #cffafe; font-size: 14px; opacity: 0.9;">
+        Nha khoa uy tín - Nụ cười rạng rỡ
       </p>
     </div>
     
@@ -62,20 +67,20 @@ HealingMedicine Team
       </h2>
       
       <p style="margin: 0 0 25px 0; color: #475569; font-size: 16px; line-height: 1.6;">
-        Chào mừng bạn đến với <strong style="color: #4f46e5;">HealingMedicine</strong>!<br>
+        Chào mừng bạn đến với <strong style="color: #0891b2;">HaiAnhTeeth</strong>!<br>
         Để hoàn tất đăng ký tài khoản, vui lòng xác thực email của bạn.
       </p>
       
       <!-- CTA Button -->
       <div style="text-align: center; margin: 35px 0;">
         <a href="${verificationLink}" 
-           style="display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3); transition: transform 0.2s;">
+           style="display: inline-block; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); color: white; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3); transition: transform 0.2s;">
           ✅ Xác thực tài khoản
         </a>
       </div>
       
       <!-- Info Box -->
-      <div style="background: #f1f5f9; border-left: 4px solid #4f46e5; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
+      <div style="background: #f1f5f9; border-left: 4px solid #0891b2; padding: 20px; border-radius: 0 8px 8px 0; margin: 30px 0;">
         <div style="display: flex; align-items: center; margin-bottom: 8px;">
           <span style="font-size: 18px; margin-right: 8px;">⏰</span>
           <strong style="color: #1e293b; font-size: 14px;">Quan trọng</strong>
@@ -94,7 +99,7 @@ HealingMedicine Team
     <!-- Footer -->
     <div style="background: #f8fafc; padding: 25px 30px; border-top: 1px solid #e2e8f0; text-align: center;">
       <p style="margin: 0 0 8px 0; color: #64748b; font-size: 14px; font-weight: 600;">
-        HealingMedicine Team
+        🦷 HaiAnhTeeth
       </p>
       <p style="margin: 0; color: #94a3b8; font-size: 12px;">
         Email tự động • Không trả lời
