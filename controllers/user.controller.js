@@ -5,11 +5,15 @@ const User = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 
 
+
+
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-here';
+
 
 const register = async (req, res) => {
   try {
     const { fullName, email, gender, dateOfBirth, password } = req.body;
+
 
     if (!fullName || !email || !password) {
       return res.status(400).json({
@@ -24,6 +28,7 @@ const register = async (req, res) => {
       });
     }
 
+
     // Kiểm tra email format (để tăng security)
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
@@ -33,18 +38,22 @@ const register = async (req, res) => {
       });
     }
 
+
     // Xử lý đăng ký qua service (role sẽ được set default = 'Patient' trong service)
     const { tempUser, verificationToken } = await userService.registerUser({
       fullName, email, password, gender, dateOfBirth
     });
 
+
     // Tạo link xác thực với domain thực tế
     const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
     const verificationLink = emailService.createVerificationLink(verificationToken, email, baseUrl);
 
+
     // Gửi email xác thực
     try {
       await emailService.sendVerificationEmail(fullName, email, verificationLink);
+
 
       res.status(200).json({
         success: true,
@@ -58,12 +67,13 @@ const register = async (req, res) => {
         }
       });
 
+
     } catch (emailError) {
       console.error('Lỗi gửi email:', emailError);
-      
+
       // Xóa tempUser nếu gửi email thất bại
       await TempRegister.deleteOne({ _id: tempUser._id });
-      
+
       res.status(500).json({
         success: false,
         message: 'Không thể gửi email xác thực. Vui lòng thử lại sau',
@@ -71,20 +81,22 @@ const register = async (req, res) => {
       });
     }
 
+
   } catch (error) {
     console.error('Lỗi đăng ký:', error);
-    
+
     // Xử lý lỗi từ service (validation errors)
-    if (error.message.includes('Vui lòng nhập') || 
-        error.message.includes('Email không đúng') || 
-        error.message.includes('Mật khẩu phải') ||
-        error.message.includes('Email này đã được đăng ký') ||
-        error.message.includes('Mật khẩu và xác nhận mật khẩu không khớp')) {
+    if (error.message.includes('Vui lòng nhập') ||
+      error.message.includes('Email không đúng') ||
+      error.message.includes('Mật khẩu phải') ||
+      error.message.includes('Email này đã được đăng ký') ||
+      error.message.includes('Mật khẩu và xác nhận mật khẩu không khớp')) {
       return res.status(400).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -94,11 +106,25 @@ const register = async (req, res) => {
   }
 };
 
+
 const verifyEmail = async (req, res) => {
   try {
     const { token, email } = req.query;
 
+
     const { user: newUser, token: jwtToken } = await userService.verifyEmail(token, email);
+
+
+    const useSecureCookie = process.env.COOKIE_SECURE === 'true';
+
+
+    res.cookie('token', jwtToken, {
+      httpOnly: true,
+      secure: useSecureCookie,                     // Railway → true | Local → false
+      sameSite: useSecureCookie ? 'none' : 'lax',  // Railway → none | Local → lax
+      maxAge: 12 * 60 * 60 * 1000                  // 12h
+    });
+
 
     res.status(200).json({
       success: true,
@@ -117,18 +143,20 @@ const verifyEmail = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi xác thực email:', error);
-    
+
     // Xử lý lỗi từ service (validation errors)
-    if (error.message.includes('Thiếu thông tin') || 
-        error.message.includes('Link xác thực không hợp lệ') || 
-        error.message.includes('Link xác thực đã hết hạn')) {
+    if (error.message.includes('Thiếu thông tin') ||
+      error.message.includes('Link xác thực không hợp lệ') ||
+      error.message.includes('Link xác thực đã hết hạn')) {
       return res.status(400).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -138,12 +166,28 @@ const verifyEmail = async (req, res) => {
   }
 };
 
+
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+
     // Xử lý đăng nhập qua service
     const { user, token, emergencyContact } = await userService.loginUser(email, password);
+
+
+    // ⭐ CHỈNH Ở ĐÂY — dùng COOKIE_SECURE thay vì NODE_ENV
+    const useSecureCookie =
+      process.env.COOKIE_SECURE === 'true'; // Railway: true | Local: false
+
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: useSecureCookie,                     // Railway → true | Local → false
+      sameSite: useSecureCookie ? 'none' : 'lax',  // Railway → none | Local → lax
+      maxAge: 12 * 60 * 60 * 1000                  // 12h
+    });
+
 
     res.status(200).json({
       success: true,
@@ -169,19 +213,23 @@ const login = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi đăng nhập:', error);
-    
-    // Xử lý lỗi từ service (validation errors)
-    if (error.message.includes('Vui lòng nhập') || 
-        error.message.includes('Email hoặc mật khẩu không đúng') || 
-        error.message.includes('Tài khoản của bạn đã bị khóa') ||
-        error.message.includes('Tài khoản của bạn chưa được kích hoạt')) {
+
+
+    if (
+      error.message.includes('Vui lòng nhập') ||
+      error.message.includes('Email hoặc mật khẩu không đúng') ||
+      error.message.includes('Tài khoản của bạn đã bị khóa') ||
+      error.message.includes('Tài khoản của bạn chưa được kích hoạt')
+    ) {
       return res.status(401).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -191,14 +239,18 @@ const login = async (req, res) => {
   }
 };
 
+
+
+
 const getProfile = async (req, res) => {
   try {
     // Lấy profile qua service
     const user = await userService.getUserProfile(req.user.userId);
 
+
     res.status(200).json({
       success: true,
-      data: { 
+      data: {
         user: {
           id: user._id,
           fullName: user.fullName,
@@ -218,15 +270,17 @@ const getProfile = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi lấy profile:', error);
-    
+
     if (error.message.includes('Không tìm thấy thông tin người dùng')) {
       return res.status(404).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -236,9 +290,11 @@ const getProfile = async (req, res) => {
   }
 };
 
+
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
+
 
     if (!email) {
       return res.status(400).json({
@@ -246,6 +302,7 @@ const forgotPassword = async (req, res) => {
         message: 'Vui lòng nhập email'
       });
     }
+
 
     // Kiểm tra email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -256,16 +313,20 @@ const forgotPassword = async (req, res) => {
       });
     }
 
+
     // Xử lý forgot password qua service
     const { resetToken, user } = await userService.forgotPassword(email);
+
 
     // Tạo link reset password
     const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
     const resetLink = emailService.createResetPasswordLink(resetToken, email, baseUrl);
 
+
     // Gửi email reset password
     try {
       await emailService.sendResetPasswordEmail(user.fullName, email, resetLink);
+
 
       res.status(200).json({
         success: true,
@@ -277,19 +338,22 @@ const forgotPassword = async (req, res) => {
         }
       });
 
+
     } catch (emailError) {
       console.error('Lỗi gửi email reset password:', emailError);
+
 
       // Xóa reset token nếu gửi email thất bại
       await User.updateOne(
         { email: email.toLowerCase() },
-        { 
-          $unset: { 
-            resetPasswordToken: 1, 
-            resetPasswordExpire: 1 
-          } 
+        {
+          $unset: {
+            resetPasswordToken: 1,
+            resetPasswordExpire: 1
+          }
         }
       );
+
 
       res.status(500).json({
         success: false,
@@ -298,18 +362,20 @@ const forgotPassword = async (req, res) => {
       });
     }
 
+
   } catch (error) {
     console.error('Lỗi forgot password:', error);
-    
+
     if (error.message.includes('Vui lòng nhập email') ||
-        error.message.includes('Không tìm thấy tài khoản') ||
-        error.message.includes('Tài khoản của bạn đã bị khóa') ||
-        error.message.includes('Tài khoản của bạn chưa được kích hoạt')) {
+      error.message.includes('Không tìm thấy tài khoản') ||
+      error.message.includes('Tài khoản của bạn đã bị khóa') ||
+      error.message.includes('Tài khoản của bạn chưa được kích hoạt')) {
       return res.status(400).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -319,9 +385,11 @@ const forgotPassword = async (req, res) => {
   }
 };
 
+
 const resetPassword = async (req, res) => {
   try {
     const { token, email, newPassword } = req.body;
+
 
     if (!token || !email || !newPassword) {
       return res.status(400).json({
@@ -329,6 +397,7 @@ const resetPassword = async (req, res) => {
         message: 'Vui lòng nhập đầy đủ thông tin'
       });
     }
+
 
     // Validation password mới
     if (newPassword.length < 6) {
@@ -338,8 +407,10 @@ const resetPassword = async (req, res) => {
       });
     }
 
+
     // Xử lý reset password qua service
     const updatedUser = await userService.resetPassword(token, email, newPassword);
+
 
     res.status(200).json({
       success: true,
@@ -351,18 +422,20 @@ const resetPassword = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi reset password:', error);
-    
+
     // Xử lý lỗi từ service
     if (error.message.includes('Thiếu thông tin') ||
-        error.message.includes('Token không hợp lệ') ||
-        error.message.includes('Mật khẩu mới phải')) {
+      error.message.includes('Token không hợp lệ') ||
+      error.message.includes('Mật khẩu mới phải')) {
       return res.status(400).json({
         success: false,
         message: error.message
       });
     }
+
 
     res.status(500).json({
       success: false,
@@ -372,10 +445,12 @@ const resetPassword = async (req, res) => {
   }
 };
 
+
 // Verify reset password token (GET endpoint)
 const verifyResetPasswordToken = async (req, res) => {
   try {
     const { token, email } = req.query;
+
 
     if (!token || !email) {
       return res.status(400).json({
@@ -384,9 +459,11 @@ const verifyResetPasswordToken = async (req, res) => {
       });
     }
 
+
     // Hash token để so sánh với DB
     const crypto = require('crypto');
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
 
     // Tìm user với token chưa hết hạn
     const user = await User.findOne({
@@ -395,12 +472,14 @@ const verifyResetPasswordToken = async (req, res) => {
       resetPasswordExpire: { $gt: Date.now() }
     });
 
+
     if (!user) {
       return res.status(400).json({
         success: false,
         message: 'Token không hợp lệ hoặc đã hết hạn'
       });
     }
+
 
     res.status(200).json({
       success: true,
@@ -412,9 +491,10 @@ const verifyResetPasswordToken = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi verify reset password token:', error);
-    
+
     res.status(500).json({
       success: false,
       message: 'Lỗi server. Vui lòng thử lại sau',
@@ -423,18 +503,23 @@ const verifyResetPasswordToken = async (req, res) => {
   }
 };
 
+
 const updateProfile = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const allowedFields = ['fullName', 'phoneNumber', 'address','dob', 'gender', 'emergencyContact'];
+
+    const allowedFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'emergencyContact'];
     const updates = {};
+
 
     for (const field of allowedFields) {
       if (req.body[field] === undefined) continue;
 
+
       if (field === 'emergencyContact') {
         let ec = req.body[field];
+
 
         // Nếu FE gửi form-data → emergencyContact là string JSON
         if (typeof ec === 'string') {
@@ -448,13 +533,16 @@ const updateProfile = async (req, res) => {
           }
         }
 
+
         updates.emergencyContact = ec;   // ⭐ QUAN TRỌNG: phải set vào updates
       } else {
         updates[field] = req.body[field];
       }
     }
 
+
     const updatedUser = await userService.updateProfile(userId, updates, req.file);
+
 
     res.status(200).json({
       success: true,
@@ -479,6 +567,7 @@ const updateProfile = async (req, res) => {
       }
     });
 
+
   } catch (error) {
     console.error('Lỗi cập nhật profile:', error);
     res.status(500).json({ success: false, message: 'Lỗi server. Vui lòng thử lại sau' });
@@ -487,11 +576,19 @@ const updateProfile = async (req, res) => {
 
 
 
+
+
+
 // Middleware xác thực JWT
 const authenticateToken = async (req, res, next) => {
   try {
+    const cookieToken = req.cookies?.token;
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    const bearerToken = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+
+    const token = cookieToken || bearerToken;
+
 
     if (!token) {
       return res.status(401).json({
@@ -500,9 +597,11 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
+
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
+
 
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
@@ -525,14 +624,18 @@ const authenticateToken = async (req, res, next) => {
 };
 
 
+
+
 const changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword, reNewPassword } = req.body;
+
 
     const result = await userService.changePassword(
       req.user.userId,
       { oldPassword, newPassword, reNewPassword }
     );
+
 
     res.status(200).json({
       success: true,
@@ -549,6 +652,39 @@ const changePassword = async (req, res) => {
 };
 
 
+const logout = async (req, res) => {
+  try {
+    const useSecureCookie = process.env.COOKIE_SECURE === "true";
+
+
+    // Xoá cookie token
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: useSecureCookie,
+      sameSite: useSecureCookie ? "none" : "lax",
+    });
+
+
+    return res.status(200).json({
+      success: true,
+      message: "Đăng xuất thành công",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+
+
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi server khi đăng xuất",
+    });
+  }
+};
+
+
+
+
+
+
 
 
 module.exports = {
@@ -562,4 +698,8 @@ module.exports = {
   verifyResetPasswordToken,
   authenticateToken,
   changePassword,
+  logout
 };
+
+
+

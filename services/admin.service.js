@@ -2,6 +2,7 @@ const User = require('../models/user.model');
 const Doctor = require('../models/doctor.model');
 const Staff = require('../models/staff.model');
 const Patient = require('../models/patient.model');
+const DateHelper = require('../utils/dateHelper');
 
 const ROLE_ACCOUNT = ['Doctor', 'Nurse', 'Staff', 'Manager'];
 
@@ -64,24 +65,24 @@ class AdminService {
     }
 
     // Validate dob
+    // Validate dob
     if (!dob || typeof dob !== 'string' || dob.trim().length === 0) {
       throw new Error('Ngày sinh không được để trống');
     }
 
-    const birthDate = new Date(dob);
-    const now = new Date();
+    const { day: bDay, month: bMonth, year: bYear } = DateHelper.parseDobFromDDMMYYYY(dob);
+    const { day: nDay, month: nMonth, year: nYear } = DateHelper.getTodayVNDateParts();
 
-    if (isNaN(birthDate.getTime())) {
+    // Tính tuổi
+    let age = nYear - bYear;
+    if (nMonth < bMonth || (nMonth === bMonth && nDay < bDay)) {
+      age--;
+    }
+
+    if (isNaN(age) || age < 0) {
       throw new Error('Ngày sinh không hợp lệ');
     }
 
-    let age = now.getFullYear() - birthDate.getFullYear();
-    const month = now.getMonth() - birthDate.getMonth();
-    const day = now.getDate() - birthDate.getDate();
-
-    if (month < 0 || (month === 0 && day < 0)) {
-      age--;
-    }
 
 
     // Validate role
@@ -125,9 +126,9 @@ class AdminService {
 
     // Tạo User account
     const newAccount = new User({ fullName, email, passwordHash, dob, address, role, phoneNumber, status: 'Active' });
-    if(newAccount.role === 'Doctor' && age <= 27) throw new Error('Bác sĩ phải đủ 27 tuổi')
-    if(newAccount.role === 'Nurse' && age <= 22) throw new Error('Điều dưỡng phải đủ 22 tuổi')
-    if(newAccount.role === 'Staff' && age <= 18) throw new Error('Lễ tân phải đủ 18 tuổi')
+    if (newAccount.role === 'Doctor' && age <= 27) throw new Error('Bác sĩ phải đủ 27 tuổi')
+    if (newAccount.role === 'Nurse' && age <= 22) throw new Error('Điều dưỡng phải đủ 22 tuổi')
+    if (newAccount.role === 'Staff' && age <= 18) throw new Error('Lễ tân phải đủ 18 tuổi')
     await newAccount.save();
 
     // Nếu role là Doctor, tạo record trong Doctor collection
@@ -266,11 +267,11 @@ class AdminService {
   async getAccountById(id) {
     const detailAccount = await User.findById(id)
       .select('-passwordHash -resetPasswordToken -resetPasswordExpire -__v');
-    
+
     if (!detailAccount) {
       throw new Error('Không tìm thấy tài khoản');
     }
-    
+
     return detailAccount;
   }
 
