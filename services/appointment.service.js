@@ -34,13 +34,13 @@ function parseTimezoneAwareDate(dateInput) {
   if (!dateInput) {
     throw new Error('Date input is required');
   }
-  
+
   const parsedDate = new Date(dateInput);
-  
+
   if (isNaN(parsedDate.getTime())) {
     throw new Error(`Invalid date format: ${dateInput}`);
   }
-  
+
   // Log for debugging timezone issues
   console.log(`📅 [Timezone] Parsing date:`, {
     input: dateInput,
@@ -48,14 +48,14 @@ function parseTimezoneAwareDate(dateInput) {
     utc: parsedDate.toUTCString(),
     vnTime: parsedDate.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })
   });
-  
+
   return parsedDate;
 }
 
 const fonts = {
   Roboto: {
-    normal: path.join(__dirname, '../fonts/Roboto-Regular.ttf'),   
-    bold: path.join(__dirname, '../fonts/Roboto-Bold.ttf'),         
+    normal: path.join(__dirname, '../fonts/Roboto-Regular.ttf'),
+    bold: path.join(__dirname, '../fonts/Roboto-Bold.ttf'),
     italics: path.join(__dirname, '../fonts/Roboto-Italic.ttf'),
     bolditalics: path.join(__dirname, '../fonts/Roboto-BoldItalic.ttf')
   }
@@ -109,7 +109,7 @@ class AppointmentService {
     const promotionData = await calculateServicePrice(serviceId, service.price);
     const finalPrice = promotionData.finalPrice;
     const originalPrice = promotionData.originalPrice;
-    
+
     console.log('💰 Thông tin giá dịch vụ:');
     console.log('   - Giá gốc:', originalPrice, 'VND');
     console.log('   - Giá sau giảm:', finalPrice, 'VND');
@@ -137,7 +137,7 @@ class AppointmentService {
     // Xác định customerId dựa vào appointmentFor
     // appointmentFor: 'self' | 'other'
     let customerId = null;
-    
+
     // Log thông tin để kiểm tra
     console.log('📋 Thông tin đặt lịch:');
     console.log('- Service:', service.serviceName);
@@ -152,7 +152,7 @@ class AppointmentService {
     // ⭐ THÊM: Validate customer conflict khi đặt cho người khác
     if (appointmentFor === 'other' && fullName && email) {
       console.log(`🔍 Checking customer conflict for: ${fullName} <${email}>`);
-      
+
       // Normalize name và email (lowercase, remove extra spaces/diacritics)
       const normalizeString = (str) => {
         return str
@@ -165,19 +165,19 @@ class AppointmentService {
 
       const normalizedFullName = normalizeString(fullName);
       const normalizedEmail = normalizeString(email);
-      
+
       console.log(`   - Normalized: ${normalizedFullName} <${normalizedEmail}>`);
-      
+
       // Tìm customer với matching fullName + email
       const Customer = require('../models/customer.model');
       const existingCustomer = await Customer.findOne({
         fullName: new RegExp(`^${fullName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'),
         email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
       });
-      
+
       if (existingCustomer) {
         console.log(` Tìm thấy existing customer: ${existingCustomer._id}`);
-        
+
         // Kiểm tra xem customer này đã có appointment vào khung giờ này chưa
         const conflictAppointment = await Appointment.findOne({
           customerId: existingCustomer._id,
@@ -202,7 +202,7 @@ class AppointmentService {
             const appointmentEndTime = new Date(conflictAppt.timeslotId.endTime);
             const slotStartTime = new Date(selectedSlot.startTime);
             const slotEndTime = new Date(selectedSlot.endTime);
-            
+
             // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
             // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime
             if (slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime) {
@@ -224,7 +224,7 @@ class AppointmentService {
       // Extract date from selectedSlot.startTime
       const slotDate = new Date(selectedSlot.startTime);
       slotDate.setUTCHours(0, 0, 0, 0);
-      
+
       await availableSlotService.validateAppointmentTime({
         doctorUserId,
         serviceId,
@@ -236,7 +236,7 @@ class AppointmentService {
         customerEmail: email,
         reservedByUserId: patientUserId
       });
-      
+
       console.log('✅ [createConsultationAppointment] Time validation passed');
     } catch (validationError) {
       console.error('❌ [createConsultationAppointment] Time validation failed:', validationError.message);
@@ -252,7 +252,7 @@ class AppointmentService {
     // Cho phép đặt cùng giờ với bác sĩ khác
     if (appointmentFor === 'self' || !appointmentFor) {
       console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId} with doctor: ${doctorUserId}`);
-      
+
       // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
       let excludeAppointmentId = null;
       if (reservedTimeslotId) {
@@ -261,7 +261,7 @@ class AppointmentService {
           excludeAppointmentId = reservedTimeslot.appointmentId;
         }
       }
-      
+
       // ⭐ CHỈ lấy appointments của bệnh nhân với CÙNG bác sĩ (cho phép đặt cùng giờ với bác sĩ khác)
       const patientConflictAppointments = await Appointment.find({
         patientUserId: patientUserId,
@@ -280,23 +280,23 @@ class AppointmentService {
         if (excludeAppointmentId && apt._id.toString() === excludeAppointmentId.toString()) {
           return false;
         }
-        
+
         if (!apt.timeslotId) return false;
-        
+
         const aptStartTime = new Date(apt.timeslotId.startTime);
         const aptEndTime = new Date(apt.timeslotId.endTime);
-        
+
         // Conflict nếu: slotStartTime < aptEndTime && slotEndTime > aptStartTime
         // (không cộng buffer time - slot tiếp theo có thể bắt đầu ngay sau)
         const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
-        
+
         if (isConflict) {
           console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này với bác sĩ ${doctorUserId}:`);
           console.log(`   - Appointment ID: ${apt._id}`);
           console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
           console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
         }
-        
+
         return isConflict;
       });
 
@@ -306,15 +306,15 @@ class AppointmentService {
 
       console.log(`✅ Patient ${patientUserId} không có conflict với bác sĩ ${doctorUserId}`);
     }
-    
-    
+
+
     const nowUtc = new Date();
     const nowRounded = new Date(nowUtc);
     nowRounded.setSeconds(0, 0);
     if (slotStartTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
-    
+
     const conflictingTimeslotsRaw = await Timeslot.find({
       doctorUserId: doctorUserId,
       startTime: { $lt: slotEndTime },
@@ -361,10 +361,10 @@ class AppointmentService {
     const slotDate = new Date(selectedSlot.startTime);
     const scheduleDate = new Date(selectedSlot.startTime); // Define scheduleDate
     scheduleDate.setUTCHours(0, 0, 0, 0); // Set to start of day UTC
-    
+
     console.log(`🔍 Ensuring schedules exist for date ${scheduleDate.toISOString().split('T')[0]}...`);
     await ScheduleHelper.ensureSchedulesForDate(scheduleDate);
-    
+
     // Validate selectedSlot duration phải khớp với service duration
     const slotDurationMinutes = (slotEndTime - slotStartTime) / 60000;
 
@@ -399,7 +399,7 @@ class AppointmentService {
     // Cho phép đặt trùng giờ với bác sĩ khác
     const slotStart = new Date(selectedSlot.startTime);
     const slotEnd = new Date(selectedSlot.endTime);
-    
+
     // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
     let excludeAppointmentId = null;
     if (reservedTimeslotId) {
@@ -408,7 +408,7 @@ class AppointmentService {
         excludeAppointmentId = reservedTimeslot.appointmentId;
       }
     }
-    
+
     // Lấy appointments của user với bác sĩ hiện tại trong cùng ngày
     const sameDayAppointments = await Appointment.find({
       patientUserId,
@@ -416,10 +416,10 @@ class AppointmentService {
       status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn'] },
       timeslotId: { $exists: true }
     })
-    .populate({
-      path: 'timeslotId',
-      select: 'startTime endTime'
-    });
+      .populate({
+        path: 'timeslotId',
+        select: 'startTime endTime'
+      });
 
     // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
     // ⭐ Loại trừ appointment liên kết với reservedTimeslotId (nếu có) để tránh conflict với chính appointment đang được tạo
@@ -428,21 +428,21 @@ class AppointmentService {
       if (excludeAppointmentId && apt._id.toString() === excludeAppointmentId.toString()) {
         continue;
       }
-      
+
       if (!apt.timeslotId) continue;
 
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
-      
+
       // Check overlap: (start1 < end2) AND (end1 > start2) - không cộng buffer time
       // Cho phép đặt liên tiếp: 08:20-08:50 và 08:50-09:20
       const hasTimeOverlap = (slotStart < aptEnd && slotEnd > aptStart);
-      
+
       if (hasTimeOverlap) {
         const aptDateVN = aptStart.toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
         const aptStartVN = aptStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
         const aptEndVN = aptEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' });
-        
+
         throw new Error(
           `Bạn đã có lịch hẹn với bác sĩ này vào ${aptDateVN} từ ${aptStartVN} - ${aptEndVN}. ` +
           `Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
@@ -477,14 +477,14 @@ class AppointmentService {
         customerId: { $exists: true },
         timeslotId: { $exists: true }
       })
-      .populate({
-        path: 'timeslotId',
-        select: 'startTime endTime'
-      })
-      .populate({
-        path: 'customerId',
-        select: 'fullName email'
-      });
+        .populate({
+          path: 'timeslotId',
+          select: 'startTime endTime'
+        })
+        .populate({
+          path: 'customerId',
+          select: 'fullName email'
+        });
 
       // Filter appointments có overlap thời gian (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
       for (const apt of overlappingAppointments) {
@@ -508,7 +508,7 @@ class AppointmentService {
             const aptEndVN = (aptEnd.getUTCHours() + 7) % 24;
             const aptStartDisplay = `${String(aptStartVN).padStart(2, '0')}:${String(aptStart.getUTCMinutes()).padStart(2, '0')}`;
             const aptEndDisplay = `${String(aptEndVN).padStart(2, '0')}:${String(aptEnd.getUTCMinutes()).padStart(2, '0')}`;
-            
+
             throw new Error(
               `Bạn đã đặt lịch cho "${fullName}" vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
               `Vui lòng chọn thời gian khác.`
@@ -519,9 +519,9 @@ class AppointmentService {
 
       // Tạo Customer mới
       const newCustomer = await Customer.create({
-        patientUserId: patientUserId, 
+        patientUserId: patientUserId,
         fullName: fullName,
-        email: email, 
+        email: email,
         phoneNumber: phoneNumber,
         hasAccount: false,
         linkedUserId: null
@@ -583,7 +583,7 @@ class AppointmentService {
       // ⭐ FIX: Use timezone-aware parsing to prevent UTC conversion issues
       const startTimeUTC = parseTimezoneAwareDate(selectedSlot.startTime);
       const endTimeUTC = parseTimezoneAwareDate(selectedSlot.endTime);
-      
+
       timeslotRecord = await Timeslot.create({
         doctorScheduleId: schedule._id,
         doctorUserId,
@@ -619,7 +619,7 @@ class AppointmentService {
     // Xác định status và expireAt dựa vào isPrepaid
     let appointmentStatus = 'Pending';
     let paymentHoldExpiresAt = null;
-    
+
     if (service.isPrepaid) {
       // Nếu cần thanh toán trước, set status PendingPayment và expire sau 3 phút (cho demo)
       appointmentStatus = 'PendingPayment';
@@ -688,10 +688,10 @@ class AppointmentService {
     // Nếu cần thanh toán trước, tạo Payment record và QR code
     let paymentRecord = null;
     let qrData = null;
-    
+
     if (service.isPrepaid) {
       const paymentService = require('./payment.service');
-      
+
       // Xác định tên khách hàng để hiển thị trên QR
       let customerName = patient.fullName; // Mặc định là người đặt lịch
       if (customerId) {
@@ -701,7 +701,7 @@ class AppointmentService {
           customerName = customer.fullName;
         }
       }
-      
+
       const paymentResult = await paymentService.createPayment({
         appointmentId: newAppointment._id,
         patientUserId: patientUserId,
@@ -736,23 +736,23 @@ class AppointmentService {
     console.log('✅ Status:', populatedAppointment.status);
 
     //Thông báo cho lễ tân 
-    const listStaff = await User.find({role : "Staff"})
+    const listStaff = await User.find({ role: "Staff" })
     try {
-     await Promise.all(
-    listStaff.map(s =>
-      notificationService.createNotification({
-        userId: s._id,
-        createdByUserId: patientUserId,
-        title: 'Lịch khám mới đã được đặt',
-        message: `Đã có bệnh nhân đặt lịch khám mới`,
-        relatedAppointmentId: newAppointment._id,
-        link: null,
-      })
-    )
-  );
-} catch (notifError) {
-  console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
-}
+      await Promise.all(
+        listStaff.map(s =>
+          notificationService.createNotification({
+            userId: s._id,
+            createdByUserId: patientUserId,
+            title: 'Lịch khám mới đã được đặt',
+            message: `Đã có bệnh nhân đặt lịch khám mới`,
+            relatedAppointmentId: newAppointment._id,
+            link: null,
+          })
+        )
+      );
+    } catch (notifError) {
+      console.warn('⚠️ Lỗi gửi notification cho staff:', notifError.message);
+    }
 
 
     // Chuẩn hóa response cho FE: trả requirePayment và thông tin QR nếu cần
@@ -855,8 +855,8 @@ class AppointmentService {
       }
 
       // ⭐ Loại trừ reservation của chính user đang đặt (cho phép user release slot cũ và đặt slot mới)
-      if (slot.status === 'Reserved' && patientUserId && slot.reservedByUserId && 
-          slot.reservedByUserId.toString() === patientUserId.toString()) {
+      if (slot.status === 'Reserved' && patientUserId && slot.reservedByUserId &&
+        slot.reservedByUserId.toString() === patientUserId.toString()) {
         continue;
       }
 
@@ -906,7 +906,7 @@ class AppointmentService {
     timeslot.serviceId = serviceId;
 
     await timeslot.save();
-    
+
     console.log('✅ Timeslot reserved:', timeslot._id);
     console.log('   - Start Time (UTC):', validatedStart.toISOString());
     console.log('   - End Time (UTC):', validatedEnd.toISOString());
@@ -1006,7 +1006,7 @@ class AppointmentService {
     const service = await Service.findById(serviceId);
     if (!service) throw new Error('Dịch vụ không tồn tại');
     if (service.status !== 'Active') throw new Error('Dịch vụ hiện không khả dụng');
-    
+
     // ⭐ VALIDATE: Đảm bảo service có price field
     if (typeof service.price !== 'number' || service.price < 0) {
       console.error('❌ Service missing price field:', {
@@ -1208,12 +1208,12 @@ class AppointmentService {
     let promotionData;
     let finalPrice;
     let originalPrice;
-    
+
     try {
       promotionData = await calculateServicePrice(serviceId, service.price);
       finalPrice = promotionData.finalPrice;
       originalPrice = promotionData.originalPrice;
-      
+
       console.log('💰 Price calculation for walk-in:', {
         serviceId: serviceId,
         serviceName: service.serviceName,
@@ -1348,9 +1348,9 @@ class AppointmentService {
         let meetLink = null;
         if (populatedAppointment.mode === 'Online' && populatedAppointment.type === 'Consultation') {
           console.log('📞 Tạo Google Meet link cho tư vấn online...');
-          
+
           const googleMeetService = require('./googleMeetService');
-          
+
           try {
             meetLink = await googleMeetService.generateMeetLink({
               appointmentId: appointmentId,
@@ -1417,7 +1417,7 @@ class AppointmentService {
             const appointmentDate = new Date(updatedAppointment.timeslotId.startTime);
             const dateStr = appointmentDate.toLocaleDateString('vi-VN');
             const timeStr = appointmentDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-            
+
             await notificationService.createNotification({
               userId: patientUserId,
               createdByUserId: staffUserId,
@@ -1588,12 +1588,12 @@ class AppointmentService {
     for (const appointment of appointments) {
       // Chỉ check appointments đang "Pending"
       if (appointment.status !== 'Pending') continue;
-      
+
       if (!appointment.timeslotId || !appointment.timeslotId.startTime) continue;
 
       // Lấy ngày khám từ timeslot
       const appointmentDate = new Date(appointment.timeslotId.startTime);
-      
+
       // Tạo cutoff time: 18:00 UTC của ngày hẹn
       const cutoffTime = new Date(appointmentDate);
       cutoffTime.setUTCHours(18, 0, 0, 0);
@@ -1664,35 +1664,35 @@ class AppointmentService {
       // ⭐ Thêm doctor status vào mỗi appointment - kiểm tra leave request theo ngày của appointment
       const Doctor = require('../models/doctor.model');
       const LeaveRequest = require('../models/leaveRequest.model');
-      
+
       // Lấy tất cả doctorUserIds từ appointments
       const doctorUserIds = updatedAppointments
         .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
         .map(apt => apt.doctorUserId._id);
-      
+
       // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
       const doctors = await Doctor.find({
         doctorUserId: { $in: doctorUserIds }
       }).select('doctorUserId status').lean();
-      
+
       // Tạo map để lookup nhanh
       const doctorStatusMap = new Map();
       doctors.forEach(doctor => {
         doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
       });
-      
+
       // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
       const approvedLeaves = await LeaveRequest.find({
         status: 'Approved',
         userId: { $in: doctorUserIds }
       }).select('userId startDate endDate').lean();
-      
+
       // Thêm doctorStatus vào mỗi appointment - kiểm tra leave theo ngày appointment
       const appointmentsWithDoctorStatus = updatedAppointments.map((apt) => {
         if (apt.doctorUserId && apt.doctorUserId._id) {
           const doctorUserId = apt.doctorUserId._id.toString();
           const globalStatus = doctorStatusMap.get(doctorUserId);
-          
+
           // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
           let isOnLeaveForThisDate = false;
           if (apt.timeslotId && apt.timeslotId.startTime) {
@@ -1701,17 +1701,17 @@ class AppointmentService {
             const appointmentTimeVN = new Date(new Date(apt.timeslotId.startTime).getTime() + 7 * 60 * 60 * 1000);
             const appointmentDateVN = new Date(appointmentTimeVN);
             appointmentDateVN.setUTCHours(0, 0, 0, 0);
-            
+
             // Kiểm tra trong danh sách approved leaves
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
                 // Convert leave dates to VN Date (UTC+7)
                 const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
                 leaveStartVN.setUTCHours(0, 0, 0, 0);
-                
+
                 const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
                 leaveEndVN.setUTCHours(23, 59, 59, 999);
-                
+
                 // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)
                 if (appointmentDateVN.getTime() >= leaveStartVN.getTime() && appointmentDateVN.getTime() <= leaveEndVN.getTime()) {
                   isOnLeaveForThisDate = true;
@@ -1720,7 +1720,7 @@ class AppointmentService {
               }
             }
           }
-          
+
           // ⭐ Chỉ set doctorStatus = 'On Leave' nếu appointment thực sự nằm trong khoảng nghỉ phép
           // Không dùng status global vì nó có thể áp dụng cho tất cả appointments
           if (isOnLeaveForThisDate) {
@@ -1817,35 +1817,35 @@ class AppointmentService {
       // ⭐ Thêm doctor status vào mỗi appointment - kiểm tra leave request theo ngày của appointment
       const Doctor = require('../models/doctor.model');
       const LeaveRequest = require('../models/leaveRequest.model');
-      
+
       // Lấy tất cả doctorUserIds từ appointments
       const doctorUserIds = appointments
         .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
         .map(apt => apt.doctorUserId._id);
-      
+
       // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
       const doctors = await Doctor.find({
         doctorUserId: { $in: doctorUserIds }
       }).select('doctorUserId status').lean();
-      
+
       // Tạo map để lookup nhanh
       const doctorStatusMap = new Map();
       doctors.forEach(doctor => {
         doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
       });
-      
+
       // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
       const approvedLeaves = await LeaveRequest.find({
         status: 'Approved',
         userId: { $in: doctorUserIds }
       }).select('userId startDate endDate').lean();
-      
+
       // Thêm doctorStatus vào mỗi appointment - kiểm tra leave theo ngày appointment
       const appointmentsWithDoctorStatus = appointments.map((apt) => {
         if (apt.doctorUserId && apt.doctorUserId._id) {
           const doctorUserId = apt.doctorUserId._id.toString();
           const globalStatus = doctorStatusMap.get(doctorUserId);
-          
+
           // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
           let isOnLeaveForThisDate = false;
           if (apt.timeslotId && apt.timeslotId.startTime) {
@@ -1854,17 +1854,17 @@ class AppointmentService {
             const appointmentTimeVN = new Date(new Date(apt.timeslotId.startTime).getTime() + 7 * 60 * 60 * 1000);
             const appointmentDateVN = new Date(appointmentTimeVN);
             appointmentDateVN.setUTCHours(0, 0, 0, 0);
-            
+
             // Kiểm tra trong danh sách approved leaves
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
                 // Convert leave dates to VN Date (UTC+7)
                 const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
                 leaveStartVN.setUTCHours(0, 0, 0, 0);
-                
+
                 const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
                 leaveEndVN.setUTCHours(23, 59, 59, 999);
-                
+
                 // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)
                 if (appointmentDateVN.getTime() >= leaveStartVN.getTime() && appointmentDateVN.getTime() <= leaveEndVN.getTime()) {
                   isOnLeaveForThisDate = true;
@@ -1873,7 +1873,7 @@ class AppointmentService {
               }
             }
           }
-          
+
           // ⭐ Chỉ set doctorStatus = 'On Leave' nếu appointment thực sự nằm trong khoảng nghỉ phép
           // Không dùng status global vì nó có thể áp dụng cho tất cả appointments
           if (isOnLeaveForThisDate) {
@@ -1910,11 +1910,11 @@ class AppointmentService {
           phoneNumber: apt.patientUserId.phoneNumber
         } : null,
         doctorUserId: apt.doctorUserId ? {
-  _id: apt.doctorUserId._id?.toString() || apt.doctorUserId._id,
-  fullName: apt.doctorUserId.fullName,
-  email: apt.doctorUserId.email,
-  specialization: apt.doctorUserId.specialization
-} : null,
+          _id: apt.doctorUserId._id?.toString() || apt.doctorUserId._id,
+          fullName: apt.doctorUserId.fullName,
+          email: apt.doctorUserId.email,
+          specialization: apt.doctorUserId.specialization
+        } : null,
         serviceId: apt.serviceId ? {
           serviceName: apt.serviceId.serviceName,
           price: apt.serviceId.price,
@@ -1942,25 +1942,25 @@ class AppointmentService {
         createdAt: apt.createdAt,
         updatedAt: apt.updatedAt,
         // ⭐ THÊM: Map additionalServiceIds để frontend hiển thị tất cả services cho follow-up
-        additionalServiceIds: apt.additionalServiceIds && Array.isArray(apt.additionalServiceIds) 
+        additionalServiceIds: apt.additionalServiceIds && Array.isArray(apt.additionalServiceIds)
           ? apt.additionalServiceIds.map(s => ({
-              _id: s._id?.toString() || s._id,
-              serviceName: s.serviceName || '',
-              price: s.price || 0,
-              category: s.category || '',
-              durationMinutes: s.durationMinutes || 0
-            }))
+            _id: s._id?.toString() || s._id,
+            serviceName: s.serviceName || '',
+            price: s.price || 0,
+            category: s.category || '',
+            durationMinutes: s.durationMinutes || 0
+          }))
           : [],
         // ⭐ THÊM: Map additionalServiceNames để frontend hiển thị tất cả services cho follow-up (tương thích với nurse/doctor schedule)
         additionalServiceNames: apt.additionalServiceIds && Array.isArray(apt.additionalServiceIds) && apt.type === 'FollowUp'
           ? apt.additionalServiceIds.map(s => s.serviceName || '').filter(Boolean)
           : [],
-replacedDoctorUserId: apt.replacedDoctorUserId ? {
-  _id: apt.replacedDoctorUserId._id?.toString() || apt.replacedDoctorUserId._id,
-  fullName: apt.replacedDoctorUserId.fullName,
-  email: apt.replacedDoctorUserId.email,
-  specialization: apt.replacedDoctorUserId.specialization
-} : null,
+        replacedDoctorUserId: apt.replacedDoctorUserId ? {
+          _id: apt.replacedDoctorUserId._id?.toString() || apt.replacedDoctorUserId._id,
+          fullName: apt.replacedDoctorUserId.fullName,
+          email: apt.replacedDoctorUserId.email,
+          specialization: apt.replacedDoctorUserId.specialization
+        } : null,
         confirmDeadline: apt.confirmDeadline || null,
         doctorStatus: apt.doctorStatus || null, // ⭐ Thêm doctorStatus
         noTreatment: !!apt.noTreatment
@@ -2047,23 +2047,23 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
 
         // ⭐ KIỂM TRA: Nếu bác sĩ đang On Leave, không cho phép chuyển sang InProgress
         // Chỉ cho phép khi đã có bác sĩ thay thế và đã được confirm
-        
+
         // Lấy doctorUserId hiện tại (bác sĩ đang được gán trong appointment)
         const currentDoctorId = appointment.doctorUserId?._id || appointment.doctorUserId;
-        
+
         if (currentDoctorId) {
           const currentDoctor = await Doctor.findOne({ doctorUserId: currentDoctorId }).select('status');
-          
+
           // Nếu bác sĩ hiện tại đang On Leave
           if (currentDoctor && currentDoctor.status === 'On Leave') {
             // Kiểm tra xem đã có bác sĩ thay thế chưa
             const replacedDoctorId = appointment.replacedDoctorUserId?._id || appointment.replacedDoctorUserId;
-            
+
             if (!replacedDoctorId) {
               // Chưa có bác sĩ thay thế → không cho phép
               throw new Error('Không thể bắt đầu ca khám. Bác sĩ hiện tại đang vắng mặt. Vui lòng gán bác sĩ mới trước khi bắt đầu ca khám.');
             }
-            
+
             // Đã có bác sĩ thay thế, kiểm tra xem đã được confirm chưa
             // Nếu doctorUserId = replacedDoctorUserId → đã confirm
             if (currentDoctorId.toString() === replacedDoctorId.toString()) {
@@ -2164,15 +2164,15 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
       appointment.cancelReason = cancelReason || 'Người dùng hủy lịch hẹn';
       appointment.cancelledAt = new Date();
       appointment.updatedAt = new Date();
-      
-        // Lưu thông tin ngân hàng nếu có
-        if (bankInfo) {
-          appointment.bankInfo = {
-            accountHolderName: bankInfo.accountHolderName || null,
-            accountNumber: bankInfo.accountNumber || null,
-            bankName: bankInfo.bankName || null
-          };
-        }
+
+      // Lưu thông tin ngân hàng nếu có
+      if (bankInfo) {
+        appointment.bankInfo = {
+          accountHolderName: bankInfo.accountHolderName || null,
+          accountNumber: bankInfo.accountNumber || null,
+          bankName: bankInfo.bankName || null
+        };
+      }
 
       await appointment.save();
 
@@ -2292,7 +2292,7 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
   async getAppointmentDetails(appointmentId) {
     try {
       console.log(`🔍 Lấy chi tiết lịch hẹn: ${appointmentId}`);
-      
+
       const appointment = await Appointment.findById(appointmentId)
         .populate('patientUserId', 'fullName email phone')
         .populate('customerId', 'fullName email phoneNumber')
@@ -2371,7 +2371,7 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
   }
 
 
-  
+
   async assignDoctorToAppointment(appointmentId, newDoctorId, userId) {
     try {
       const appointment = await Appointment.findById(appointmentId)
@@ -2396,15 +2396,15 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
         throw new Error('Bác sĩ không tồn tại');
       }
 
-      const oldDoctorName = appointment.replacedDoctorUserId?.fullName 
-                         || appointment.doctorUserId?.fullName 
-                         || null;
+      const oldDoctorName = appointment.replacedDoctorUserId?.fullName
+        || appointment.doctorUserId?.fullName
+        || null;
 
       const updated = await Appointment.findByIdAndUpdate(
         appointmentId,
-        { 
+        {
           replacedDoctorUserId: newDoctorId,
-          confirmDeadline: new Date(Date.now() + 24*60*60*1000),
+          confirmDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
         { new: true }
       ).populate('replacedDoctorUserId', 'fullName');
@@ -2450,22 +2450,22 @@ replacedDoctorUserId: apt.replacedDoctorUserId ? {
   }
 
 
-async confirmChangeDoctor(appointmentId, userId , options = { auto: false }) {
-  try {
-    // 1. Tìm appointment
-    const appointment = await Appointment.findById(appointmentId)
-      .populate('patientUserId', 'fullName email phoneNumber')
-      .populate('doctorUserId', 'fullName email')
-      .populate('serviceId', 'serviceName price durationMinutes category')
-      .populate('timeslotId', 'startTime endTime');
+  async confirmChangeDoctor(appointmentId, userId, options = { auto: false }) {
+    try {
+      // 1. Tìm appointment
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('patientUserId', 'fullName email phoneNumber')
+        .populate('doctorUserId', 'fullName email')
+        .populate('serviceId', 'serviceName price durationMinutes category')
+        .populate('timeslotId', 'startTime endTime');
 
-    if (!appointment) throw new Error('Lịch khám không tồn tại');
+      if (!appointment) throw new Error('Lịch khám không tồn tại');
 
-    if (!appointment.replacedDoctorUserId) {
-      throw new Error('Không có yêu cầu đổi bác sĩ');
-    }
+      if (!appointment.replacedDoctorUserId) {
+        throw new Error('Không có yêu cầu đổi bác sĩ');
+      }
 
-     // ✅ Gửi notification cho bác sĩ mới
+      // ✅ Gửi notification cho bác sĩ mới
       try {
         await notificationService.createNotification({
           userId: appointment.replacedDoctorUserId,
@@ -2473,1230 +2473,1327 @@ async confirmChangeDoctor(appointmentId, userId , options = { auto: false }) {
           title: 'Bạn được gán lịch khám mới',
           message: `Bạn được chỉ định thay thế để khám khám bệnh cho bệnh nhân ${appointment.patientUserId.fullName} vào ngày ${new Date(appointment.timeslotId.startTime).toLocaleDateString('vi-VN')}.`,
           relatedAppointmentId: appointmentId,
-          link:  null,
+          link: null,
         });
       } catch (notifError) {
         console.warn('⚠️ Lỗi gửi notification bác sĩ:', notifError.message);
       }
 
-    // 2. Tìm lịch làm việc bác sĩ mới
-    const schedule = await DoctorSchedule.findOne({
-      doctorUserId: appointment.replacedDoctorUserId,
-    });
+      // 2. Tìm lịch làm việc bác sĩ mới
+      const schedule = await DoctorSchedule.findOne({
+        doctorUserId: appointment.replacedDoctorUserId,
+      });
 
-    // ✅ THÊM: Kiểm tra schedule có tồn tại không
-    if (!schedule) {
-      throw new Error(
-        `Bác sĩ mới không có lịch làm việc vào thời gian ${appointment.timeslotId.startTime}`
-      );
+      // ✅ THÊM: Kiểm tra schedule có tồn tại không
+      if (!schedule) {
+        throw new Error(
+          `Bác sĩ mới không có lịch làm việc vào thời gian ${appointment.timeslotId.startTime}`
+        );
+      }
+
+      // 3. Hủy timeslot cũ
+      const oldTimeSlot = await Timeslot.findById(appointment.timeslotId);
+      if (!oldTimeSlot) {
+        throw new Error('Không tìm thấy timeslot cũ');
+      }
+      if (oldTimeSlot) {
+        await Timeslot.findByIdAndDelete(oldTimeSlot._id);
+      }
+
+      // 4. Tạo timeslot mới
+      const newTimeslot = new Timeslot({
+        doctorScheduleId: schedule._id, // ✅ Lúc này schedule chắc chắn tồn tại
+        doctorUserId: appointment.replacedDoctorUserId,
+        serviceId: appointment.serviceId,
+        startTime: oldTimeSlot.startTime,
+        endTime: oldTimeSlot.endTime,
+        breakAfterMinutes: 10,
+        status: 'Booked',
+        appointmentId: appointmentId,
+      });
+      await newTimeslot.save();
+
+      // 5. Cập nhật appointment
+      await Appointment.findByIdAndUpdate(appointmentId, {
+        doctorUserId: appointment.replacedDoctorUserId,
+        timeslotId: newTimeslot._id,
+        replacedDoctorUserId: null,
+        confirmDeadline: null, // xóa confirmDeadline sau khi auto confirm
+      });
+
+      // 6. Gửi email (nếu cần)
+      if (options.auto) {
+        console.log(`⏰ Appointment ${appointmentId} đã được auto-confirm bác sĩ mới do quá hạn 24h.`);
+        // TODO: gửi email thông báo auto-confirm
+      } else {
+        console.log(`✅ Patient đã xác nhận đổi bác sĩ thành công: ${appointmentId}`);
+        // TODO: gửi email patient confirm như bình thường
+      }
+
+      // 7. Lấy dữ liệu đầy đủ sau khi cập nhật
+      const updatedAppointment = await Appointment.findById(appointmentId)
+        .populate('patientUserId', 'fullName email phoneNumber')
+        .populate('doctorUserId', 'fullName email')
+        .populate('serviceId', 'serviceName price durationMinutes category')
+        .populate('timeslotId', 'startTime endTime');
+
+      return updatedAppointment;
+    } catch (error) {
+      console.error('❌ Lỗi confirmChangeDoctor:', error.message);
+      throw error;
     }
-
-    // 3. Hủy timeslot cũ
-    const oldTimeSlot = await Timeslot.findById(appointment.timeslotId);
-    if (!oldTimeSlot) {
-      throw new Error('Không tìm thấy timeslot cũ');
-    }
-    if (oldTimeSlot) {
-      await Timeslot.findByIdAndDelete(oldTimeSlot._id);
-    }
-
-    // 4. Tạo timeslot mới
-    const newTimeslot = new Timeslot({
-      doctorScheduleId: schedule._id, // ✅ Lúc này schedule chắc chắn tồn tại
-      doctorUserId: appointment.replacedDoctorUserId,
-      serviceId: appointment.serviceId,
-      startTime: oldTimeSlot.startTime,
-      endTime: oldTimeSlot.endTime,
-      breakAfterMinutes: 10,
-      status: 'Booked',
-      appointmentId: appointmentId,
-    });
-    await newTimeslot.save();
-
-    // 5. Cập nhật appointment
-    await Appointment.findByIdAndUpdate(appointmentId, {
-      doctorUserId: appointment.replacedDoctorUserId,
-      timeslotId: newTimeslot._id,
-      replacedDoctorUserId: null,
-      confirmDeadline: null, // xóa confirmDeadline sau khi auto confirm
-    });
-
-    // 6. Gửi email (nếu cần)
-    if (options.auto) {
-      console.log(`⏰ Appointment ${appointmentId} đã được auto-confirm bác sĩ mới do quá hạn 24h.`);
-      // TODO: gửi email thông báo auto-confirm
-    } else {
-      console.log(`✅ Patient đã xác nhận đổi bác sĩ thành công: ${appointmentId}`);
-      // TODO: gửi email patient confirm như bình thường
-    }
-
-    // 7. Lấy dữ liệu đầy đủ sau khi cập nhật
-    const updatedAppointment = await Appointment.findById(appointmentId)
-      .populate('patientUserId', 'fullName email phoneNumber')
-      .populate('doctorUserId', 'fullName email')
-      .populate('serviceId', 'serviceName price durationMinutes category')
-      .populate('timeslotId', 'startTime endTime');
-
-    return updatedAppointment;
-  } catch (error) {
-    console.error('❌ Lỗi confirmChangeDoctor:', error.message);
-    throw error;
   }
-}
 
 
-async cancelChangeDoctor(appointmentId) {
+  async cancelChangeDoctor(appointmentId) {
     try {
       //Kiểm tra lịch khám có tồn tại không
       const appointment = await Appointment.findById(appointmentId);
-      if(!appointment){
+      if (!appointment) {
         throw new Error('Lịch khám không tồn tại')
-      }  
-      
-      if(!appointment.replacedDoctorUserId){
+      }
+
+      if (!appointment.replacedDoctorUserId) {
         throw new Error('Lịch khám đã bị hủy')
       }
 
       //Cập nhật lịch khám của bệnh nhân
       const update = await Appointment.findByIdAndUpdate(
         appointmentId,
-        {replacedDoctorUserId : null},
-        {new : true},
+        { replacedDoctorUserId: null },
+        { new: true },
       )
       console.log('❌Từ chối đổi bác sĩ mới thành công')
     } catch (error) {
-    console.error('❌ Lỗi từ chối đổi bác sĩ mới', error);
-    throw error;     
+      console.error('❌ Lỗi từ chối đổi bác sĩ mới', error);
+      throw error;
     }
   }
 
 
-async getVisitTicketPDF(appointmentId, res) {
-  try {
-    // === Lấy thông tin appointment ===
-    const appointment = await Appointment
-      .findById(appointmentId)
-      .populate('doctorUserId', 'fullName')
-      .populate('patientUserId', 'fullName dob gender address phoneNumber')
-      .populate('serviceId', 'serviceName price')
-      .populate('customerId', 'fullName phone');
+  async getVisitTicketPDF(appointmentId, res) {
+    try {
+      // === Lấy thông tin appointment ===
+      const appointment = await Appointment
+        .findById(appointmentId)
+        .populate('doctorUserId', 'fullName')
+        .populate('patientUserId', 'fullName dob gender address phoneNumber')
+        .populate('serviceId', 'serviceName price')
+        .populate('customerId', 'fullName phone');
 
-    if (!appointment) throw new Error('Không tìm thấy ca khám');
-    if (appointment.status !== 'Completed') throw new Error('Ca khám chưa hoàn thành');
+      if (!appointment) throw new Error('Không tìm thấy ca khám');
+      if (appointment.status !== 'Completed') throw new Error('Ca khám chưa hoàn thành');
 
-    //Lấy thông tin người khác 
-    const customerIn4 = await Customer.findById(appointment.customerId);
+      //Lấy thông tin người khác 
+      const customerIn4 = await Customer.findById(appointment.customerId);
 
-    // === Lấy hồ sơ khám ===
-    const record = await MedicalRecord
-      .findOne({ appointmentId })
-      .populate('nurseId', 'fullName')
-      .populate('additionalServiceIds', '_id serviceName price category')
-      .populate('prescriptions', 'medicine dosage duration');
+      // === Lấy hồ sơ khám ===
+      const record = await MedicalRecord
+        .findOne({ appointmentId })
+        .populate('nurseId', 'fullName')
+        .populate('additionalServiceIds', '_id serviceName price category')
+        .populate('prescriptions', 'medicine dosage duration');
 
-    if (!record) throw new Error('Chưa có hồ sơ khám');
+      if (!record) throw new Error('Chưa có hồ sơ khám');
 
-    let visitTicketData = await VisitTicket.findOne({ appointmentId: appointmentId });
+      let visitTicketData = await VisitTicket.findOne({ appointmentId: appointmentId });
 
-    // === LẦN ĐẦU: Tạo VisitTicket ===
-    if (!visitTicketData) {
-      const services = [];
-      const originalPrices = {};
+      // === LẦN ĐẦU: Tạo VisitTicket ===
+      if (!visitTicketData) {
+        const services = [];
+        const originalPrices = {};
 
-      // Dịch vụ
-      if (record.additionalServiceIds?.length) {
-        record.additionalServiceIds.forEach(s => {
-          services.push({
-            name: s.serviceName,
-            doctor: appointment.doctorUserId?.fullName?.split(' ').pop() || '—',
-            price: s.price,
-            serviceId: s._id
+        // Dịch vụ
+        if (record.additionalServiceIds?.length) {
+          record.additionalServiceIds.forEach(s => {
+            services.push({
+              name: s.serviceName,
+              doctor: appointment.doctorUserId?.fullName?.split(' ').pop() || '—',
+              price: s.price,
+              serviceId: s._id
+            });
+            originalPrices[s._id.toString()] = s.price;
           });
-          originalPrices[s._id.toString()] = s.price;
-        });
-      }
+        }
 
-      // === Áp dụng khuyến mãi cho từng dịch vụ ===
-      for (let i = 0; i < services.length; i++) {
-        const promotionService = await PromotionService.findOne({
-          serviceId: services[i].serviceId
-        }).select('promotionId');
+        // === Áp dụng khuyến mãi cho từng dịch vụ ===
+        for (let i = 0; i < services.length; i++) {
+          const promotionService = await PromotionService.findOne({
+            serviceId: services[i].serviceId
+          }).select('promotionId');
 
-        if (promotionService) {
-          const promotion = await Promotion.findById(promotionService.promotionId);
-          if (promotion) {
-            services[i].price = promotion.discountType === 'Percent'
-              ? services[i].price * (1 - promotion.discountValue / 100)
-              : services[i].price - promotion.discountValue;
-            services[i].price = Math.max(0, services[i].price);
+          if (promotionService) {
+            const promotion = await Promotion.findById(promotionService.promotionId);
+            if (promotion) {
+              services[i].price = promotion.discountType === 'Percent'
+                ? services[i].price * (1 - promotion.discountValue / 100)
+                : services[i].price - promotion.discountValue;
+              services[i].price = Math.max(0, services[i].price);
+            }
           }
         }
+
+        // Danh sách các service được lưu vào phiếu khám
+        const serviceList = record.additionalServiceIds.map(r => {
+          const discountedService = services.find(s => s.serviceId.toString() === r._id.toString());
+          const originalPrice = originalPrices[r._id.toString()];
+          const discountAmount = originalPrice - (discountedService ? discountedService.price : originalPrice);
+
+          return {
+            serviceId: r._id,
+            serviceName: r.serviceName,
+            category: r.category,
+            price: originalPrice,
+            discount: discountAmount,
+            total: discountedService ? discountedService.price : originalPrice
+          };
+        });
+
+        // Danh sách thuốc được đưa vào phiếu khám
+        const prescriptionList = (record.prescriptions || []).map(a => ({
+          medicine: a.medicine || '',
+          dosage: a.dosage || '',
+          duration: a.duration || ''
+        }));
+
+        // Tổng tiền
+        const totalPrice = serviceList.reduce((sum, s) => sum + s.total, 0);
+
+
+        // Tạo bản ghi cho phiếu khám bệnh
+        const newVisitTicket = new VisitTicket({
+          appointmentId: appointmentId,
+          patientName: appointment.patientUserId.fullName,
+          patientGender: appointment.patientUserId.gender,
+          patientAge: record.patientAge,
+          phoneNumber: appointment.patientUserId.phoneNumber,
+          address: appointment.patientUserId.address,
+          doctor: appointment.doctorUserId.fullName || '-',
+          date: appointment.updatedAt,
+          service: serviceList,
+          totalAmount: totalPrice,
+          diagnosis: record.diagnosis,
+          prescriptions: prescriptionList,
+        });
+
+        await newVisitTicket.save();
+        visitTicketData = newVisitTicket;
       }
 
-      // Danh sách các service được lưu vào phiếu khám
-      const serviceList = record.additionalServiceIds.map(r => {
-        const discountedService = services.find(s => s.serviceId.toString() === r._id.toString());
-        const originalPrice = originalPrices[r._id.toString()];
-        const discountAmount = originalPrice - (discountedService ? discountedService.price : originalPrice);
+      // ✅ KIỂM TRA SAFETY: visitTicketData phải tồn tại
+      if (!visitTicketData) {
+        throw new Error('Không thể tạo hoặc tìm VisitTicket');
+      }
 
-        return {
-          serviceId : r._id,
-          serviceName: r.serviceName,
-          category : r.category,
-          price: originalPrice,
-          discount: discountAmount,
-          total: discountedService ? discountedService.price : originalPrice
-        };
+      // === Tạo body bảng dịch vụ ===
+      const serviceTableBody = [
+        [
+          { text: 'STT', style: 'tableHeader' },
+          { text: 'Dịch vụ', style: 'tableHeader' },
+          { text: 'Bác sĩ', style: 'tableHeader' },
+          { text: 'Đơn giá', style: 'tableHeader', alignment: 'right' },
+          { text: 'Giảm giá', style: 'tableHeader', alignment: 'right' },
+          { text: 'Thành tiền', style: 'tableHeader', alignment: 'right' }
+        ]
+      ];
+
+      // Thêm các dòng dịch vụ
+      visitTicketData.service.forEach((service, index) => {
+        serviceTableBody.push([
+          { text: (index + 1).toString(), alignment: 'center' },
+          { text: service.serviceName },
+          { text: appointment.doctorUserId?.fullName || '—' },
+          { text: formatPrice(service.price), alignment: 'right' },
+          { text: formatPrice(service.discount), alignment: 'right' },
+          { text: formatPrice(service.total), alignment: 'right', bold: true }
+        ]);
       });
 
-      // Danh sách thuốc được đưa vào phiếu khám
-      const prescriptionList = (record.prescriptions || []).map(a => ({
-        medicine: a.medicine || '',
-        dosage: a.dosage || '',
-        duration: a.duration || ''
-      }));
+      function formatPrice(price) {
+        return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
+      }
 
-      // Tổng tiền
-      const totalPrice = serviceList.reduce((sum, s) => sum + s.total, 0);
-
-
-      // Tạo bản ghi cho phiếu khám bệnh
-      const newVisitTicket = new VisitTicket({
-        appointmentId: appointmentId,
-        patientName: appointment.patientUserId.fullName,
-        patientGender: appointment.patientUserId.gender,
-        patientAge: record.patientAge,
-        phoneNumber: appointment.patientUserId.phoneNumber,
-        address: appointment.patientUserId.address,
-        doctor: appointment.doctorUserId.fullName || '-',
-        date: appointment.updatedAt,
-        service: serviceList,
-        totalAmount: totalPrice,
-        diagnosis: record.diagnosis,
-        prescriptions: prescriptionList,
-      });
-
-      await newVisitTicket.save();
-      visitTicketData = newVisitTicket;
-    }
-
-    // ✅ KIỂM TRA SAFETY: visitTicketData phải tồn tại
-    if (!visitTicketData) {
-      throw new Error('Không thể tạo hoặc tìm VisitTicket');
-    }
-
-    // === Tạo body bảng dịch vụ ===
-    const serviceTableBody = [
-      [
-        { text: 'STT', style: 'tableHeader' },
-        { text: 'Dịch vụ', style: 'tableHeader' },
-        { text: 'Bác sĩ', style: 'tableHeader' },
-        { text: 'Đơn giá', style: 'tableHeader', alignment: 'right' },
-        { text: 'Giảm giá', style: 'tableHeader', alignment: 'right' },
-        { text: 'Thành tiền', style: 'tableHeader', alignment: 'right' }
-      ]
-    ];
-
-    // Thêm các dòng dịch vụ
-    visitTicketData.service.forEach((service, index) => {
-      serviceTableBody.push([
-        { text: (index + 1).toString(), alignment: 'center' },
-        { text: service.serviceName },
-        { text: appointment.doctorUserId?.fullName || '—' },
-        { text: formatPrice(service.price), alignment: 'right' },
-        { text: formatPrice(service.discount), alignment: 'right' },
-        { text: formatPrice(service.total), alignment: 'right', bold: true }
-      ]);
-    });
-
-    function formatPrice(price) {
-      return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
-    }
-
-    // === Tạo content toa thuốc ===
-    const prescriptionContent = visitTicketData.prescriptions?.length > 0
-      ? visitTicketData.prescriptions.map(p => [
+      // === Tạo content toa thuốc ===
+      const prescriptionContent = visitTicketData.prescriptions?.length > 0
+        ? visitTicketData.prescriptions.map(p => [
           { text: `- Thuốc : ${p.medicine} sử dụng ${p.dosage} ${p.duration}` },
         ]).flat()
-      : [{ text: 'Không có toa thuốc', italics: true, color: '#888' }];
+        : [{ text: 'Không có toa thuốc', italics: true, color: '#888' }];
 
-    const docDefinition = {
-      pageSize: 'A4',
-      pageOrientation: 'portrait',
-      pageMargins: [25, 40, 25, 50],
-      defaultStyle: {
-        font: 'Roboto',
-        fontSize: 10,
-        lineHeight: 1.3
-      },
-
-      // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
-      header: {
-        margin: [25, 15, 25, 0],
-        columns: [
-          {
-            text: 'NHA KHOA HẢI ANH',
-            style: 'clinicName',
-            alignment: 'left'
-          },
-          {
-            text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
-            fontSize: 8,
-            alignment: 'right',
-            color: '#555'
-          }
-        ]
-      },
-
-      content: [
-        // === TIÊU ĐỀ ===
-        {
-          text: 'PHIẾU KHÁM BỆNH',
-          style: 'header',
-          alignment: 'center',
-          margin: [0, 10, 0, 12]
+      const docDefinition = {
+        pageSize: 'A4',
+        pageOrientation: 'portrait',
+        pageMargins: [25, 40, 25, 50],
+        defaultStyle: {
+          font: 'Roboto',
+          fontSize: 10,
+          lineHeight: 1.3
         },
 
-        // === MÃ + NGÀY ===
-        {
-          columns: [
-            { text: `Ngày khám: ${new Date(visitTicketData.date).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'left' }
-          ],
-          fontSize: 9,
-          color: '#555',
-          margin: [0, 0, 0, 12]
-        },
-
-        // === THÔNG TIN BỆNH NHÂN ===
-        { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
-        {
-          style: 'infoTable',
-          table: {
-            widths: ['27%', '71%'],
-            body: [
-              ['Họ tên', customerIn4 ? customerIn4.fullName : '-'],
-              ['Giới tính', '-'],
-              ['Tuổi','-'],
-              ['Điện thoại', customerIn4 ? customerIn4.phoneNumber : '—'],
-              ['Địa chỉ', '—']
-            ]
-          },
-          layout: 'lightHorizontalLines'
-        },
-
-        '\n',
-
-        // === BẢNG DỊCH VỤ + GIÁ ===
-        {
-          table: {
-            headerRows: 1,
-            widths: ['5%', '23%', '12%', '19%', '19%', '20%'],
-            body: serviceTableBody
-          },
-          layout: {
-            hLineWidth: () => 0.5,
-            vLineWidth: () => 0.5,
-            hLineColor: () => '#aaa',
-            vLineColor: () => '#aaa'
-          }
-        },
-
-        // === TỔNG TIỀN ===
-        {
-          columns: [
-            {},
-            {
-              width: '50%',
-              table: {
-                widths: ['50%', '45%'],
-                body: [
-                  [{ text: 'Tổng tiền : ', bold: true }, { text: formatPrice(visitTicketData.totalAmount || 0), alignment: 'right', bold: true }]
-                ]
-              },
-              layout: 'noBorders',
-              margin: [0, 8, 0, 0]
-            }
-          ]
-        },
-
-        '\n',
-
-        // === KẾT LUẬN ===
-        { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
-        { text: visitTicketData.diagnosis || '—', margin: [0, 0, 0, 10] },
-
-        // === TOA THUỐC ===
-        { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
-        {
-          stack: prescriptionContent,
-          margin: [0, 0, 0, 10]
-        },
-
-        // === CHỮ KÝ ===
-        {
+        // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
+        header: {
+          margin: [25, 15, 25, 0],
           columns: [
             {
-              width: '40%',
-              stack: [
-                { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
-                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
-                '\n\n\n',
-              ]
+              text: 'NHA KHOA HẢI ANH',
+              style: 'clinicName',
+              alignment: 'left'
             },
             {
-              width: '60%',
-              stack: [
-                { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
-                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
-                '\n\n\n',
-              ]
-            }
-          ]
-        }
-      ],
-
-      styles: {
-        clinicName: {
-          fontSize: 13,
-          bold: true,
-          color: '#d32f2f'
-        },
-        header: { fontSize: 18, bold: true, color: '#1a5eaa' },
-        subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
-        tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
-      }
-    };
-
-    const docDefinition1 = {
-      pageSize: 'A4',
-      pageOrientation: 'portrait',
-      pageMargins: [25, 40, 25, 50],
-      defaultStyle: {
-        font: 'Roboto',
-        fontSize: 10,
-        lineHeight: 1.3
-      },
-
-      // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
-      header: {
-        margin: [25, 15, 25, 0],
-        columns: [
-          {
-            text: 'NHA KHOA HẢI ANH',
-            style: 'clinicName',
-            alignment: 'left'
-          },
-          {
-            text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
-            fontSize: 8,
-            alignment: 'right',
-            color: '#555'
-          }
-        ]
-      },
-
-      content: [
-        // === TIÊU ĐỀ ===
-        {
-          text: 'PHIẾU KHÁM BỆNH',
-          style: 'header',
-          alignment: 'center',
-          margin: [0, 10, 0, 12]
-        },
-
-        // === MÃ + NGÀY ===
-        {
-          columns: [
-            { text: `Ngày khám: ${new Date(visitTicketData.date).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'left' }
-          ],
-          fontSize: 9,
-          color: '#555',
-          margin: [0, 0, 0, 12]
-        },
-
-        // === THÔNG TIN BỆNH NHÂN ===
-        { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
-        {
-          style: 'infoTable',
-          table: {
-            widths: ['27%', '71%'],
-            body: [
-              ['Họ tên', visitTicketData.patientName || '-'],
-              ['Giới tính', visitTicketData.patientGender === 'Male' ? 'Nam' : 'Nữ'],
-              ['Tuổi', `${visitTicketData.patientAge} tuổi` || '—'],
-              ['Điện thoại', visitTicketData.phoneNumber || '—'],
-              ['Địa chỉ', visitTicketData.address || '—']
-            ]
-          },
-          layout: 'lightHorizontalLines'
-        },
-
-        '\n',
-
-        // === BẢNG DỊCH VỤ + GIÁ ===
-        {
-          table: {
-            headerRows: 1,
-            widths: ['5%', '23%', '12%', '19%', '19%', '20%'],
-            body: serviceTableBody
-          },
-          layout: {
-            hLineWidth: () => 0.5,
-            vLineWidth: () => 0.5,
-            hLineColor: () => '#aaa',
-            vLineColor: () => '#aaa'
-          }
-        },
-
-        // === TỔNG TIỀN ===
-        {
-          columns: [
-            {},
-            {
-              width: '50%',
-              table: {
-                widths: ['50%', '45%'],
-                body: [
-                  [{ text: 'Tổng tiền : ', bold: true }, { text: formatPrice(visitTicketData.totalAmount || 0), alignment: 'right', bold: true }]
-                ]
-              },
-              layout: 'noBorders',
-              margin: [0, 8, 0, 0]
+              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              fontSize: 8,
+              alignment: 'right',
+              color: '#555'
             }
           ]
         },
 
-        '\n',
+        content: [
+          // === TIÊU ĐỀ ===
+          {
+            text: 'PHIẾU KHÁM BỆNH',
+            style: 'header',
+            alignment: 'center',
+            margin: [0, 10, 0, 12]
+          },
 
-        // === KẾT LUẬN ===
-        { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
-        { text: visitTicketData.diagnosis || '—', margin: [0, 0, 0, 10] },
+          // === MÃ + NGÀY ===
+          {
+            columns: [
+              { text: `Ngày khám: ${new Date(visitTicketData.date).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'left' }
+            ],
+            fontSize: 9,
+            color: '#555',
+            margin: [0, 0, 0, 12]
+          },
 
-        // === TOA THUỐC ===
-        { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
-        {
-          stack: prescriptionContent,
-          margin: [0, 0, 0, 10]
-        },
-
-        // === CHỮ KÝ ===
-        {
-          columns: [
-            {
-              width: '40%',
-              stack: [
-                { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
-                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
-                '\n\n\n',
+          // === THÔNG TIN BỆNH NHÂN ===
+          { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
+          {
+            style: 'infoTable',
+            table: {
+              widths: ['27%', '71%'],
+              body: [
+                ['Họ tên', customerIn4 ? customerIn4.fullName : '-'],
+                ['Giới tính', '-'],
+                ['Tuổi', '-'],
+                ['Điện thoại', customerIn4 ? customerIn4.phoneNumber : '—'],
+                ['Địa chỉ', '—']
               ]
             },
+            layout: 'lightHorizontalLines'
+          },
+
+          '\n',
+
+          // === BẢNG DỊCH VỤ + GIÁ ===
+          {
+            table: {
+              headerRows: 1,
+              widths: ['5%', '23%', '12%', '19%', '19%', '20%'],
+              body: serviceTableBody
+            },
+            layout: {
+              hLineWidth: () => 0.5,
+              vLineWidth: () => 0.5,
+              hLineColor: () => '#aaa',
+              vLineColor: () => '#aaa'
+            }
+          },
+
+          // === TỔNG TIỀN ===
+          {
+            columns: [
+              {},
+              {
+                width: '50%',
+                table: {
+                  widths: ['50%', '45%'],
+                  body: [
+                    [{ text: 'Tổng tiền : ', bold: true }, { text: formatPrice(visitTicketData.totalAmount || 0), alignment: 'right', bold: true }]
+                  ]
+                },
+                layout: 'noBorders',
+                margin: [0, 8, 0, 0]
+              }
+            ]
+          },
+
+          '\n',
+
+          // === KẾT LUẬN ===
+          { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
+          { text: visitTicketData.diagnosis || '—', margin: [0, 0, 0, 10] },
+
+          // === TOA THUỐC ===
+          { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
+          {
+            stack: prescriptionContent,
+            margin: [0, 0, 0, 10]
+          },
+
+          // === CHỮ KÝ ===
+          {
+            columns: [
+              {
+                width: '40%',
+                stack: [
+                  { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                  '\n\n\n',
+                ]
+              },
+              {
+                width: '60%',
+                stack: [
+                  { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                  '\n\n\n',
+                ]
+              }
+            ]
+          }
+        ],
+
+        styles: {
+          clinicName: {
+            fontSize: 13,
+            bold: true,
+            color: '#d32f2f'
+          },
+          header: { fontSize: 18, bold: true, color: '#1a5eaa' },
+          subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
+          tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
+        }
+      };
+
+      const docDefinition1 = {
+        pageSize: 'A4',
+        pageOrientation: 'portrait',
+        pageMargins: [25, 40, 25, 50],
+        defaultStyle: {
+          font: 'Roboto',
+          fontSize: 10,
+          lineHeight: 1.3
+        },
+
+        // === HEADER: TÊN PHÒNG KHÁM + LIÊN HỆ ===
+        header: {
+          margin: [25, 15, 25, 0],
+          columns: [
             {
-              width: '60%',
-              stack: [
-                { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
-                { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
-                '\n\n\n',
-              ]
+              text: 'NHA KHOA HẢI ANH',
+              style: 'clinicName',
+              alignment: 'left'
+            },
+            {
+              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              fontSize: 8,
+              alignment: 'right',
+              color: '#555'
             }
           ]
-        }
-      ],
-
-      styles: {
-        clinicName: {
-          fontSize: 13,
-          bold: true,
-          color: '#d32f2f'
         },
-        header: { fontSize: 18, bold: true, color: '#1a5eaa' },
-        subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
-        tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
-      }
-    };
 
-    
-  
-    const pdfDoc = customerIn4 ? printer.createPdfKitDocument(docDefinition) : printer.createPdfKitDocument(docDefinition1);
+        content: [
+          // === TIÊU ĐỀ ===
+          {
+            text: 'PHIẾU KHÁM BỆNH',
+            style: 'header',
+            alignment: 'center',
+            margin: [0, 10, 0, 12]
+          },
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=visit-ticket.pdf');
+          // === MÃ + NGÀY ===
+          {
+            columns: [
+              { text: `Ngày khám: ${new Date(visitTicketData.date).toLocaleDateString('vi-VN')}`, width: '40%', alignment: 'left' }
+            ],
+            fontSize: 9,
+            color: '#555',
+            margin: [0, 0, 0, 12]
+          },
 
-    pdfDoc.pipe(res);
-    pdfDoc.end();
+          // === THÔNG TIN BỆNH NHÂN ===
+          { text: 'THÔNG TIN BỆNH NHÂN', style: 'subheader' },
+          {
+            style: 'infoTable',
+            table: {
+              widths: ['27%', '71%'],
+              body: [
+                ['Họ tên', visitTicketData.patientName || '-'],
+                ['Giới tính', visitTicketData.patientGender === 'Male' ? 'Nam' : 'Nữ'],
+                ['Tuổi', `${visitTicketData.patientAge} tuổi` || '—'],
+                ['Điện thoại', visitTicketData.phoneNumber || '—'],
+                ['Địa chỉ', visitTicketData.address || '—']
+              ]
+            },
+            layout: 'lightHorizontalLines'
+          },
 
-  } catch (error) {
-    console.error('❌ Lỗi PDF:', error);
-    res.status(400).json({ message: error.message });
-  }
-}
+          '\n',
+
+          // === BẢNG DỊCH VỤ + GIÁ ===
+          {
+            table: {
+              headerRows: 1,
+              widths: ['5%', '23%', '12%', '19%', '19%', '20%'],
+              body: serviceTableBody
+            },
+            layout: {
+              hLineWidth: () => 0.5,
+              vLineWidth: () => 0.5,
+              hLineColor: () => '#aaa',
+              vLineColor: () => '#aaa'
+            }
+          },
+
+          // === TỔNG TIỀN ===
+          {
+            columns: [
+              {},
+              {
+                width: '50%',
+                table: {
+                  widths: ['50%', '45%'],
+                  body: [
+                    [{ text: 'Tổng tiền : ', bold: true }, { text: formatPrice(visitTicketData.totalAmount || 0), alignment: 'right', bold: true }]
+                  ]
+                },
+                layout: 'noBorders',
+                margin: [0, 8, 0, 0]
+              }
+            ]
+          },
+
+          '\n',
+
+          // === KẾT LUẬN ===
+          { text: 'KẾT LUẬN', style: 'subheader', margin: [0, 0, 0, 4] },
+          { text: visitTicketData.diagnosis || '—', margin: [0, 0, 0, 10] },
+
+          // === TOA THUỐC ===
+          { text: 'TOA THUỐC', style: 'subheader', margin: [0, 0, 0, 4] },
+          {
+            stack: prescriptionContent,
+            margin: [0, 0, 0, 10]
+          },
+
+          // === CHỮ KÝ ===
+          {
+            columns: [
+              {
+                width: '40%',
+                stack: [
+                  { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                  '\n\n\n',
+                ]
+              },
+              {
+                width: '60%',
+                stack: [
+                  { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
+                  '\n\n\n',
+                ]
+              }
+            ]
+          }
+        ],
+
+        styles: {
+          clinicName: {
+            fontSize: 13,
+            bold: true,
+            color: '#d32f2f'
+          },
+          header: { fontSize: 18, bold: true, color: '#1a5eaa' },
+          subheader: { fontSize: 11, bold: true, color: '#333', margin: [0, 8, 0, 4] },
+          tableHeader: { bold: true, fontSize: 9, fillColor: '#f0f0f0', color: '#333' }
+        }
+      };
 
 
 
+      const pdfDoc = customerIn4 ? printer.createPdfKitDocument(docDefinition) : printer.createPdfKitDocument(docDefinition1);
 
-async _getDoctorScheduleForFollowUp(
-  doctorUserId,
-  serviceId,
-  dateStr,
-  appointmentFor = 'self',
-  startTime = null
-) {
-  // ⭐ VALIDATION
-  if (!doctorUserId || !serviceId || !dateStr) {
-    throw new Error('Thiếu thông tin: doctorUserId, serviceId, hoặc dateStr');
-  }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename=visit-ticket.pdf');
 
-  // =========================
-  // 1. Parse ngày tái khám
-  // =========================
-  let dayStart, dayEnd;
+      pdfDoc.pipe(res);
+      pdfDoc.end();
 
-  try {
-    const [yearStr, monthStr, dayStr] = dateStr.split('-');
-    const year = parseInt(yearStr, 10);
-    const month = parseInt(monthStr, 10);
-    const day = parseInt(dayStr, 10);
-
-    if (!year || !month || !day) {
-      throw new Error('Invalid date format');
+    } catch (error) {
+      console.error('❌ Lỗi PDF:', error);
+      res.status(400).json({ message: error.message });
     }
-
-    dayStart = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-    dayEnd   = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-  } catch (err) {
-    console.error('❌ [_getDoctorScheduleForFollowUp] Error parsing date:', err);
-    throw new Error(`Ngày không hợp lệ: ${dateStr}`);
   }
 
-  console.log('🔍 [_getDoctorScheduleForFollowUp] Input params:', {
-    doctorUserId: doctorUserId.toString(),
-    serviceId: serviceId.toString(),
-    dateStr,
-    appointmentFor,
-    startTime: startTime instanceof Date ? startTime.toISOString() : startTime,
-    dayStart: dayStart.toISOString(),
-    dayEnd: dayEnd.toISOString()
-  });
 
-  // =========================
-  // 2. Lấy service
-  // =========================
-  const service = await Service.findById(serviceId).select('durationMinutes category serviceName');
-  if (!service) {
-    throw new Error('Dịch vụ không tồn tại');
-  }
-  const durationMinutes = service.durationMinutes || 30;
 
-  // =========================
-  // 3. Ensure schedule tồn tại
-  // =========================
-  await ScheduleHelper.ensureScheduleForDoctorFollowUp(doctorUserId, dayStart);
 
-  // =========================
-  // 4. Check nghỉ phép
-  // =========================
-  const leaveRequests = await LeaveRequest.find({
-    userId: doctorUserId,
-    status: 'Approved',
-    startDate: { $lte: dayEnd },
-    endDate: { $gte: dayStart }
-  });
-
-  console.log('🔍 [_getDoctorScheduleForFollowUp] Leave requests found:', {
-    count: leaveRequests.length,
-    leaves: leaveRequests.map(l => ({
-      _id: l._id,
-      startDate: l.startDate ? l.startDate.toISOString() : null,
-      endDate: l.endDate ? l.endDate.toISOString() : null,
-      reason: l.reason
-    }))
-  });
-
-  if (leaveRequests.length > 0) {
-    const leaveInfo = leaveRequests[0];
-    return {
-      success: true,
-      data: {
-        doctorId: doctorUserId.toString(),
-        doctorName: 'Bác sĩ',
-        date: dayStart.toISOString(),
-        scheduleRanges: [],
-        message: `Bác sĩ đang nghỉ phép từ ${new Date(leaveInfo.startDate).toLocaleDateString('vi-VN')} đến ${new Date(leaveInfo.endDate).toLocaleDateString('vi-VN')}. Vui lòng chọn ngày khác.`,
-        userReservedSlots: []
-      }
-    };
-  }
-
-  // =========================
-  // 5. Lấy DoctorSchedule theo khoảng ngày
-  // =========================
-  const schedules = await DoctorSchedule.find({
+  async _getDoctorScheduleForFollowUp(
     doctorUserId,
-    date: { $gte: dayStart, $lte: dayEnd },
-    status: { $ne: 'Unavailable' } // chỉ lấy lịch còn hiệu lực
-  })
-    .select('_id shift date status workingHours')
-    .sort({ shift: 1 });
+    serviceId,
+    dateStr,
+    appointmentFor = 'self',
+    startTime = null
+  ) {
+    // ⭐ VALIDATION
+    if (!doctorUserId || !serviceId || !dateStr) {
+      throw new Error('Thiếu thông tin: doctorUserId, serviceId, hoặc dateStr');
+    }
 
-  console.log('🔍 [_getDoctorScheduleForFollowUp] DoctorSchedule found:', {
-    count: schedules.length,
-    dayStart: dayStart.toISOString(),
-    dayEnd: dayEnd.toISOString(),
-    schedules: schedules.map(s => ({
-      _id: s._id,
-      shift: s.shift,
-      date: s.date ? s.date.toISOString() : null,
-      status: s.status,
-      workingHours: s.workingHours
-    }))
-  });
+    // =========================
+    // 1. Parse ngày tái khám
+    // =========================
+    let dayStart, dayEnd;
 
-  if (schedules.length === 0) {
-    console.warn(`⚠️ [_getDoctorScheduleForFollowUp] No schedules found for doctor ${doctorUserId} on ${dateStr}`);
+    try {
+      const [yearStr, monthStr, dayStr] = dateStr.split('-');
+      const year = parseInt(yearStr, 10);
+      const month = parseInt(monthStr, 10);
+      const day = parseInt(dayStr, 10);
 
-    return {
-      success: true,
-      data: {
-        doctorId: doctorUserId.toString(),
-        doctorName: 'Bác sĩ',
-        date: dayStart.toISOString(),
-        scheduleRanges: [],
-        message: 'Bác sĩ không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.',
-        userReservedSlots: []
+      if (!year || !month || !day) {
+        throw new Error('Invalid date format');
       }
-    };
-  }
 
-  // =========================
-  // helper tính giờ ca làm việc từ workingHours
-  // =========================
-  const buildShiftRangeUTC = (schedule) => {
-    const wh = schedule.workingHours || {};
-    const baseDate = new Date(schedule.date || dayStart);
-
-    let startVN, endVN;
-    if (schedule.shift === 'Morning') {
-      startVN = wh.morningStart;
-      endVN = wh.morningEnd;
-    } else {
-      startVN = wh.afternoonStart;
-      endVN = wh.afternoonEnd;
+      dayStart = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+      dayEnd = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+    } catch (err) {
+      console.error('❌ [_getDoctorScheduleForFollowUp] Error parsing date:', err);
+      throw new Error(`Ngày không hợp lệ: ${dateStr}`);
     }
 
-    if (!startVN || !endVN) return {};
-
-    const [sh, sm] = startVN.split(':').map(Number);
-    const [eh, em] = endVN.split(':').map(Number);
-
-    const startUTC = new Date(baseDate);
-    startUTC.setUTCHours(sh - 7, sm, 0, 0);
-
-    const endUTC = new Date(baseDate);
-    endUTC.setUTCHours(eh - 7, em, 0, 0);
-
-    return { startUTC, endUTC };
-  };
-
-  // =========================
-  // 6. Nếu có startTime → chỉ validate (approve)
-  // =========================
-  if (startTime) {
-    const startTimeDate = startTime instanceof Date ? startTime : new Date(startTime);
-    if (Number.isNaN(startTimeDate.getTime())) {
-      throw new Error('Thời gian tái khám không hợp lệ');
-    }
-
-    const startHourVN = (startTimeDate.getUTCHours() + 7 + 24) % 24;
-    const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
-
-    const doctorSchedule = schedules.find(s => s.shift === shift);
-    if (!doctorSchedule) {
-      throw new Error(
-        `Bác sĩ không có lịch làm việc ${shift === 'Morning' ? 'buổi sáng' : 'buổi chiều'} vào ngày này`
-      );
-    }
-
-    const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
-      buildShiftRangeUTC(doctorSchedule);
-
-    if (!scheduleStartTime || !scheduleEndTime) {
-      throw new Error('Lịch làm việc của bác sĩ đang thiếu thông tin workingHours');
-    }
-
-    if (startTimeDate < scheduleStartTime || startTimeDate >= scheduleEndTime) {
-      const shiftDisplay = shift === 'Morning' ? 'buổi sáng' : 'buổi chiều';
-
-      const scheduleStartVN = new Date(scheduleStartTime.getTime() + 7 * 60 * 60 * 1000);
-      const scheduleEndVN = new Date(scheduleEndTime.getTime() + 7 * 60 * 60 * 1000);
-
-      const startVNHour = String(scheduleStartVN.getUTCHours()).padStart(2, '0');
-      const startVNMin = String(scheduleStartVN.getUTCMinutes()).padStart(2, '0');
-      const endVNHour = String(scheduleEndVN.getUTCHours()).padStart(2, '0');
-      const endVNMin = String(scheduleEndVN.getUTCMinutes()).padStart(2, '0');
-
-      throw new Error(
-        `Thời gian tái khám không nằm trong ca làm việc ${shiftDisplay} (${startVNHour}:${startVNMin} - ${endVNHour}:${endVNMin})`
-      );
-    }
-
-    console.log('✅ [_getDoctorScheduleForFollowUp] startTime validation passed');
-
-    return {
-      doctorSchedule,
-      scheduleInfo: {
-        shift: doctorSchedule.shift,
-        startTime: scheduleStartTime.toISOString(),
-        endTime: scheduleEndTime.toISOString(),
-        date: dayStart.toISOString()
-      }
-    };
-  }
-
-  // =========================
-  // 7. Không có startTime → build các khoảng trống cho UI
-  // =========================
-  const scheduleRanges = [];
-
-  for (const schedule of schedules) {
-    const shift = schedule.shift;
-    const shiftDisplay =
-      shift === 'Morning'
-        ? 'Buổi sáng'
-        : shift === 'Afternoon'
-        ? 'Buổi chiều'
-        : shift;
-
-    const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
-      buildShiftRangeUTC(schedule);
-
-    if (!scheduleStartTime || !scheduleEndTime) {
-      console.warn('⚠️ DoctorSchedule thiếu workingHours cho shift:', {
-        scheduleId: schedule._id.toString(),
-        shift: schedule.shift,
-        workingHours: schedule.workingHours
-      });
-      continue;
-    }
-
-    console.log(`🔍 [_getDoctorScheduleForFollowUp] Processing ${shift}:`, {
-      scheduleStartTime: scheduleStartTime.toISOString(),
-      scheduleEndTime: scheduleEndTime.toISOString(),
-      durationMinutes
+    console.log('🔍 [_getDoctorScheduleForFollowUp] Input params:', {
+      doctorUserId: doctorUserId.toString(),
+      serviceId: serviceId.toString(),
+      dateStr,
+      appointmentFor,
+      startTime: startTime instanceof Date ? startTime.toISOString() : startTime,
+      dayStart: dayStart.toISOString(),
+      dayEnd: dayEnd.toISOString()
     });
 
-    const bookedTimeslots = await Timeslot.find({
-      doctorUserId,
-      doctorScheduleId: schedule._id,
-      status: { $in: ['Booked', 'Reserved'] },
-      startTime: { $gte: scheduleStartTime, $lt: scheduleEndTime }
-    })
-      .select('startTime endTime status reservedUntil')
-      .sort({ startTime: 1 });
+    // =========================
+    // 2. Lấy service
+    // =========================
+    const service = await Service.findById(serviceId).select('durationMinutes category serviceName');
+    if (!service) {
+      throw new Error('Dịch vụ không tồn tại');
+    }
+    const durationMinutes = service.durationMinutes || 30;
 
-    console.log(`🔍 [_getDoctorScheduleForFollowUp] Booked timeslots in ${shift}:`, {
-      count: bookedTimeslots.length,
-      timeslots: bookedTimeslots.map(t => ({
-        startTime: t.startTime ? t.startTime.toISOString() : null,
-        endTime: t.endTime ? t.endTime.toISOString() : null,
-        status: t.status
+    // =========================
+    // 3. Ensure schedule tồn tại
+    // =========================
+    await ScheduleHelper.ensureScheduleForDoctorFollowUp(doctorUserId, dayStart);
+
+    // =========================
+    // 4. Check nghỉ phép
+    // =========================
+    const leaveRequests = await LeaveRequest.find({
+      userId: doctorUserId,
+      status: 'Approved',
+      startDate: { $lte: dayEnd },
+      endDate: { $gte: dayStart }
+    });
+
+    console.log('🔍 [_getDoctorScheduleForFollowUp] Leave requests found:', {
+      count: leaveRequests.length,
+      leaves: leaveRequests.map(l => ({
+        _id: l._id,
+        startDate: l.startDate ? l.startDate.toISOString() : null,
+        endDate: l.endDate ? l.endDate.toISOString() : null,
+        reason: l.reason
       }))
     });
 
-    const availableGaps = [];
-    let currentTime = new Date(scheduleStartTime);
+    if (leaveRequests.length > 0) {
+      const leaveInfo = leaveRequests[0];
+      return {
+        success: true,
+        data: {
+          doctorId: doctorUserId.toString(),
+          doctorName: 'Bác sĩ',
+          date: dayStart.toISOString(),
+          scheduleRanges: [],
+          message: `Bác sĩ đang nghỉ phép từ ${new Date(leaveInfo.startDate).toLocaleDateString('vi-VN')} đến ${new Date(leaveInfo.endDate).toLocaleDateString('vi-VN')}. Vui lòng chọn ngày khác.`,
+          userReservedSlots: []
+        }
+      };
+    }
 
-    for (const bookedSlot of bookedTimeslots) {
-      const bookedStart = new Date(bookedSlot.startTime);
-      const bookedEnd = new Date(bookedSlot.endTime);
+    // =========================
+    // 5. Lấy DoctorSchedule theo khoảng ngày
+    // =========================
+    const schedules = await DoctorSchedule.find({
+      doctorUserId,
+      date: { $gte: dayStart, $lte: dayEnd },
+      status: { $ne: 'Unavailable' } // chỉ lấy lịch còn hiệu lực
+    })
+      .select('_id shift date status workingHours')
+      .sort({ shift: 1 });
 
-      if (currentTime < bookedStart) {
-        const gapDurationMinutes = (bookedStart - currentTime) / 60000;
+    console.log('🔍 [_getDoctorScheduleForFollowUp] DoctorSchedule found:', {
+      count: schedules.length,
+      dayStart: dayStart.toISOString(),
+      dayEnd: dayEnd.toISOString(),
+      schedules: schedules.map(s => ({
+        _id: s._id,
+        shift: s.shift,
+        date: s.date ? s.date.toISOString() : null,
+        status: s.status,
+        workingHours: s.workingHours
+      }))
+    });
+
+    if (schedules.length === 0) {
+      console.warn(`⚠️ [_getDoctorScheduleForFollowUp] No schedules found for doctor ${doctorUserId} on ${dateStr}`);
+
+      return {
+        success: true,
+        data: {
+          doctorId: doctorUserId.toString(),
+          doctorName: 'Bác sĩ',
+          date: dayStart.toISOString(),
+          scheduleRanges: [],
+          message: 'Bác sĩ không có lịch làm việc vào ngày này. Vui lòng chọn ngày khác.',
+          userReservedSlots: []
+        }
+      };
+    }
+
+    // =========================
+    // helper tính giờ ca làm việc từ workingHours
+    // =========================
+    const buildShiftRangeUTC = (schedule) => {
+      const wh = schedule.workingHours || {};
+      const baseDate = new Date(schedule.date || dayStart);
+
+      let startVN, endVN;
+      if (schedule.shift === 'Morning') {
+        startVN = wh.morningStart;
+        endVN = wh.morningEnd;
+      } else {
+        startVN = wh.afternoonStart;
+        endVN = wh.afternoonEnd;
+      }
+
+      if (!startVN || !endVN) return {};
+
+      const [sh, sm] = startVN.split(':').map(Number);
+      const [eh, em] = endVN.split(':').map(Number);
+
+      const startUTC = new Date(baseDate);
+      startUTC.setUTCHours(sh - 7, sm, 0, 0);
+
+      const endUTC = new Date(baseDate);
+      endUTC.setUTCHours(eh - 7, em, 0, 0);
+
+      return { startUTC, endUTC };
+    };
+
+    // =========================
+    // 6. Nếu có startTime → chỉ validate (approve)
+    // =========================
+    if (startTime) {
+      const startTimeDate = startTime instanceof Date ? startTime : new Date(startTime);
+      if (Number.isNaN(startTimeDate.getTime())) {
+        throw new Error('Thời gian tái khám không hợp lệ');
+      }
+
+      const startHourVN = (startTimeDate.getUTCHours() + 7 + 24) % 24;
+      const shift = startHourVN < 12 ? 'Morning' : 'Afternoon';
+
+      const doctorSchedule = schedules.find(s => s.shift === shift);
+      if (!doctorSchedule) {
+        throw new Error(
+          `Bác sĩ không có lịch làm việc ${shift === 'Morning' ? 'buổi sáng' : 'buổi chiều'} vào ngày này`
+        );
+      }
+
+      const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
+        buildShiftRangeUTC(doctorSchedule);
+
+      if (!scheduleStartTime || !scheduleEndTime) {
+        throw new Error('Lịch làm việc của bác sĩ đang thiếu thông tin workingHours');
+      }
+
+      if (startTimeDate < scheduleStartTime || startTimeDate >= scheduleEndTime) {
+        const shiftDisplay = shift === 'Morning' ? 'buổi sáng' : 'buổi chiều';
+
+        const scheduleStartVN = new Date(scheduleStartTime.getTime() + 7 * 60 * 60 * 1000);
+        const scheduleEndVN = new Date(scheduleEndTime.getTime() + 7 * 60 * 60 * 1000);
+
+        const startVNHour = String(scheduleStartVN.getUTCHours()).padStart(2, '0');
+        const startVNMin = String(scheduleStartVN.getUTCMinutes()).padStart(2, '0');
+        const endVNHour = String(scheduleEndVN.getUTCHours()).padStart(2, '0');
+        const endVNMin = String(scheduleEndVN.getUTCMinutes()).padStart(2, '0');
+
+        throw new Error(
+          `Thời gian tái khám không nằm trong ca làm việc ${shiftDisplay} (${startVNHour}:${startVNMin} - ${endVNHour}:${endVNMin})`
+        );
+      }
+
+      console.log('✅ [_getDoctorScheduleForFollowUp] startTime validation passed');
+
+      return {
+        doctorSchedule,
+        scheduleInfo: {
+          shift: doctorSchedule.shift,
+          startTime: scheduleStartTime.toISOString(),
+          endTime: scheduleEndTime.toISOString(),
+          date: dayStart.toISOString()
+        }
+      };
+    }
+
+    // =========================
+    // 7. Không có startTime → build các khoảng trống cho UI
+    // =========================
+    const scheduleRanges = [];
+
+    for (const schedule of schedules) {
+      const shift = schedule.shift;
+      const shiftDisplay =
+        shift === 'Morning'
+          ? 'Buổi sáng'
+          : shift === 'Afternoon'
+            ? 'Buổi chiều'
+            : shift;
+
+      const { startUTC: scheduleStartTime, endUTC: scheduleEndTime } =
+        buildShiftRangeUTC(schedule);
+
+      if (!scheduleStartTime || !scheduleEndTime) {
+        console.warn('⚠️ DoctorSchedule thiếu workingHours cho shift:', {
+          scheduleId: schedule._id.toString(),
+          shift: schedule.shift,
+          workingHours: schedule.workingHours
+        });
+        continue;
+      }
+
+      console.log(`🔍 [_getDoctorScheduleForFollowUp] Processing ${shift}:`, {
+        scheduleStartTime: scheduleStartTime.toISOString(),
+        scheduleEndTime: scheduleEndTime.toISOString(),
+        durationMinutes
+      });
+
+      const bookedTimeslots = await Timeslot.find({
+        doctorUserId,
+        doctorScheduleId: schedule._id,
+        status: { $in: ['Booked', 'Reserved'] },
+        startTime: { $gte: scheduleStartTime, $lt: scheduleEndTime }
+      })
+        .select('startTime endTime status reservedUntil')
+        .sort({ startTime: 1 });
+
+      console.log(`🔍 [_getDoctorScheduleForFollowUp] Booked timeslots in ${shift}:`, {
+        count: bookedTimeslots.length,
+        timeslots: bookedTimeslots.map(t => ({
+          startTime: t.startTime ? t.startTime.toISOString() : null,
+          endTime: t.endTime ? t.endTime.toISOString() : null,
+          status: t.status
+        }))
+      });
+
+      const availableGaps = [];
+      let currentTime = new Date(scheduleStartTime);
+
+      for (const bookedSlot of bookedTimeslots) {
+        const bookedStart = new Date(bookedSlot.startTime);
+        const bookedEnd = new Date(bookedSlot.endTime);
+
+        if (currentTime < bookedStart) {
+          const gapDurationMinutes = (bookedStart - currentTime) / 60000;
+          if (gapDurationMinutes >= durationMinutes) {
+            availableGaps.push({
+              startTime: new Date(currentTime),
+              endTime: new Date(bookedStart),
+              durationMinutes: gapDurationMinutes
+            });
+          }
+        }
+
+        currentTime = new Date(Math.max(currentTime.getTime(), bookedEnd.getTime()));
+      }
+
+      if (currentTime < scheduleEndTime) {
+        const gapDurationMinutes = (scheduleEndTime - currentTime) / 60000;
         if (gapDurationMinutes >= durationMinutes) {
           availableGaps.push({
             startTime: new Date(currentTime),
-            endTime: new Date(bookedStart),
+            endTime: new Date(scheduleEndTime),
             durationMinutes: gapDurationMinutes
           });
         }
       }
 
-      currentTime = new Date(Math.max(currentTime.getTime(), bookedEnd.getTime()));
-    }
+      console.log(`🔍 [_getDoctorScheduleForFollowUp] Available gaps in ${shift}:`, {
+        count: availableGaps.length,
+        gaps: availableGaps.map(g => ({
+          startTime: g.startTime ? g.startTime.toISOString() : null,
+          endTime: g.endTime ? g.endTime.toISOString() : null,
+          durationMinutes: g.durationMinutes
+        }))
+      });
 
-    if (currentTime < scheduleEndTime) {
-      const gapDurationMinutes = (scheduleEndTime - currentTime) / 60000;
-      if (gapDurationMinutes >= durationMinutes) {
-        availableGaps.push({
-          startTime: new Date(currentTime),
-          endTime: new Date(scheduleEndTime),
-          durationMinutes: gapDurationMinutes
-        });
+      let displayRange = '';
+      if (availableGaps.length === 0) {
+        displayRange = 'Đã hết chỗ';
+      } else {
+        displayRange = availableGaps
+          .map(gap => {
+            const startHourVN = (gap.startTime.getUTCHours() + 7) % 24;
+            const startMinVN = gap.startTime.getUTCMinutes();
+            const endHourVN = (gap.endTime.getUTCHours() + 7) % 24;
+            const endMinVN = gap.endTime.getUTCMinutes();
+
+            return (
+              `${String(startHourVN).padStart(2, '0')}:${String(startMinVN).padStart(2, '0')}-` +
+              `${String(endHourVN).padStart(2, '0')}:${String(endMinVN).padStart(2, '0')}`
+            );
+          })
+          .join(', ');
       }
+
+      scheduleRanges.push({
+        shift,
+        shiftDisplay,
+        startTime: scheduleStartTime.toISOString(),
+        endTime: scheduleEndTime.toISOString(),
+        availableGaps,
+        displayRange,
+        doctorScheduleId: schedule._id.toString()
+      });
     }
 
-    console.log(`🔍 [_getDoctorScheduleForFollowUp] Available gaps in ${shift}:`, {
-      count: availableGaps.length,
-      gaps: availableGaps.map(g => ({
-        startTime: g.startTime ? g.startTime.toISOString() : null,
-        endTime: g.endTime ? g.endTime.toISOString() : null,
-        durationMinutes: g.durationMinutes
-      }))
-    });
+    const doctor = await User.findById(doctorUserId).select('fullName');
+    const doctorName = doctor?.fullName || 'Bác sĩ';
 
-    let displayRange = '';
-    if (availableGaps.length === 0) {
-      displayRange = 'Đã hết chỗ';
-    } else {
-      displayRange = availableGaps
-        .map(gap => {
-          const startHourVN = (gap.startTime.getUTCHours() + 7) % 24;
-          const startMinVN = gap.startTime.getUTCMinutes();
-          const endHourVN = (gap.endTime.getUTCHours() + 7) % 24;
-          const endMinVN = gap.endTime.getUTCMinutes();
-
-          return (
-            `${String(startHourVN).padStart(2, '0')}:${String(startMinVN).padStart(2, '0')}-` +
-            `${String(endHourVN).padStart(2, '0')}:${String(endMinVN).padStart(2, '0')}`
-          );
-        })
-        .join(', ');
-    }
-
-    scheduleRanges.push({
-      shift,
-      shiftDisplay,
-      startTime: scheduleStartTime.toISOString(),
-      endTime: scheduleEndTime.toISOString(),
-      availableGaps,
-      displayRange,
-      doctorScheduleId: schedule._id.toString()
-    });
-  }
-
-  const doctor = await User.findById(doctorUserId).select('fullName');
-  const doctorName = doctor?.fullName || 'Bác sĩ';
-
-  console.log('✅ [_getDoctorScheduleForFollowUp] Success:', {
-    date: dayStart.toISOString(),
-    scheduleRangesCount: scheduleRanges.length,
-    message: scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
-      ? 'Có lịch khả dụng'
-      : 'Không có lịch khả dụng'
-  });
-
-  return {
-    success: true,
-    data: {
-      doctorId: doctorUserId.toString(),
-      doctorName,
+    console.log('✅ [_getDoctorScheduleForFollowUp] Success:', {
       date: dayStart.toISOString(),
-      serviceName: service?.serviceName || 'N/A',
-      serviceDuration: durationMinutes,
-      scheduleRanges,
-      totalSchedules: scheduleRanges.length,
-      message:
-        scheduleRanges.length === 0
-          ? 'Bác sĩ không có lịch vào ngày này'
-          : scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
-          ? 'Có lịch khả dụng'
-          : 'Tất cả lịch đã hết chỗ',
-      userReservedSlots: []
+      scheduleRangesCount: scheduleRanges.length,
+      message: scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
+        ? 'Có lịch khả dụng'
+        : 'Không có lịch khả dụng'
+    });
+
+    return {
+      success: true,
+      data: {
+        doctorId: doctorUserId.toString(),
+        doctorName,
+        date: dayStart.toISOString(),
+        serviceName: service?.serviceName || 'N/A',
+        serviceDuration: durationMinutes,
+        scheduleRanges,
+        totalSchedules: scheduleRanges.length,
+        message:
+          scheduleRanges.length === 0
+            ? 'Bác sĩ không có lịch vào ngày này'
+            : scheduleRanges.some(r => r.displayRange !== 'Đã hết chỗ')
+              ? 'Có lịch khả dụng'
+              : 'Tất cả lịch đã hết chỗ',
+        userReservedSlots: []
+      }
+    };
+  }
+
+
+  // ⭐ Cập nhật createFollowUpAppointment với fix đầy đủ
+  async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
+    if (!originalAppointmentId) {
+      throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
     }
-  };
-}
+    if (!followUpDate) {
+      throw new Error('Vui lòng chọn thời gian tái khám');
+    }
 
 
-// ⭐ Cập nhật createFollowUpAppointment với fix đầy đủ
-async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
-  if (!originalAppointmentId) {
-    throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
-  }
-  if (!followUpDate) {
-    throw new Error('Vui lòng chọn thời gian tái khám');
-  }
+    // ⭐ FIX: Parse followUpDate giống createConsultationAppointment (đảm bảo Date object đúng)
+    let startTime;
+    if (followUpDate instanceof Date) {
+      startTime = new Date(followUpDate.getTime());
+    } else {
+      startTime = new Date(followUpDate);
+    }
 
-  // ⭐ FIX: Parse followUpDate giống createConsultationAppointment (đảm bảo Date object đúng)
-  let startTime;
-  if (followUpDate instanceof Date) {
-    startTime = new Date(followUpDate.getTime());
-  } else {
-    startTime = new Date(followUpDate);
-  }
-  
-  if (Number.isNaN(startTime.getTime())) {
-    throw new Error('Thời gian tái khám không hợp lệ');
-  }
-  
-  console.log('🔍 [createFollowUpAppointment] followUpDate input:', followUpDate, typeof followUpDate);
-  console.log('🔍 [createFollowUpAppointment] parsed startTime:', startTime.toISOString());
-  console.log('🔍 [createFollowUpAppointment] startTime UTC:', {
-    year: startTime.getUTCFullYear(),
-    month: startTime.getUTCMonth() + 1,
-    day: startTime.getUTCDate(),
-    hour: startTime.getUTCHours(),
-    minute: startTime.getUTCMinutes()
-  });
-  
-  // ⭐ FIX: Sử dụng logic validation giống createConsultationAppointment
-  const nowUtc = new Date();
-  const nowRounded = new Date(nowUtc);
-  nowRounded.setSeconds(0, 0);
-  if (startTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
-    throw new Error('Không thể đặt thời gian ở quá khứ');
-  }
 
-  const originalAppointment = await Appointment.findById(originalAppointmentId)
-    .populate('patientUserId', 'fullName email phoneNumber')
-    .populate('customerId', 'fullName email phnoneNumber')
-    .populate('serviceId', 'serviceName durationMinutes category')
-    .populate('doctorUserId', 'fullName email')
-    .populate('timeslotId', 'startTime endTime');
+    if (Number.isNaN(startTime.getTime())) {
+      throw new Error('Thời gian tái khám không hợp lệ');
+    }
 
-  if (!originalAppointment) {
-    throw new Error('Không tìm thấy ca khám gốc');
-  }
 
-  const doctorUserId = originalAppointment.doctorUserId?._id || originalAppointment.doctorUserId;
-  const patientUserId = originalAppointment.patientUserId?._id || originalAppointment.patientUserId || null;
-  const customerId = originalAppointment.customerId?._id || originalAppointment.customerId || null;
-  
-  // ⭐ Ưu tiên dùng serviceIds từ parameter (array từ dịch vụ bổ sung), nếu không có thì dùng serviceId, nếu không có thì dùng từ appointment gốc
-  let finalServiceIds = [];
-  if (serviceIds && Array.isArray(serviceIds) && serviceIds.length > 0) {
-    finalServiceIds = serviceIds;
-  } else if (serviceId) {
-    finalServiceIds = [serviceId];
-  } else if (originalAppointment.serviceId?._id || originalAppointment.serviceId) {
-    finalServiceIds = [originalAppointment.serviceId?._id || originalAppointment.serviceId];
-  }
-  
-  if (finalServiceIds.length === 0) {
-    throw new Error('Không tìm thấy dịch vụ để tạo tái khám');
-  }
-  
-  // ⭐ Lấy service đầu tiên để tính duration và tạo timeslot
-  const finalServiceId = finalServiceIds[0];
+    console.log('🔍 [createFollowUpAppointment] followUpDate input:', followUpDate, typeof followUpDate);
+    console.log('🔍 [createFollowUpAppointment] parsed startTime:', startTime.toISOString());
+    console.log('🔍 [createFollowUpAppointment] startTime UTC:', {
+      year: startTime.getUTCFullYear(),
+      month: startTime.getUTCMonth() + 1,
+      day: startTime.getUTCDate(),
+      hour: startTime.getUTCHours(),
+      minute: startTime.getUTCMinutes()
+    });
 
-  const service = await Service.findById(finalServiceId);
-  if (!service) {
-    throw new Error('Dịch vụ của ca khám không tồn tại');
-  }
 
-  const durationMinutes = service.durationMinutes || 30;
-  const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
-  
-  console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
-  console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
+    // ⭐ FIX: Sử dụng logic validation giống createConsultationAppointment
+    const nowUtc = new Date();
+    const nowRounded = new Date(nowUtc);
+    nowRounded.setSeconds(0, 0);
+    if (startTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
+      throw new Error('Không thể đặt thời gian ở quá khứ');
+    }
 
-  // ⭐ FIX: Tính dateStr từ startTime theo format YYYY-MM-DD
-  const dateStr = `${startTime.getUTCFullYear()}-${String(startTime.getUTCMonth() + 1).padStart(2, '0')}-${String(startTime.getUTCDate()).padStart(2, '0')}`;
-  
-  console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
 
-  // ⭐ FIX: Gọi hàm _getDoctorScheduleForFollowUp với đầy đủ tham số theo đúng thứ tự
-  const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(
-    doctorUserId,           // param 1: doctorUserId
-    finalServiceId,         // param 2: serviceId
-    dateStr,                // param 3: dateStr (format: YYYY-MM-DD)
-    originalAppointment.appointmentFor || 'self',  // param 4: appointmentFor
-    startTime               // param 5: startTime (Date object)
-  );
+    const originalAppointment = await Appointment.findById(originalAppointmentId)
+      .populate('patientUserId', 'fullName email phoneNumber')
+      .populate('customerId', 'fullName email phnoneNumber')
+      .populate('serviceId', 'serviceName durationMinutes category')
+      .populate('doctorUserId', 'fullName email')
+      .populate('timeslotId', 'startTime endTime');
 
-  if (!doctorSchedule) {
-    throw new Error('Bác sĩ không có lịch làm việc vào thời gian đã chọn');
-  }
-  
-  const startTimeDate = new Date(startTime);
-  startTimeDate.setUTCHours(0, 0, 0, 0);
-  const startTimeDateEnd = new Date(startTimeDate);
-  startTimeDateEnd.setUTCHours(23, 59, 59, 999);
 
-  // ⭐ FIX: Check conflict với Appointments có overlap
-  const bookedAppointments = await Appointment.find({
-    doctorUserId,
-    status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] },
-    timeslotId: { $exists: true },
-    _id: { $ne: originalAppointmentId }
-  }).populate({
-    path: 'timeslotId',
-    select: 'startTime endTime',
-    match: {
-      startTime: { 
-        $gte: startTimeDate,
-        $lte: startTimeDateEnd
+    if (!originalAppointment) {
+      throw new Error('Không tìm thấy ca khám gốc');
+    }
+
+
+    const doctorUserId = originalAppointment.doctorUserId?._id || originalAppointment.doctorUserId;
+    const patientUserId = originalAppointment.patientUserId?._id || originalAppointment.patientUserId || null;
+    const customerId = originalAppointment.customerId?._id || originalAppointment.customerId || null;
+
+
+    // ⭐ Ưu tiên dùng serviceIds từ parameter (array từ dịch vụ bổ sung), nếu không có thì dùng serviceId, nếu không có thì dùng từ appointment gốc
+    let finalServiceIds = [];
+    if (serviceIds && Array.isArray(serviceIds) && serviceIds.length > 0) {
+      finalServiceIds = serviceIds;
+    } else if (serviceId) {
+      finalServiceIds = [serviceId];
+    } else if (originalAppointment.serviceId?._id || originalAppointment.serviceId) {
+      finalServiceIds = [originalAppointment.serviceId?._id || originalAppointment.serviceId];
+    }
+
+
+    if (finalServiceIds.length === 0) {
+      throw new Error('Không tìm thấy dịch vụ để tạo tái khám');
+    }
+
+
+    // ⭐ Lấy service đầu tiên để tính duration và tạo timeslot
+    const finalServiceId = finalServiceIds[0];
+
+
+    const service = await Service.findById(finalServiceId);
+    if (!service) {
+      throw new Error('Dịch vụ của ca khám không tồn tại');
+    }
+
+
+    const durationMinutes = service.durationMinutes || 30;
+    const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
+    // ⭐⭐⭐ CHECK TRÙNG LỊCH BỆNH NHÂN (BẮT BUỘC PHẢI CÓ TRONG TÁI KHÁM!!!)
+    if (patientUserId) {
+      const patientConflict = await Timeslot.findOne({
+        reservedByUserId: patientUserId,
+        status: { $in: ['Booked', 'Reserved'] },
+
+
+        // Không cho phép trùng hoàn toàn với ca đang tạo tái khám (tránh false positive)
+        // _id: { $ne: timeslot?._id },
+
+
+        // Overlap logic chuẩn 100%
+        startTime: { $lt: endTime },
+        endTime: { $gt: startTime }
+      }).populate('appointmentId', 'status type');
+
+
+      if (patientConflict) {
+        if (patientConflict.appointmentId?._id?.toString() === originalAppointmentId.toString()) {
+        } else if (patientConflict.appointmentId?.status === 'Cancelled') {
+        } else {
+          console.log('❌ Bệnh nhân đã có lịch khác:', {
+            existing: {
+              start: patientConflict.startTime,
+              end: patientConflict.endTime,
+              appointmentId: patientConflict.appointmentId?._id
+            },
+            tryingToBook: { startTime, endTime }
+          });
+
+
+          const formatVNTime = (date) => {
+            return new Date(date).toLocaleTimeString('vi-VN', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+              timeZone: 'Asia/Ho_Chi_Minh'
+            });
+          };
+
+
+          const existingStart = formatVNTime(patientConflict.startTime);
+          const existingEnd = formatVNTime(patientConflict.endTime);
+
+
+          throw new Error(
+            `Bệnh nhân đã có lịch khám khác vào lúc ${existingStart} - ${existingEnd}. Vui lòng chọn giờ tái khám khác`
+          );
+        }
       }
     }
-  });
 
-  const validAppointments = bookedAppointments.filter(apt => apt.timeslotId !== null);
 
-  const hasConflictWithAppointments = validAppointments.some(apt => {
-    const aptStart = new Date(apt.timeslotId.startTime);
-    const aptEnd = new Date(apt.timeslotId.endTime);
-    
-    return (startTime.getTime() < aptEnd.getTime() && endTime.getTime() > aptStart.getTime());
-  });
+    console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
+    console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
 
-  if (hasConflictWithAppointments) {
-    throw new Error('Khung giờ tái khám bị trùng với ca khám khác của bác sĩ.');
-  }
 
-  // ⭐ FIX: Check conflict với Timeslots
-  const conflictingTimeslotsRaw = await Timeslot.find({
-    doctorUserId,
-    startTime: { $lt: endTime },
-    endTime: { $gt: startTime },
-    status: { $in: ['Reserved', 'Booked'] }
-  });
+    // ⭐ FIX: Tính dateStr từ startTime theo format YYYY-MM-DD
+    const dateStr = `${startTime.getUTCFullYear()}-${String(startTime.getUTCMonth() + 1).padStart(2, '0')}-${String(startTime.getUTCDate()).padStart(2, '0')}`;
 
-  const nowForConflict = new Date();
-  const conflictingTimeslots = [];
-  const doctorCreatingFollowUp = actingDoctorId || doctorUserId;
 
-  for (const ts of conflictingTimeslotsRaw) {
-    if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
-      await Timeslot.updateOne(
-        { _id: ts._id },
-        {
-          $set: {
-            status: 'Available',
-            reservedUntil: null,
-            reservedByUserId: null,
-            appointmentId: null
-          }
+    console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
+
+
+    // ⭐ FIX: Gọi hàm _getDoctorScheduleForFollowUp với đầy đủ tham số theo đúng thứ tự
+    const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(
+      doctorUserId,           // param 1: doctorUserId
+      finalServiceId,         // param 2: serviceId
+      dateStr,                // param 3: dateStr (format: YYYY-MM-DD)
+      originalAppointment.appointmentFor || 'self',  // param 4: appointmentFor
+      startTime               // param 5: startTime (Date object)
+    );
+
+
+    if (!doctorSchedule) {
+      throw new Error('Bác sĩ không có lịch làm việc vào thời gian đã chọn');
+    }
+
+
+    const startTimeDate = new Date(startTime);
+    startTimeDate.setUTCHours(0, 0, 0, 0);
+    const startTimeDateEnd = new Date(startTimeDate);
+    startTimeDateEnd.setUTCHours(23, 59, 59, 999);
+
+
+    // ⭐ FIX: Check conflict với Appointments có overlap
+    const bookedAppointments = await Appointment.find({
+      doctorUserId,
+      status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] },
+      timeslotId: { $exists: true },
+      _id: { $ne: originalAppointmentId }
+    }).populate({
+      path: 'timeslotId',
+      select: 'startTime endTime',
+      match: {
+        startTime: {
+          $gte: startTimeDate,
+          $lte: startTimeDateEnd
         }
-      );
-      continue;
-    }
-
-    if (ts.status === 'Reserved' && ts.reservedByUserId && 
-        ts.reservedByUserId.toString() === doctorCreatingFollowUp.toString()) {
-      continue;
-    }
-
-    conflictingTimeslots.push(ts);
-  }
-
-  if (conflictingTimeslots.length > 0) {
-    console.log('❌ Khung giờ tái khám bị conflict với timeslots đã có:', conflictingTimeslots.length);
-    conflictingTimeslots.forEach(ts => {
-      console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
+      }
     });
-    throw new Error('Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.');
-  }
-
-  // ⭐ FIX: Tạo timeslot với Date objects mới
-  const timeslot = await Timeslot.create({
-    doctorScheduleId: doctorSchedule._id,
-    doctorUserId,
-    serviceId: finalServiceId,
-    startTime: new Date(startTime),
-    endTime: new Date(endTime),
-    breakAfterMinutes: 0,
-    status: 'Booked',
-    reservedByUserId: patientUserId,
-    appointmentId: null
-  });
-  
-  console.log('✅ [createFollowUpAppointment] Created timeslot:', {
-    timeslotId: timeslot._id,
-    startTime: timeslot.startTime.toISOString(),
-    endTime: timeslot.endTime.toISOString()
-  });
-
-  const followUpAppointment = await Appointment.create({
-    patientUserId,
-    customerId,
-    doctorUserId,
-    serviceId: finalServiceId,
-    additionalServiceIds: finalServiceIds,
-    timeslotId: timeslot._id,
-    status: 'Approved',
-    type: 'FollowUp',
-    mode: originalAppointment.mode,
-    notes: followUpNote || 'Tái khám theo chỉ định bác sĩ',
-    bookedByUserId: actingDoctorId || doctorUserId,
-    appointmentFor: originalAppointment.appointmentFor || 'self',
-    followUpOfAppointmentId: originalAppointment._id
-  });
-
-  const medicalRecordOrigin = await MedicalRecord.findOne({ appointmentId: originalAppointment._id }).populate('prescriptions', 'medicine dosage duration');
-
-  const medicalRecord = await MedicalRecord.create({
-    appointmentId: followUpAppointment._id,
-    doctorUserId: doctorUserId,
-    patientUserId: patientUserId,
-    customerId: customerId,
-    nurseId: medicalRecordOrigin?.nurseId || null,
-    patientAge: medicalRecordOrigin?.patientAge || 0,
-    address: medicalRecordOrigin?.address || '',
-    additionalServiceIds: finalServiceIds,
-    nurseNote: medicalRecordOrigin?.nurseNote || '',
-    diagnosis: medicalRecordOrigin?.diagnosis || '',
-    conclusion: medicalRecordOrigin?.conclusion || '',
-    prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
-      medicine: item?.medicine || '',
-      dosage: item?.dosage || '',
-      duration: item?.duration || ''
-    })),
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-
-  await Timeslot.findByIdAndUpdate(timeslot._id, {
-    appointmentId: followUpAppointment._id
-  });
-
-const formattedFollowUpDate = new Date(startTime).toLocaleDateString('vi-VN');
-const followUpTime = new Date(startTime).toLocaleTimeString('vi-VN', {
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false
-});
-
-console.log(`✅ [createFollowUpAppointment] Tạo lịch tái khám thành công cho bệnh nhân vào ${formattedFollowUpDate} lúc ${followUpTime}`);
-
-try {
-  await emailService.sendReExaminationEmail({
-    email: originalAppointment.patientUserId?.email,
-    patientName: originalAppointment.patientUserId?.fullName || 'Bệnh nhân',
-    patientPhone: originalAppointment.patientUserId?.phoneNumber || 'Chưa cập nhật',
-    patientEmail: originalAppointment.patientUserId?.email || 'Chưa cập nhật',
-    doctorName: originalAppointment.doctorUserId?.fullName || 'Chưa xác định',
-    appointmentDate: startTime,
-    appointmentTime: startTime,
-    clinicName: 'Phòng khám Hải An'
-  });
-  console.log('✅ [Email] Gửi email tái khám thành công');
-} catch (err) {
-  console.error('[Email] Gửi email tái khám thất bại:', err);
-}
 
 
-  if (patientUserId) {
-    const followUpDisplayTime = new Date(startTime).toLocaleString('vi-VN', {
+    const validAppointments = bookedAppointments.filter(apt => apt.timeslotId !== null);
+
+
+    const hasConflictWithAppointments = validAppointments.some(apt => {
+      const aptStart = new Date(apt.timeslotId.startTime);
+      const aptEnd = new Date(apt.timeslotId.endTime);
+
+
+      return (startTime.getTime() < aptEnd.getTime() && endTime.getTime() > aptStart.getTime());
+    });
+
+
+    if (hasConflictWithAppointments) {
+      throw new Error('Khung giờ tái khám bị trùng với ca khám khác của bác sĩ.');
+    }
+
+
+    // ⭐ FIX: Check conflict với Timeslots
+    const conflictingTimeslotsRaw = await Timeslot.find({
+      doctorUserId,
+      startTime: { $lt: endTime },
+      endTime: { $gt: startTime },
+      status: { $in: ['Reserved', 'Booked'] }
+    });
+
+
+    const nowForConflict = new Date();
+    const conflictingTimeslots = [];
+    const doctorCreatingFollowUp = actingDoctorId || doctorUserId;
+
+
+    for (const ts of conflictingTimeslotsRaw) {
+      if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
+        await Timeslot.updateOne(
+          { _id: ts._id },
+          {
+            $set: {
+              status: 'Available',
+              reservedUntil: null,
+              reservedByUserId: null,
+              appointmentId: null
+            }
+          }
+        );
+        continue;
+      }
+
+
+      if (ts.status === 'Reserved' && ts.reservedByUserId &&
+        ts.reservedByUserId.toString() === doctorCreatingFollowUp.toString()) {
+        continue;
+      }
+
+
+      conflictingTimeslots.push(ts);
+    }
+
+
+    // if (conflictingTimeslots.length > 0) {
+    //   console.log('❌ Khung giờ tái khám bị conflict với timeslots đã có:', conflictingTimeslots.length);
+    //   conflictingTimeslots.forEach(ts => {
+    //     console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
+    //   });
+    //   throw new Error('Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.');
+    // }
+
+
+    // ⭐ FIX: Tạo timeslot với Date objects mới
+    const timeslot = await Timeslot.create({
+      doctorScheduleId: doctorSchedule._id,
+      doctorUserId,
+      serviceId: finalServiceId,
+      startTime: new Date(startTime),
+      endTime: new Date(endTime),
+      breakAfterMinutes: 0,
+      status: 'Booked',
+      reservedByUserId: patientUserId,
+      appointmentId: null
+    });
+
+
+    console.log('✅ [createFollowUpAppointment] Created timeslot:', {
+      timeslotId: timeslot._id,
+      startTime: timeslot.startTime.toISOString(),
+      endTime: timeslot.endTime.toISOString()
+    });
+
+
+    const followUpAppointment = await Appointment.create({
+      patientUserId,
+      customerId,
+      doctorUserId,
+      serviceId: finalServiceId,
+      additionalServiceIds: finalServiceIds,
+      timeslotId: timeslot._id,
+      status: 'Approved',
+      type: 'FollowUp',
+      mode: originalAppointment.mode,
+      notes: followUpNote || 'Tái khám theo chỉ định bác sĩ',
+      bookedByUserId: actingDoctorId || doctorUserId,
+      appointmentFor: originalAppointment.appointmentFor || 'self',
+      followUpOfAppointmentId: originalAppointment._id
+    });
+
+
+    const medicalRecordOrigin = await MedicalRecord.findOne({ appointmentId: originalAppointment._id }).populate('prescriptions', 'medicine dosage duration');
+
+
+    const medicalRecord = await MedicalRecord.create({
+      appointmentId: followUpAppointment._id,
+      doctorUserId: doctorUserId,
+      patientUserId: patientUserId,
+      customerId: customerId,
+      nurseId: medicalRecordOrigin?.nurseId || null,
+      patientAge: medicalRecordOrigin?.patientAge || 0,
+      address: medicalRecordOrigin?.address || '',
+      additionalServiceIds: finalServiceIds,
+      nurseNote: medicalRecordOrigin?.nurseNote || '',
+      diagnosis: medicalRecordOrigin?.diagnosis || '',
+      conclusion: medicalRecordOrigin?.conclusion || '',
+      prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
+        medicine: item?.medicine || '',
+        dosage: item?.dosage || '',
+        duration: item?.duration || ''
+      })),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+
+    await Timeslot.findByIdAndUpdate(timeslot._id, {
+      appointmentId: followUpAppointment._id
+    });
+
+
+    const formattedFollowUpDate = new Date(startTime).toLocaleDateString('vi-VN');
+    const followUpTime = new Date(startTime).toLocaleTimeString('vi-VN', {
       hour: '2-digit',
       minute: '2-digit',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone: 'Asia/Ho_Chi_Minh'
+      hour12: false
     });
+
+
+    console.log(`✅ [createFollowUpAppointment] Tạo lịch tái khám thành công cho bệnh nhân vào ${formattedFollowUpDate} lúc ${followUpTime}`);
+
+
     try {
-      await notificationService.createNotification({
-        userId: patientUserId,
-        createdByUserId: actingDoctorId || doctorUserId,
-        title: 'Đã tạo lịch tái khám',
-        message: `Bác sĩ đã đặt lịch tái khám vào ${followUpDisplayTime}`,
-        relatedAppointmentId: followUpAppointment._id,
-        link: null
+      await emailService.sendReExaminationEmail({
+        email: originalAppointment.patientUserId?.email,
+        patientName: originalAppointment.patientUserId?.fullName || 'Bệnh nhân',
+        patientPhone: originalAppointment.patientUserId?.phoneNumber || 'Chưa cập nhật',
+        patientEmail: originalAppointment.patientUserId?.email || 'Chưa cập nhật',
+        doctorName: originalAppointment.doctorUserId?.fullName || 'Chưa xác định',
+        appointmentDate: startTime,
+        appointmentTime: startTime,
+        clinicName: 'Phòng khám Hải An'
       });
-    } catch (error) {
-      console.warn('⚠️ Không thể gửi thông báo tái khám cho bệnh nhân:', error.message);
+      console.log('✅ [Email] Gửi email tái khám thành công');
+    } catch (err) {
+      console.error('[Email] Gửi email tái khám thất bại:', err);
     }
+
+
+
+
+    if (patientUserId) {
+      const followUpDisplayTime = new Date(startTime).toLocaleString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'Asia/Ho_Chi_Minh'
+      });
+      try {
+        await notificationService.createNotification({
+          userId: patientUserId,
+          createdByUserId: actingDoctorId || doctorUserId,
+          title: 'Đã tạo lịch tái khám',
+          message: `Bác sĩ đã đặt lịch tái khám vào ${followUpDisplayTime}`,
+          relatedAppointmentId: followUpAppointment._id,
+          link: null
+        });
+      } catch (error) {
+        console.warn('⚠️ Không thể gửi thông báo tái khám cho bệnh nhân:', error.message);
+      }
+    }
+
+
+    return await Appointment.findById(followUpAppointment._id).populate('timeslotId', 'startTime endTime');
   }
 
-  return await Appointment.findById(followUpAppointment._id).populate('timeslotId', 'startTime endTime');
-}
+
+
+
+
 
   async updateFollowUpAppointment({ followUpAppointmentId, followUpDate, followUpNote = '', actingDoctorId }) {
     if (!followUpAppointmentId) {
@@ -3752,7 +3849,7 @@ try {
       select: 'startTime endTime',
       match: {
         // ⭐ FIX: Chỉ lấy appointments trong cùng ngày với startTime (UTC date)
-        startTime: { 
+        startTime: {
           $gte: startTimeDate,
           $lte: startTimeDateEnd
         }
@@ -3765,7 +3862,7 @@ try {
     const hasConflictWithAppointments = validAppointments.some(apt => {
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
-      
+
       // ⭐ Check overlap thực sự: startTime < aptEnd && endTime > aptStart
       // Nếu chỉ tiếp giáp (startTime === aptEnd hoặc endTime === aptStart) → không overlap
       return (startTime.getTime() < aptEnd.getTime() && endTime.getTime() > aptStart.getTime());
@@ -3791,7 +3888,7 @@ try {
     // ⭐ FIX: Lấy actingDoctorId để exclude reserved slots của chính doctor đang update follow-up
     // Nếu actingDoctorId không có, dùng doctorUserId (doctor của follow-up appointment)
     const doctorUpdatingFollowUp = actingDoctorId || doctorUserId;
-    
+
     for (const slot of conflictingTimeslotsRaw) {
       // Bỏ qua reserved slots đã hết hạn
       if (slot.status === 'Reserved' && slot.reservedUntil && slot.reservedUntil <= nowForSlot) {
@@ -3800,8 +3897,8 @@ try {
 
       // ⭐ FIX: Bỏ qua reserved slots của chính doctor đang update follow-up (cho phép doctor release slot cũ và update follow-up mới)
       // Reserved slot từ lần blur có thể conflict với follow-up appointment khi update
-      if (slot.status === 'Reserved' && slot.reservedByUserId && 
-          slot.reservedByUserId.toString() === doctorUpdatingFollowUp.toString()) {
+      if (slot.status === 'Reserved' && slot.reservedByUserId &&
+        slot.reservedByUserId.toString() === doctorUpdatingFollowUp.toString()) {
         continue;
       }
 
@@ -3809,7 +3906,7 @@ try {
       // Nếu chỉ tiếp giáp (startTime === slot.endTime hoặc endTime === slot.startTime) → không overlap
       const slotStart = new Date(slot.startTime);
       const slotEnd = new Date(slot.endTime);
-      
+
       // Overlap chỉ khi: startTime < slotEnd && endTime > slotStart
       // Nếu startTime === slotEnd hoặc endTime === slotStart → không overlap (chỉ tiếp giáp)
       if (startTime.getTime() < slotEnd.getTime() && endTime.getTime() > slotStart.getTime()) {
@@ -3934,305 +4031,291 @@ try {
     return appointment;
   }
 
-async managerDashboard(startDate, endDate) {
-  try {
-    let start, end;
-    if (!startDate || !endDate) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth(); 
-    start = new Date(year, month, 1, 0, 0, 0, 0);
-    end = new Date(year, month + 1, 0, 23, 59, 59, 999); 
-} else {
-  start = new Date(startDate);
-  end = new Date(endDate);
-}
-
-    const filter = {
-      createdAt: { $gte: start, $lte: end }
-    };
-
-    // --- Thống kê ca khám tại quầy (VisitTicket) ---
-    const totalVisitTickets = await VisitTicket.countDocuments(filter);
-
-    // Tổng doanh thu từ VisitTicket
-    const visitTickets = await VisitTicket.find(filter).populate("service.serviceId", "category price");
-
-    let revenueByCategory = {
-      Examination: 0,
-      Consultation: 0
-    };
-
-    visitTickets.forEach(vt => {
-      vt.service.forEach(s => {
-        const category = s.category || (s.serviceId ? s.serviceId.category : null);
-        const price = s.total || (s.serviceId ? s.serviceId.price : 0);
-        if (category && revenueByCategory.hasOwnProperty(category)) {
-          revenueByCategory[category] += price;
-        }
-      });
-    });
-
-    const totalRevenue = revenueByCategory.Examination + revenueByCategory.Consultation;
-
-    // --- Thống kê Appointment loại Consultation ---
-    const consultationAppointments = await Appointment.countDocuments({
-      ...filter,
-      status: "Completed",
-      type : "Consultation"
-    });
-
-    //Các ca khám và tư vấn đã hoàn thành
-    const totalAppointment = consultationAppointments + totalVisitTickets
-
-    // --- Thống kê bệnh nhân ---
-    const totalPatients = await User.countDocuments({ role: "Patient" });
-    const newPatients = await User.countDocuments({
-      role: "Patient",
-      createdAt: filter.createdAt
-    });
-
-    return {
-      filterRange: {
-        startDate: start,
-        endDate: end
-      },
-      appointments: {
-        examination : totalVisitTickets,
-        consultation : consultationAppointments,
-        total: totalAppointment
-      },
-      revenue: {
-        ...revenueByCategory,
-        total: totalRevenue
-      },
-      patients: {
-        total: totalPatients,
-        newPatients
+  async managerDashboard(startDate, endDate) {
+    try {
+      let start, end;
+      if (!startDate || !endDate) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        start = new Date(year, month, 1, 0, 0, 0, 0);
+        end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+      } else {
+        start = new Date(startDate);
+        end = new Date(endDate);
       }
-    };
-  } catch (error) {
-    console.error("❌ Lỗi dashboard:", error);
-    throw new Error(error.message);
-  }
-}
 
-async getMonthlyRevenue(startDate, endDate) {
-  try {
+      const filter = {
+        createdAt: { $gte: start, $lte: end }
+      };
 
-    const now = new Date();
-    const year = now.getFullYear(); // Lấy năm hiện tại
+      // --- Thống kê ca khám tại quầy (VisitTicket) ---
+      const totalVisitTickets = await VisitTicket.countDocuments(filter);
 
-    if (!startDate || !endDate) {
-      startDate = new Date(year, 0, 1);  // Bắt đầu từ ngày 01 tháng 01
-      endDate = new Date(year, 11, 31, 23, 59, 59, 999);  // Kết thúc ngày 31 tháng 12, 23:59:59
-    } else {
-      // Chuyển đổi startDate, endDate từ query string thành Date
-      startDate = new Date(startDate);
-      endDate = new Date(endDate);
-    }
+      // Tổng doanh thu từ VisitTicket
+      const visitTickets = await VisitTicket.find(filter).populate("service.serviceId", "category price");
 
-    // Khởi tạo mảng chứa doanh thu mỗi tháng, mặc định là 0
-    let monthlyRevenue = Array(12).fill(0);
+      let revenueByCategory = {
+        Examination: 0,
+        Consultation: 0
+      };
 
-    // Lọc theo khoảng thời gian startDate và endDate
-    const filter = {
-      createdAt: { $gte: startDate, $lte: endDate }
-    };
-
-    // Lấy doanh thu từ VisitTicket
-    const visitTickets = await VisitTicket.aggregate([
-      {
-        $match: {
-          createdAt: {
-            $gte: startDate, // Từ startDate
-            $lte: endDate    // Đến endDate
+      visitTickets.forEach(vt => {
+        vt.service.forEach(s => {
+          const category = s.category || (s.serviceId ? s.serviceId.category : null);
+          const price = s.total || (s.serviceId ? s.serviceId.price : 0);
+          if (category && revenueByCategory.hasOwnProperty(category)) {
+            revenueByCategory[category] += price;
           }
-        }
-      },
-      {
-        $unwind: "$service"
-      },
-      {
-        $group: {
-          _id: { $month: "$createdAt" }, // Nhóm theo tháng
-          totalRevenue: { $sum: { $ifNull: ["$service.total", 0] } }
-        }
-      },
-      {
-        $sort: { _id: 1 } // Sắp xếp theo tháng
-      }
-    ]);
+        });
+      });
 
-    // Lấy doanh thu từ Appointment
-    const appointments = await Appointment.aggregate([
-      {
-        $match: {
-          createdAt: {
-            $gte: startDate, // Từ startDate
-            $lte: endDate    // Đến endDate
-          },
-          status: "Completed", // Chỉ tính các ca đã hoàn thành
-          type: "Consultation" // Loại là tư vấn
+      const totalRevenue = revenueByCategory.Examination + revenueByCategory.Consultation;
+
+      // --- Thống kê Appointment loại Consultation ---
+      const consultationAppointments = await Appointment.countDocuments({
+        ...filter,
+        status: "Completed",
+        type: "Consultation"
+      });
+
+      //Các ca khám và tư vấn đã hoàn thành
+      const totalAppointment = consultationAppointments + totalVisitTickets
+
+      // --- Thống kê bệnh nhân ---
+      const totalPatients = await User.countDocuments({ role: "Patient" });
+      const newPatients = await User.countDocuments({
+        role: "Patient",
+        createdAt: filter.createdAt
+      });
+
+      return {
+        filterRange: {
+          startDate: start,
+          endDate: end
+        },
+        appointments: {
+          examination: totalVisitTickets,
+          consultation: consultationAppointments,
+          total: totalAppointment
+        },
+        revenue: {
+          ...revenueByCategory,
+          total: totalRevenue
+        },
+        patients: {
+          total: totalPatients,
+          newPatients
         }
-      },
-      {
-        $group: {
-          _id: { $month: "$createdAt" },
-          totalRevenue: { $sum: "$price" }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
-
-    // Cập nhật doanh thu vào mảng theo tháng
-    visitTickets.forEach(ticket => {
-      monthlyRevenue[ticket._id - 1] += ticket.totalRevenue; // Lưu doanh thu của VisitTicket vào tháng tương ứng
-    });
-
-    appointments.forEach(appointment => {
-      monthlyRevenue[appointment._id - 1] += appointment.totalRevenue; // Lưu doanh thu của Appointment vào tháng tương ứng
-    });
-
-    // Trả về kết quả
-    return {
-      year: year,
-      revenue: monthlyRevenue
+      };
+    } catch (error) {
+      console.error("❌ Lỗi dashboard:", error);
+      throw new Error(error.message);
     }
-
-  } catch (error) {
-    console.error("❌ Lỗi khi tính toán doanh thu theo tháng:", error);
-    res.status(500).json({ message: "Đã có lỗi xảy ra khi tính toán doanh thu." });
-  }
-}
-
-async getServiceRevenueReport(startDate, endDate) {
-  let start, end;
-
-  // ====== 1. Range ======
-  if (!startDate || !endDate) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    start = new Date(year, month, 1, 0, 0, 0, 0);
-    end   = new Date(year, month + 1, 0, 23, 59, 59, 999);
-  } else {
-    start = new Date(startDate);
-    end   = new Date(endDate);
   }
 
-  console.log('📌 [getServiceRevenueReport] Range:', start, end);
+  async getMonthlyRevenue(startDate, endDate) {
+    try {
 
-  // ====== 2. VISIT TICKET (Examination / Consultation) ======
-  // Ở đây dùng giá trong VisitTicket:
-  // - service.price  => giá gốc lúc khám
-  // - service.total  => giá sau giảm (thanh toán)
-  const ticketAgg = await VisitTicket.aggregate([
-    {
-      $addFields: {
-        effectiveDate: { $ifNull: ["$date", "$createdAt"] }
+      const now = new Date();
+      const year = now.getFullYear(); // Lấy năm hiện tại
+
+      if (!startDate || !endDate) {
+        startDate = new Date(year, 0, 1);  // Bắt đầu từ ngày 01 tháng 01
+        endDate = new Date(year, 11, 31, 23, 59, 59, 999);  // Kết thúc ngày 31 tháng 12, 23:59:59
+      } else {
+        // Chuyển đổi startDate, endDate từ query string thành Date
+        startDate = new Date(startDate);
+        endDate = new Date(endDate);
       }
-    },
-    {
-      $match: {
-        effectiveDate: { $gte: start, $lte: end }
-      }
-    },
-    { $unwind: "$service" },
-    {
-      $project: {
-        serviceId: "$service.serviceId",
-        serviceName: "$service.serviceName",
-        category: {
-          $switch: {
-            branches: [
-              { case: { $eq: ["$service.category", "Examination"] }, then: "Khám trực tiếp" },
-              { case: { $eq: ["$service.category", "Consultation"] }, then: "Tư vấn online" }
-            ],
-            default: "—"
+
+      // Khởi tạo mảng chứa doanh thu mỗi tháng, mặc định là 0
+      let monthlyRevenue = Array(12).fill(0);
+
+      // Lọc theo khoảng thời gian startDate và endDate
+      const filter = {
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      // Lấy doanh thu từ VisitTicket
+      const visitTickets = await VisitTicket.aggregate([
+        {
+          $match: {
+            createdAt: {
+              $gte: startDate, // Từ startDate
+              $lte: endDate    // Đến endDate
+            }
           }
         },
-        originalUnitPrice: "$service.price",   // giá gốc 1 lần
-        paidUnitPrice: "$service.total"        // giá đã giảm 1 lần
+        {
+          $unwind: "$service"
+        },
+        {
+          $group: {
+            _id: { $month: "$createdAt" }, // Nhóm theo tháng
+            totalRevenue: { $sum: { $ifNull: ["$service.total", 0] } }
+          }
+        },
+        {
+          $sort: { _id: 1 } // Sắp xếp theo tháng
+        }
+      ]);
+
+      // Lấy doanh thu từ Appointment
+      const appointments = await Appointment.aggregate([
+        {
+          $match: {
+            createdAt: {
+              $gte: startDate, // Từ startDate
+              $lte: endDate    // Đến endDate
+            },
+            status: "Completed", // Chỉ tính các ca đã hoàn thành
+            type: "Consultation" // Loại là tư vấn
+          }
+        },
+        {
+          $group: {
+            _id: { $month: "$createdAt" },
+            totalRevenue: { $sum: "$price" }
+          }
+        },
+        {
+          $sort: { _id: 1 }
+        }
+      ]);
+
+      // Cập nhật doanh thu vào mảng theo tháng
+      visitTickets.forEach(ticket => {
+        monthlyRevenue[ticket._id - 1] += ticket.totalRevenue; // Lưu doanh thu của VisitTicket vào tháng tương ứng
+      });
+
+      appointments.forEach(appointment => {
+        monthlyRevenue[appointment._id - 1] += appointment.totalRevenue; // Lưu doanh thu của Appointment vào tháng tương ứng
+      });
+
+      // Trả về kết quả
+      return {
+        year: year,
+        revenue: monthlyRevenue
       }
-    },
-    {
-      $group: {
-        _id: "$serviceId",
-        serviceName: { $first: "$serviceName" },
-        category: { $first: "$category" },
-        // tổng doanh thu theo giá gốc (chưa giảm)
-        totalOriginal: { $sum: "$originalUnitPrice" },
-        // tổng doanh thu thực thu (sau giảm)
-        totalPaid: { $sum: "$paidUnitPrice" },
-        count: { $sum: 1 }
-      }
+
+    } catch (error) {
+      console.error("❌ Lỗi khi tính toán doanh thu theo tháng:", error);
+      res.status(500).json({ message: "Đã có lỗi xảy ra khi tính toán doanh thu." });
     }
-  ]);
+  }
 
-  // ====== 3. CONSULTATION COMPLETED (Appointment) ======
-  // Không có discount riêng, tạm coi giá gốc = giá thanh toán
-  const consultationAgg = await Appointment.aggregate([
-    {
-      $match: {
-        createdAt: { $gte: start, $lte: end },
-        status: "Completed",
-        type: "Consultation",
-        serviceId: { $ne: null }
-      }
-    },
-    {
-      $lookup: {
-        from: "services",
-        localField: "serviceId",
-        foreignField: "_id",
-        as: "serviceInfo"
-      }
-    },
-    { $unwind: "$serviceInfo" },
-    {
-      $project: {
-        serviceId: "$serviceId",
-        serviceName: "$serviceInfo.serviceName",
-        category: "Tư vấn online",
-        originalUnitPrice: "$serviceInfo.price" // giá chuẩn của dịch vụ tư vấn
-        // nếu sau này có field giảm giá/giá thực tế trong Appointment thì chỉnh thêm ở đây
-      }
-    },
-    {
-      $group: {
-        _id: "$serviceId",
-        serviceName: { $first: "$serviceName" },
-        category: { $first: "$category" },
-        totalOriginal: { $sum: "$originalUnitPrice" },
-        totalPaid: { $sum: "$originalUnitPrice" }, // hiện tại = giá gốc (chưa giảm)
-        count: { $sum: 1 }
-      }
+  async getServiceRevenueReport(startDate, endDate) {
+    let start, end;
+
+    // ====== 1. Range ======
+    if (!startDate || !endDate) {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth();
+      start = new Date(year, month, 1, 0, 0, 0, 0);
+      end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+    } else {
+      start = new Date(startDate);
+      end = new Date(endDate);
     }
-  ]);
 
-  // ====== 4. MERGE 2 NGUỒN ======
-  const map = new Map();
+    console.log('📌 [getServiceRevenueReport] Range:', start, end);
 
-  // Merge VisitTicket
-  ticketAgg.forEach(sv => {
-    const key = sv._id.toString();
-    map.set(key, {
-      serviceId: sv._id,
-      serviceName: sv.serviceName,
-      category: sv.category,
-      totalOriginal: sv.totalOriginal,
-      totalPaid: sv.totalPaid,
-      count: sv.count
-    });
-  });
+    // ====== 2. VISIT TICKET (Examination / Consultation) ======
+    // Ở đây dùng giá trong VisitTicket:
+    // - service.price  => giá gốc lúc khám
+    // - service.total  => giá sau giảm (thanh toán)
+    const ticketAgg = await VisitTicket.aggregate([
+      {
+        $addFields: {
+          effectiveDate: { $ifNull: ["$date", "$createdAt"] }
+        }
+      },
+      {
+        $match: {
+          effectiveDate: { $gte: start, $lte: end }
+        }
+      },
+      { $unwind: "$service" },
+      {
+        $project: {
+          serviceId: "$service.serviceId",
+          serviceName: "$service.serviceName",
+          category: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$service.category", "Examination"] }, then: "Khám trực tiếp" },
+                { case: { $eq: ["$service.category", "Consultation"] }, then: "Tư vấn online" }
+              ],
+              default: "—"
+            }
+          },
+          originalUnitPrice: "$service.price",   // giá gốc 1 lần
+          paidUnitPrice: "$service.total"        // giá đã giảm 1 lần
+        }
+      },
+      {
+        $group: {
+          _id: "$serviceId",
+          serviceName: { $first: "$serviceName" },
+          category: { $first: "$category" },
+          // tổng doanh thu theo giá gốc (chưa giảm)
+          totalOriginal: { $sum: "$originalUnitPrice" },
+          // tổng doanh thu thực thu (sau giảm)
+          totalPaid: { $sum: "$paidUnitPrice" },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
 
-  // Merge Consultation
-  consultationAgg.forEach(sv => {
-    const key = sv._id.toString();
-    if (!map.has(key)) {
+    // ====== 3. CONSULTATION COMPLETED (Appointment) ======
+    // Không có discount riêng, tạm coi giá gốc = giá thanh toán
+    const consultationAgg = await Appointment.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: start, $lte: end },
+          status: "Completed",
+          type: "Consultation",
+          serviceId: { $ne: null }
+        }
+      },
+      {
+        $lookup: {
+          from: "services",
+          localField: "serviceId",
+          foreignField: "_id",
+          as: "serviceInfo"
+        }
+      },
+      { $unwind: "$serviceInfo" },
+      {
+        $project: {
+          serviceId: "$serviceId",
+          serviceName: "$serviceInfo.serviceName",
+          category: "Tư vấn online",
+          originalUnitPrice: "$serviceInfo.price" // giá chuẩn của dịch vụ tư vấn
+          // nếu sau này có field giảm giá/giá thực tế trong Appointment thì chỉnh thêm ở đây
+        }
+      },
+      {
+        $group: {
+          _id: "$serviceId",
+          serviceName: { $first: "$serviceName" },
+          category: { $first: "$category" },
+          totalOriginal: { $sum: "$originalUnitPrice" },
+          totalPaid: { $sum: "$originalUnitPrice" }, // hiện tại = giá gốc (chưa giảm)
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // ====== 4. MERGE 2 NGUỒN ======
+    const map = new Map();
+
+    // Merge VisitTicket
+    ticketAgg.forEach(sv => {
+      const key = sv._id.toString();
       map.set(key, {
         serviceId: sv._id,
         serviceName: sv.serviceName,
@@ -4241,261 +4324,275 @@ async getServiceRevenueReport(startDate, endDate) {
         totalPaid: sv.totalPaid,
         count: sv.count
       });
-    } else {
-      const existing = map.get(key);
-      existing.totalOriginal += sv.totalOriginal;
-      existing.totalPaid += sv.totalPaid;
-      existing.count += sv.count;
-    }
-  });
+    });
 
-  // Map ra format FE cần: có giá gốc & giá thanh toán
-  const services = Array.from(map.values()).map(s => {
-    const avgOriginalPrice = s.count > 0 ? s.totalOriginal / s.count : 0;
-    const avgPaidPrice = s.count > 0 ? s.totalPaid / s.count : 0;
+    // Merge Consultation
+    consultationAgg.forEach(sv => {
+      const key = sv._id.toString();
+      if (!map.has(key)) {
+        map.set(key, {
+          serviceId: sv._id,
+          serviceName: sv.serviceName,
+          category: sv.category,
+          totalOriginal: sv.totalOriginal,
+          totalPaid: sv.totalPaid,
+          count: sv.count
+        });
+      } else {
+        const existing = map.get(key);
+        existing.totalOriginal += sv.totalOriginal;
+        existing.totalPaid += sv.totalPaid;
+        existing.count += sv.count;
+      }
+    });
+
+    // Map ra format FE cần: có giá gốc & giá thanh toán
+    const services = Array.from(map.values()).map(s => {
+      const avgOriginalPrice = s.count > 0 ? s.totalOriginal / s.count : 0;
+      const avgPaidPrice = s.count > 0 ? s.totalPaid / s.count : 0;
+
+      return {
+        serviceId: s.serviceId,
+        serviceName: s.serviceName,
+        category: s.category,
+        // đơn giá
+        originalPrice: avgOriginalPrice, // giá gốc trung bình 1 lần
+        paidPrice: avgPaidPrice,         // giá thanh toán trung bình 1 lần
+        // số lượng
+        count: s.count,
+        // doanh thu
+        totalOriginalRevenue: s.totalOriginal, // tổng nếu không giảm
+        totalPaidRevenue: s.totalPaid,         // tổng thực thu
+        totalRevenue: s.totalPaid              // backward-compatible
+      };
+    });
+
+    // ====== 5. SUMMARY ======
+    let totalOriginalRevenue = 0;
+    let totalPaidRevenue = 0;
+    let totalCount = 0;
+
+    services.forEach(s => {
+      totalOriginalRevenue += s.totalOriginalRevenue;
+      totalPaidRevenue += s.totalPaidRevenue;
+      totalCount += s.count;
+    });
 
     return {
-      serviceId: s.serviceId,
-      serviceName: s.serviceName,
-      category: s.category,
-      // đơn giá
-      originalPrice: avgOriginalPrice, // giá gốc trung bình 1 lần
-      paidPrice: avgPaidPrice,         // giá thanh toán trung bình 1 lần
-      // số lượng
-      count: s.count,
-      // doanh thu
-      totalOriginalRevenue: s.totalOriginal, // tổng nếu không giảm
-      totalPaidRevenue: s.totalPaid,         // tổng thực thu
-      totalRevenue: s.totalPaid              // backward-compatible
-    };
-  });
-
-  // ====== 5. SUMMARY ======
-  let totalOriginalRevenue = 0;
-  let totalPaidRevenue = 0;
-  let totalCount = 0;
-
-  services.forEach(s => {
-    totalOriginalRevenue += s.totalOriginalRevenue;
-    totalPaidRevenue += s.totalPaidRevenue;
-    totalCount += s.count;
-  });
-
-  return {
-    filterRange: { startDate: start, endDate: end },
-    summary: {
-      totalServices: services.length,
-      totalOriginalRevenue,
-      totalPaidRevenue,
-      totalRevenue: totalPaidRevenue, // cho FE dùng như cũ
-      totalCount
-    },
-    services
-  };
-}
-
-
-
-async getRevenueServicePDF(startDate, endDate, res) {
-  try {
-    const report = await this.getServiceRevenueReport(startDate, endDate);
-    const { filterRange, summary, services } = report;
-    const { startDate: s, endDate: e } = filterRange;
-
-    if (!services || services.length === 0) {
-      throw new Error('Không có dịch vụ nào phát sinh doanh thu trong khoảng thời gian này');
-    }
-
-    function formatPrice(price) {
-      return new Intl.NumberFormat('vi-VN', {
-        style: 'currency',
-        currency: 'VND'
-      }).format(price || 0);
-    }
-
-    // ⭐ SẮP XẾP DỊCH VỤ THEO SỐ LẦN SỬ DỤNG (count) GIẢM DẦN
-    const sortedServices = [...services].sort((a, b) => {
-      const countA = a.count || 0;
-      const countB = b.count || 0;
-      return countB - countA; // dùng nhiều nhất đứng trên
-    });
-
-    // ==== BẢNG DỊCH VỤ (mới: có giá gốc & giá thanh toán) ====
-    const serviceTableBody = [
-      [
-        { text: 'STT', style: 'tableHeader', alignment: 'center' },
-        { text: 'Dịch vụ', style: 'tableHeader' },
-        { text: 'Loại', style: 'tableHeader', alignment: 'center' },
-        { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
-        { text: 'Giá gốc', style: 'tableHeader', alignment: 'right' },
-        { text: 'Giá thanh toán', style: 'tableHeader', alignment: 'right' },
-        { text: 'Tổng doanh thu (thực thu)', style: 'tableHeader', alignment: 'right' }
-      ]
-    ];
-
-    // ⭐ DÙNG sortedServices THAY VÌ services
-    sortedServices.forEach((sv, index) => {
-      let displayCategory = '—';
-      if (sv.category === 'Examination') {
-        displayCategory = 'Khám trực tiếp';
-      } else if (sv.category === 'Consultation') {
-        displayCategory = 'Tư vấn online';
-      } else if (sv.category) {
-        displayCategory = sv.category;
-      }
-
-      serviceTableBody.push([
-        { text: (index + 1).toString(), alignment: 'center' },
-        { text: sv.serviceName || '—' },
-        { text: displayCategory, alignment: 'center' },
-        { text: (sv.count || 0).toString(), alignment: 'right' },
-
-        { text: formatPrice(sv.originalPrice || 0), alignment: 'right' },
-        { text: formatPrice(sv.paidPrice || 0), alignment: 'right' },
-
-        {
-          text: formatPrice(
-            sv.totalPaidRevenue != null
-              ? sv.totalPaidRevenue
-              : sv.totalRevenue || 0
-          ),
-          alignment: 'right',
-          bold: true
-        }
-      ]);
-    });
-
-    const docDefinition = {
-      pageSize: 'A4',
-      pageOrientation: 'portrait',
-      pageMargins: [25, 40, 25, 50],
-      defaultStyle: {
-        font: 'Roboto',
-        fontSize: 10,
-        lineHeight: 1.3
+      filterRange: { startDate: start, endDate: end },
+      summary: {
+        totalServices: services.length,
+        totalOriginalRevenue,
+        totalPaidRevenue,
+        totalRevenue: totalPaidRevenue, // cho FE dùng như cũ
+        totalCount
       },
-
-      header: {
-        margin: [25, 15, 25, 0],
-        columns: [
-          {
-            text: 'NHA KHOA HẢI ANH',
-            style: 'clinicName',
-            alignment: 'left'
-          },
-          {
-            text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
-            fontSize: 8,
-            alignment: 'right',
-            color: '#555'
-          }
-        ]
-      },
-
-      content: [
-        {
-          text: 'BÁO CÁO DOANH THU THEO DỊCH VỤ',
-          style: 'header',
-          alignment: 'center',
-          margin: [0, 10, 0, 12]
-        },
-
-        {
-          text: `Khoảng thời gian: ${new Date(s).toLocaleDateString('vi-VN')} - ${new Date(e).toLocaleDateString('vi-VN')}`,
-          fontSize: 9,
-          color: '#555',
-          margin: [0, 0, 0, 12]
-        },
-
-        {
-          text: 'TỔNG QUAN',
-          style: 'subheader',
-          margin: [0, 0, 0, 4]
-        },
-        {
-          ul: [
-            `Tổng số dịch vụ có doanh thu: ${summary.totalServices}`,
-            `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
-            `Tổng doanh thu (giá gốc, chưa giảm): ${formatPrice(summary.totalOriginalRevenue || 0)}`,
-            `Tổng doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
-            `Danh sách dịch vụ được sắp xếp theo số lần sử dụng giảm dần.`
-          ],
-          margin: [0, 0, 0, 10]
-        },
-
-        '\n',
-
-        { text: 'CHI TIẾT THEO DỊCH VỤ', style: 'subheader', margin: [0, 0, 0, 4] },
-        {
-          table: {
-            headerRows: 1,
-            widths: ['5%', '21%', '15%', '9%', '14%', '14%', '22%'],
-            body: serviceTableBody
-          },
-          layout: {
-            hLineWidth: () => 0.5,
-            vLineWidth: () => 0.5,
-            hLineColor: () => '#aaa',
-            vLineColor: () => '#aaa'
-          }
-        },
-
-        '\n',
-
-        {
-          text:
-            'Ghi chú:\n' +
-            '- Giá gốc: giá dịch vụ theo bảng giá tại thời điểm khám (chưa áp dụng khuyến mãi).\n' +
-            '- Giá thanh toán: số tiền khách hàng thực tế phải trả sau khi áp dụng khuyến mãi/giảm giá.\n' +
-            '- Doanh thu thực thu được tính theo giá thanh toán.\n' +
-            '- Bảng trên được sắp xếp theo số lần sử dụng dịch vụ (cao đến thấp).',
-          fontSize: 8,
-          color: '#666',
-          margin: [0, 8, 0, 0]
-        }
-      ],
-
-      styles: {
-        clinicName: {
-          fontSize: 13,
-          bold: true,
-          color: '#d32f2f'
-        },
-        header: {
-          fontSize: 18,
-          bold: true,
-          color: '#1a5eaa'
-        },
-        subheader: {
-          fontSize: 11,
-          bold: true,
-          color: '#333',
-          margin: [0, 8, 0, 4]
-        },
-        tableHeader: {
-          bold: true,
-          fontSize: 9,
-          fillColor: '#f0f0f0',
-          color: '#333'
-        }
-      }
+      services
     };
-
-    const pdfDoc = printer.createPdfKitDocument(docDefinition);
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      'attachment; filename=revenue-service-report.pdf'
-    );
-
-    pdfDoc.pipe(res);
-    pdfDoc.end();
-  } catch (error) {
-    console.error('❌ Lỗi PDF báo cáo dịch vụ:', error);
-    throw error;
   }
-}
+
+
+
+  async getRevenueServicePDF(startDate, endDate, res) {
+    try {
+      const report = await this.getServiceRevenueReport(startDate, endDate);
+      const { filterRange, summary, services } = report;
+      const { startDate: s, endDate: e } = filterRange;
+
+      if (!services || services.length === 0) {
+        throw new Error('Không có dịch vụ nào phát sinh doanh thu trong khoảng thời gian này');
+      }
+
+      function formatPrice(price) {
+        return new Intl.NumberFormat('vi-VN', {
+          style: 'currency',
+          currency: 'VND'
+        }).format(price || 0);
+      }
+
+      // ⭐ SẮP XẾP DỊCH VỤ THEO SỐ LẦN SỬ DỤNG (count) GIẢM DẦN
+      const sortedServices = [...services].sort((a, b) => {
+        const countA = a.count || 0;
+        const countB = b.count || 0;
+        return countB - countA; // dùng nhiều nhất đứng trên
+      });
+
+      // ==== BẢNG DỊCH VỤ (mới: có giá gốc & giá thanh toán) ====
+      const serviceTableBody = [
+        [
+          { text: 'STT', style: 'tableHeader', alignment: 'center' },
+          { text: 'Dịch vụ', style: 'tableHeader' },
+          { text: 'Loại', style: 'tableHeader', alignment: 'center' },
+          { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
+          { text: 'Giá gốc', style: 'tableHeader', alignment: 'right' },
+          { text: 'Giá thanh toán', style: 'tableHeader', alignment: 'right' },
+          { text: 'Tổng doanh thu (thực thu)', style: 'tableHeader', alignment: 'right' }
+        ]
+      ];
+
+      // ⭐ DÙNG sortedServices THAY VÌ services
+      sortedServices.forEach((sv, index) => {
+        let displayCategory = '—';
+        if (sv.category === 'Examination') {
+          displayCategory = 'Khám trực tiếp';
+        } else if (sv.category === 'Consultation') {
+          displayCategory = 'Tư vấn online';
+        } else if (sv.category) {
+          displayCategory = sv.category;
+        }
+
+        serviceTableBody.push([
+          { text: (index + 1).toString(), alignment: 'center' },
+          { text: sv.serviceName || '—' },
+          { text: displayCategory, alignment: 'center' },
+          { text: (sv.count || 0).toString(), alignment: 'right' },
+
+          { text: formatPrice(sv.originalPrice || 0), alignment: 'right' },
+          { text: formatPrice(sv.paidPrice || 0), alignment: 'right' },
+
+          {
+            text: formatPrice(
+              sv.totalPaidRevenue != null
+                ? sv.totalPaidRevenue
+                : sv.totalRevenue || 0
+            ),
+            alignment: 'right',
+            bold: true
+          }
+        ]);
+      });
+
+      const docDefinition = {
+        pageSize: 'A4',
+        pageOrientation: 'portrait',
+        pageMargins: [25, 40, 25, 50],
+        defaultStyle: {
+          font: 'Roboto',
+          fontSize: 10,
+          lineHeight: 1.3
+        },
+
+        header: {
+          margin: [25, 15, 25, 0],
+          columns: [
+            {
+              text: 'NHA KHOA HẢI ANH',
+              style: 'clinicName',
+              alignment: 'left'
+            },
+            {
+              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              fontSize: 8,
+              alignment: 'right',
+              color: '#555'
+            }
+          ]
+        },
+
+        content: [
+          {
+            text: 'BÁO CÁO DOANH THU THEO DỊCH VỤ',
+            style: 'header',
+            alignment: 'center',
+            margin: [0, 10, 0, 12]
+          },
+
+          {
+            text: `Khoảng thời gian: ${new Date(s).toLocaleDateString('vi-VN')} - ${new Date(e).toLocaleDateString('vi-VN')}`,
+            fontSize: 9,
+            color: '#555',
+            margin: [0, 0, 0, 12]
+          },
+
+          {
+            text: 'TỔNG QUAN',
+            style: 'subheader',
+            margin: [0, 0, 0, 4]
+          },
+          {
+            ul: [
+              `Tổng số dịch vụ có doanh thu: ${summary.totalServices}`,
+              `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
+              `Tổng doanh thu (giá gốc, chưa giảm): ${formatPrice(summary.totalOriginalRevenue || 0)}`,
+              `Tổng doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
+              `Danh sách dịch vụ được sắp xếp theo số lần sử dụng giảm dần.`
+            ],
+            margin: [0, 0, 0, 10]
+          },
+
+          '\n',
+
+          { text: 'CHI TIẾT THEO DỊCH VỤ', style: 'subheader', margin: [0, 0, 0, 4] },
+          {
+            table: {
+              headerRows: 1,
+              widths: ['5%', '21%', '15%', '9%', '14%', '14%', '22%'],
+              body: serviceTableBody
+            },
+            layout: {
+              hLineWidth: () => 0.5,
+              vLineWidth: () => 0.5,
+              hLineColor: () => '#aaa',
+              vLineColor: () => '#aaa'
+            }
+          },
+
+          '\n',
+
+          {
+            text:
+              'Ghi chú:\n' +
+              '- Giá gốc: giá dịch vụ theo bảng giá tại thời điểm khám (chưa áp dụng khuyến mãi).\n' +
+              '- Giá thanh toán: số tiền khách hàng thực tế phải trả sau khi áp dụng khuyến mãi/giảm giá.\n' +
+              '- Doanh thu thực thu được tính theo giá thanh toán.\n' +
+              '- Bảng trên được sắp xếp theo số lần sử dụng dịch vụ (cao đến thấp).',
+            fontSize: 8,
+            color: '#666',
+            margin: [0, 8, 0, 0]
+          }
+        ],
+
+        styles: {
+          clinicName: {
+            fontSize: 13,
+            bold: true,
+            color: '#d32f2f'
+          },
+          header: {
+            fontSize: 18,
+            bold: true,
+            color: '#1a5eaa'
+          },
+          subheader: {
+            fontSize: 11,
+            bold: true,
+            color: '#333',
+            margin: [0, 8, 0, 4]
+          },
+          tableHeader: {
+            bold: true,
+            fontSize: 9,
+            fillColor: '#f0f0f0',
+            color: '#333'
+          }
+        }
+      };
+
+      const pdfDoc = printer.createPdfKitDocument(docDefinition);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename=revenue-service-report.pdf'
+      );
+
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    } catch (error) {
+      console.error('❌ Lỗi PDF báo cáo dịch vụ:', error);
+      throw error;
+    }
+  }
 
 }
 
