@@ -999,7 +999,9 @@ class AppointmentService {
       customerEmail: email,
       // ⭐ FIX: Pass staffUserId as reservedByUserId để loại trừ reserved slots của chính staff
       // Khi staff reserve slot rồi submit form, cần loại trừ reservation của chính họ
-      reservedByUserId: staffUserId
+      reservedByUserId: staffUserId,
+      // ⭐ FIX: Pass reservedTimeslotId để loại trừ timeslot đã reserve khỏi conflict check
+      reservedTimeslotId: reservedTimeslotId || null
     });
 
     const slotStartTime = new Date(validationResult.startTime);
