@@ -82,10 +82,12 @@ class AppointmentService {
 
     // Validate required fields
     if (!patientUserId || !doctorUserId || !serviceId || !doctorScheduleId || !selectedSlot) {
+      console.log('❌ LỖI: Thiếu thông tin bắt buộc để đặt lịch');
       throw new Error('Vui lòng nhập đầy đủ thông tin để đặt lịch tư vấn.');
     }
 
     if (!selectedSlot.startTime || !selectedSlot.endTime) {
+      console.log('❌ LỖI: Thông tin khung giờ không hợp lệ (thiếu startTime hoặc endTime)');
       throw new Error('Thông tin khung giờ không hợp lệ. Vui lòng chọn lại thời gian.');
     }
 
@@ -109,7 +111,7 @@ class AppointmentService {
     const promotionData = await calculateServicePrice(serviceId, service.price);
     const finalPrice = promotionData.finalPrice;
     const originalPrice = promotionData.originalPrice;
-
+    
     console.log('💰 Thông tin giá dịch vụ:');
     console.log('   - Giá gốc:', originalPrice, 'VND');
     console.log('   - Giá sau giảm:', finalPrice, 'VND');
@@ -137,7 +139,7 @@ class AppointmentService {
     // Xác định customerId dựa vào appointmentFor
     // appointmentFor: 'self' | 'other'
     let customerId = null;
-
+    
     // Log thông tin để kiểm tra
     console.log('📋 Thông tin đặt lịch:');
     console.log('- Service:', service.serviceName);
@@ -152,7 +154,7 @@ class AppointmentService {
     // ⭐ THÊM: Validate customer conflict khi đặt cho người khác
     if (appointmentFor === 'other' && fullName && email) {
       console.log(`🔍 Checking customer conflict for: ${fullName} <${email}>`);
-
+      
       // Normalize name và email (lowercase, remove extra spaces/diacritics)
       const normalizeString = (str) => {
         return str
@@ -165,9 +167,9 @@ class AppointmentService {
 
       const normalizedFullName = normalizeString(fullName);
       const normalizedEmail = normalizeString(email);
-
+      
       console.log(`   - Normalized: ${normalizedFullName} <${normalizedEmail}>`);
-
+      
       // Tìm customer với matching fullName + email
       const Customer = require('../models/customer.model');
       const existingCustomer = await Customer.findOne({
@@ -177,7 +179,7 @@ class AppointmentService {
 
       if (existingCustomer) {
         console.log(` Tìm thấy existing customer: ${existingCustomer._id}`);
-
+        
         // Kiểm tra xem customer này đã có appointment vào khung giờ này chưa
         const conflictAppointment = await Appointment.findOne({
           customerId: existingCustomer._id,
@@ -206,12 +208,12 @@ class AppointmentService {
             // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
             // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime
             if (slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime) {
-              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này`);
+              console.log(`❌ LỖI: Customer "${fullName}" đã có lịch khám trùng giờ (${aptStartTime.toLocaleString('vi-VN')} - ${aptEndTime.toLocaleString('vi-VN')})`);
               throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
             }
           }
         } else {
-          console.log(` Customer ${fullName} đã có lịch khám vào khung giờ này`);
+          console.log(`❌ LỖI: Customer "${fullName}" đã có lịch khám trùng giờ`);
           throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
         }
       }
@@ -219,7 +221,6 @@ class AppointmentService {
 
     // ⭐ CRITICAL: Validate appointment time against working hours
     // This prevents bookings outside working hours (e.g., 20:00 when afternoon ends at 18:00)
-    console.log('🔍 [createConsultationAppointment] Validating appointment time against working hours...');
     try {
       // Extract date from selectedSlot.startTime
       const slotDate = new Date(selectedSlot.startTime);
@@ -236,10 +237,10 @@ class AppointmentService {
         customerEmail: email,
         reservedByUserId: patientUserId
       });
-
+      
       console.log('✅ [createConsultationAppointment] Time validation passed');
     } catch (validationError) {
-      console.error('❌ [createConsultationAppointment] Time validation failed:', validationError.message);
+      console.log(`❌ LỖI: Validation thời gian thất bại - ${validationError.message}`);
       throw validationError; // Re-throw to stop appointment creation
     }
 
@@ -252,7 +253,7 @@ class AppointmentService {
     // Cho phép đặt cùng giờ với bác sĩ khác
     if (appointmentFor === 'self' || !appointmentFor) {
       console.log(`🔍 Checking patient self-conflict for patientUserId: ${patientUserId} with doctor: ${doctorUserId}`);
-
+      
       // ⭐ Nếu có reservedTimeslotId, lấy appointmentId từ timeslot đó (nếu có) để loại trừ khỏi conflict check
       let excludeAppointmentId = null;
       if (reservedTimeslotId) {
@@ -291,20 +292,16 @@ class AppointmentService {
         const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
 
         if (isConflict) {
-          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này với bác sĩ ${doctorUserId}:`);
-          console.log(`   - Appointment ID: ${apt._id}`);
-          console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
-          console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
+          console.log(`❌ LỖI: Bệnh nhân đã có lịch khám trùng giờ với bác sĩ này`);
         }
 
         return isConflict;
       });
 
       if (hasConflict) {
+        console.log(`❌ LỖI: Bệnh nhân đã có lịch khám trùng giờ với bác sĩ này`);
         throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ này. Vui lòng chọn thời gian khác!');
       }
-
-      console.log(`✅ Patient ${patientUserId} không có conflict với bác sĩ ${doctorUserId}`);
     }
 
 
@@ -312,6 +309,7 @@ class AppointmentService {
     const nowRounded = new Date(nowUtc);
     nowRounded.setSeconds(0, 0);
     if (slotStartTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
+      console.log(`❌ LỖI: Không thể đặt lịch vào thời gian quá khứ (${slotStartTime.toLocaleString('vi-VN')})`);
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
 
@@ -350,10 +348,7 @@ class AppointmentService {
     }
 
     if (conflictingTimeslots.length > 0) {
-      console.log('❌ Khung giờ bị conflict với timeslots đã có:', conflictingTimeslots.length);
-      conflictingTimeslots.forEach(ts => {
-        console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
-      });
+      console.log(`❌ LỖI: Khung giờ đã được đặt hoặc đang chờ thanh toán (${conflictingTimeslots.length} timeslots conflict)`);
       throw new Error(`Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.`);
     }
 
@@ -361,7 +356,7 @@ class AppointmentService {
     const slotDate = new Date(selectedSlot.startTime);
     const scheduleDate = new Date(selectedSlot.startTime); // Define scheduleDate
     scheduleDate.setUTCHours(0, 0, 0, 0); // Set to start of day UTC
-
+    
     console.log(`🔍 Ensuring schedules exist for date ${scheduleDate.toISOString().split('T')[0]}...`);
     await ScheduleHelper.ensureSchedulesForDate(scheduleDate);
 
@@ -453,6 +448,7 @@ class AppointmentService {
     // Nếu đặt cho người khác, tạo Customer
     if (appointmentFor === 'other') {
       if (!fullName || !email || !phoneNumber) {
+        console.log('❌ LỖI: Thiếu thông tin customer (fullName, email hoặc phoneNumber)');
         throw new Error('Vui lòng nhập đầy đủ họ tên, email và số điện thoại của người được đặt lịch (customer)');
       }
 
@@ -528,11 +524,6 @@ class AppointmentService {
       });
 
       customerId = newCustomer._id;
-      console.log('✅ Đã tạo Customer cho người được đặt lịch:');
-      console.log('   - Customer ID:', newCustomer._id);
-      console.log('   - Họ tên:', fullName);
-      console.log('   - Email:', email);
-      console.log('   - SĐT:', phoneNumber);
     }
 
     let timeslotRecord = null;
@@ -577,7 +568,6 @@ class AppointmentService {
       timeslotRecord.status = service.isPrepaid ? 'Reserved' : 'Booked';
 
       await timeslotRecord.save();
-      console.log('✅ Sử dụng timeslot đã giữ chỗ:', timeslotRecord._id);
     } else {
       // Tạo Timeslot mới từ slot được chọn
       // ⭐ FIX: Use timezone-aware parsing to prevent UTC conversion issues
@@ -598,12 +588,6 @@ class AppointmentService {
         reservedByUserId: patientUserId,
         reservedUntil: null
       });
-
-      console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
-      console.log('   - Start Time (UTC):', startTimeUTC.toISOString());
-      console.log('   - End Time (UTC):', endTimeUTC.toISOString());
-      console.log('   - Start Time (VN):', startTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
-      console.log('   - End Time (VN):', endTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
     }
 
     // Xác định type dựa vào category
@@ -624,19 +608,9 @@ class AppointmentService {
       // Nếu cần thanh toán trước, set status PendingPayment và expire sau 3 phút (cho demo)
       appointmentStatus = 'PendingPayment';
       paymentHoldExpiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 phút (demo)
-      console.log('💳 Appointment cần thanh toán trước, giữ slot đến:', paymentHoldExpiresAt);
     }
 
     // Tạo appointment mới
-    console.log('✅ Tạo appointment với data:', {
-      patientUserId,
-      customerId,
-      doctorUserId,
-      serviceId,
-      status: appointmentStatus,
-      type: appointmentType,
-      mode: appointmentMode
-    });
 
     const newAppointment = await Appointment.create({
       patientUserId, // Người đặt lịch (booker)
@@ -664,19 +638,11 @@ class AppointmentService {
         const currentPhone = patient.phoneNumber;
         if (!currentPhone || String(currentPhone) !== String(phoneNumber)) {
           await User.findByIdAndUpdate(patientUserId, { phoneNumber: phoneNumber });
-          console.log('✅ Đã cập nhật phoneNumber cho user:', patientUserId, phoneNumber);
         }
       }
     } catch (phoneErr) {
       console.warn('⚠️ Không thể cập nhật phoneNumber cho user:', phoneErr?.message);
     }
-    console.log('✅ Appointment đã được tạo:', {
-      id: newAppointment._id,
-      patientUserId: newAppointment.patientUserId,
-      customerId: newAppointment.customerId,
-      appointmentFor: newAppointment.appointmentFor,
-      status: newAppointment.status
-    });
 
     // Update timeslot với appointmentId
     // ⭐ FIXED: Update status thành "Reserved" nếu cần thanh toán
@@ -717,10 +683,6 @@ class AppointmentService {
       await Appointment.findByIdAndUpdate(newAppointment._id, {
         paymentId: paymentRecord._id
       });
-
-      console.log('✅ Đã tạo Payment record:', paymentRecord._id);
-      console.log('💰 Số tiền cần thanh toán:', finalPrice, 'VND');
-      console.log('📱 QR Code:', qrData.qrUrl);
     }
 
     // Populate thông tin đầy đủ
@@ -731,9 +693,6 @@ class AppointmentService {
       .populate('timeslotId', 'startTime endTime')
       .populate('customerId', 'fullName email phoneNumber')
       .populate('paymentId');
-
-    console.log('✅ Appointment đã tạo với mode:', populatedAppointment.mode);
-    console.log('✅ Status:', populatedAppointment.status);
 
     //Thông báo cho lễ tân 
     const listStaff = await User.find({ role: "Staff" })
@@ -778,6 +737,9 @@ class AppointmentService {
         QRurl: paymentRecord.QRurl || (qrData ? qrData.qrUrl : null)
       };
     }
+
+    // ✅ LOG - Đặt lịch thành công
+    console.log('✅ Đặt lịch thành công');
 
     return responsePayload;
   }
