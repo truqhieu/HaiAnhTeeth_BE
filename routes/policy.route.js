@@ -10,6 +10,6 @@ router.get('/', policyController.getActivePolicies);
 router.get('/all', verifyToken, policyController.getAllPolicies);
 router.post('/', verifyToken, policyController.createPolicy);
 router.put('/:id', verifyToken, policyController.updatePolicy);
-router.delete('/:id', verifyToken, policyController.deletePolicy);
+// router.delete('/:id', verifyToken, policyController.deletePolicy);
 
 module.exports = router;

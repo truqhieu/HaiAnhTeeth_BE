@@ -124,8 +124,11 @@ uploads/
 *.bak
 *.tmp
 
-
 # Database dumps
 *.sql
 *.dump
 config/google-credentials.json
+
+# Markdown documentation files (except README)
+*.md
+!README.md

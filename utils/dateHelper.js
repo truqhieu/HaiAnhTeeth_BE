@@ -470,6 +470,44 @@ static getTodayVNStartUTC() {
   return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }
 
+// DateHelper
+static parseDobFromDDMMYYYY(dobStr) {
+  if (typeof dobStr !== 'string') {
+    throw new Error('Ngày sinh không hợp lệ');
+  }
+
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dobStr)) {
+    throw new Error('Ngày sinh phải theo định dạng dd/MM/yyyy');
+  }
+
+  const [day, month, year] = dobStr.split('/').map(Number);
+
+  // Kiểm tra ngày tháng năm
+  const dateObj = new Date(year, month - 1, day);
+  if (isNaN(dateObj.getTime()) ||
+      dateObj.getDate() !== day ||
+      dateObj.getMonth() !== month - 1 ||
+      dateObj.getFullYear() !== year) {
+    throw new Error('Ngày sinh không hợp lệ');
+  }
+
+  return { day, month, year }; // trả về parts để tính tuổi
+}
+
+static getTodayVNDateParts() {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  const todayStr = formatter.format(new Date()); // "YYYY-MM-DD"
+  const [year, month, day] = todayStr.split('-').map(Number);
+  return { day, month, year };
+}
+
+
 }
 
 module.exports = DateHelper;
