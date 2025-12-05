@@ -1518,11 +1518,76 @@ class AvailableSlotService {
     }
 
     if (schedules.length === 0) {
+      // ⭐ FIX: Khi bác sĩ không có lịch làm việc, vẫn phải trả về cả 2 buổi (sáng và chiều)
+      // với status "Đã hết chỗ" hoặc "Đã qua thời gian làm việc" tùy theo thời gian hiện tại
+      
+      const defaultWorkingHours = {
+        morningStart: '08:00',
+        morningEnd: '12:00',
+        afternoonStart: '14:00',
+        afternoonEnd: '18:00'
+      };
+      
+      const workingHours = doctorProfile?.workingHours || defaultWorkingHours;
+      
+      // Tính thời gian cho buổi sáng
+      const morningStart = new Date(searchDate);
+      const [morningStartHour, morningStartMinute] = workingHours.morningStart.split(':').map(Number);
+      morningStart.setUTCHours(morningStartHour - 7, morningStartMinute, 0, 0);
+      
+      const morningEnd = new Date(searchDate);
+      const [morningEndHour, morningEndMinute] = workingHours.morningEnd.split(':').map(Number);
+      morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
+      
+      // Tính thời gian cho buổi chiều
+      const afternoonStart = new Date(searchDate);
+      const [afternoonStartHour, afternoonStartMinute] = workingHours.afternoonStart.split(':').map(Number);
+      afternoonStart.setUTCHours(afternoonStartHour - 7, afternoonStartMinute, 0, 0);
+      
+      const afternoonEnd = new Date(searchDate);
+      const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
+      afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
+      
+      // Kiểm tra ngày hiện tại
+      const now = new Date();
+      const today = new Date();
+      const todayDateStr = today.toISOString().split('T')[0];
+      const searchDateStr = searchDate.toISOString().split('T')[0];
+      const isToday = todayDateStr === searchDateStr;
+      
+      // Helper: Kiểm tra shift đã qua chưa
+      const isShiftPassed = (shiftEnd) => {
+        if (!isToday) return false;
+        return now.getTime() > shiftEnd.getTime();
+      };
+      
+      const morningShiftPassed = isShiftPassed(morningEnd);
+      const afternoonShiftPassed = isShiftPassed(afternoonEnd);
+      
+      const scheduleRanges = [
+        {
+          shift: 'Morning',
+          shiftDisplay: 'Buổi sáng',
+          startTime: morningStart.toISOString(),
+          endTime: morningEnd.toISOString(),
+          availableGaps: [],
+          displayRange: morningShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
+        },
+        {
+          shift: 'Afternoon',
+          shiftDisplay: 'Buổi chiều',
+          startTime: afternoonStart.toISOString(),
+          endTime: afternoonEnd.toISOString(),
+          availableGaps: [],
+          displayRange: afternoonShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
+        }
+      ];
+      
       return {
         doctorId: doctorUserId,
         doctorName: doctor.fullName,
         date: searchDate,
-        scheduleRanges: [], // ⭐ FIX: Trả về scheduleRanges (số nhiều) thay vì scheduleRange (số ít) để consistent
+        scheduleRanges: scheduleRanges, // ⭐ Trả về cả 2 buổi với status rõ ràng
         message: 'Bác sĩ bạn chọn không có lịch làm việc vào ngày này. Vui lòng chọn bác sĩ khác hoặc ngày khác.'
       };
     }
