@@ -65,25 +65,58 @@ class AdminService {
     }
 
     // Validate dob
-    // Validate dob
+    // ======================
+    // Validate dob trực tiếp
+    // ======================
     if (!dob || typeof dob !== 'string' || dob.trim().length === 0) {
       throw new Error('Ngày sinh không được để trống');
     }
 
-    const { day: bDay, month: bMonth, year: bYear } = DateHelper.parseDobFromDDMMYYYY(dob);
-    const { day: nDay, month: nMonth, year: nYear } = DateHelper.getTodayVNDateParts();
+    const cleanDob = dob.trim();
 
-    // Tính tuổi
-    let age = nYear - bYear;
-    if (nMonth < bMonth || (nMonth === bMonth && nDay < bDay)) {
-      age--;
+    // 1) Check format dd/MM/yyyy
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(cleanDob)) {
+      throw new Error('Ngày sinh phải theo định dạng dd/MM/yyyy');
     }
 
-    if (isNaN(age) || age < 0) {
+    // 2) Tách parts
+    const [d, m, y] = cleanDob.split('/').map(Number);
+
+    // 3) Check ngày hợp lệ
+    const dobDate = new Date(y, m - 1, d);
+    if (
+      isNaN(dobDate.getTime()) ||
+      dobDate.getDate() !== d ||
+      dobDate.getMonth() !== m - 1 ||
+      dobDate.getFullYear() !== y
+    ) {
       throw new Error('Ngày sinh không hợp lệ');
     }
 
+    // 4) Tính tuổi
+    const now = new Date();
+    let age = now.getFullYear() - y;
 
+    const currentMonth = now.getMonth() + 1;
+    const currentDay = now.getDate();
+
+    if (currentMonth < m || (currentMonth === m && currentDay < d)) {
+      age--;
+    }
+
+    if (age < 0 || isNaN(age)) {
+      throw new Error('Ngày sinh không hợp lệ');
+    }
+    if (role === 'Doctor' && age < 27) throw new Error('Bác sĩ phải đủ 27 tuổi');
+    if (role === 'Nurse' && age < 22) throw new Error('Điều dưỡng phải đủ 22 tuổi');
+    if (role === 'Staff' && age < 18) throw new Error('Lễ tân phải đủ 18 tuổi');
+
+
+
+    // Nếu Date bị invalid → error
+    if (isNaN(dobDate.getTime())) {
+      throw new Error('Ngày sinh không hợp lệ');
+    }
 
     // Validate role
     if (!role || !ROLE_ACCOUNT.includes(role)) {
@@ -125,10 +158,7 @@ class AdminService {
     }
 
     // Tạo User account
-    const newAccount = new User({ fullName, email, passwordHash, dob, address, role, phoneNumber, status: 'Active' });
-    if (newAccount.role === 'Doctor' && age <= 27) throw new Error('Bác sĩ phải đủ 27 tuổi')
-    if (newAccount.role === 'Nurse' && age <= 22) throw new Error('Điều dưỡng phải đủ 22 tuổi')
-    if (newAccount.role === 'Staff' && age <= 18) throw new Error('Lễ tân phải đủ 18 tuổi')
+    const newAccount = new User({ fullName, email, passwordHash, dob: dobDate, address, role, phoneNumber, status: 'Active' });
     await newAccount.save();
 
     // Nếu role là Doctor, tạo record trong Doctor collection

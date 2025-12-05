@@ -2124,7 +2124,6 @@ class AvailableSlotService {
     const checkLeaveDate = new Date(date);
     checkLeaveDate.setUTCHours(12, 0, 0, 0);
 
-    // ---- CHECK NGÀY NGHỈ PHÉP ----
     const approvedLeave = await LeaveRequest.findOne({
       userId: doctorUserId,
       status: 'Approved',
@@ -2132,24 +2131,14 @@ class AvailableSlotService {
       endDate: { $gte: checkLeaveDate }
     }).select('startDate endDate');
 
+
     if (approvedLeave) {
       const doctor = await User.findById(doctorUserId).select('fullName');
+      const leaveStart = new Date(approvedLeave.startDate);
+      const leaveEnd = new Date(approvedLeave.endDate);
 
-      // ⭐ FIX: Convert Date → dd/mm/yyyy
-      // const formatDate = (dateObj) => {
-      //   return dateObj.toLocaleDateString('vi-VN', {
-      //     timeZone: 'Asia/Ho_Chi_Minh'
-      //   });
-      // };
-
-      const startStr = date.getDate(approvedLeave.startDate);
-      const startMonth = date.getMonth(approvedLeave.startDate);
-      const endStr = date.getDate(approvedLeave.endDate);
-      const endMonth = date.getMonth(approvedLeave.endDate);
-
-      const message = startStr === endStr
-        ? `Bạn đang có lịch nghỉ phép ngày ${startStr}/${startMonth + 1}. Vui lòng chọn ngày khác.`
-        : `Bạn đang có lịch nghỉ phép từ ${startStr}/${startMonth + 1} đến ${endStr}/${endMonth + 1}. Vui lòng chọn ngày khác.`;
+      const formatDate = (d) => d.toLocaleDateString('vi-VN');
+      const message = `Bác sĩ đang nghỉ phép từ ${formatDate(leaveStart)} đến ${formatDate(leaveEnd)}. Vui lòng chọn ngày khác.`;
 
       return {
         doctorId: doctorUserId,
@@ -2165,30 +2154,23 @@ class AvailableSlotService {
       };
     }
 
-    // ---- KHÔNG NGHỈ → LẤY LỊCH BÌNH THƯỜNG ----
-    return this.getDoctorScheduleRange({
-      doctorUserId,
-      serviceId,
-      date,
-      patientUserId,
-      appointmentFor
-    });
+    return this.getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId, appointmentFor });
   }
 
-
-  // * ⭐ NEW: Validate appointment time
-  // * Check: thời gian nhập có nằm trong doctor schedule không và có doctor khả dụng không
-  // * @param { Object } params
-  //   * @param { string } params.reservedByUserId - ID của user đang reserve(có thể là patientUserId hoặc staffUserId)
-  //     */
-  async validateAppointmentTime({
-    doctorUserId,
-    serviceId,
-    date,
-    startTime,
-    patientUserId = null,
-    appointmentFor = 'self',
-    customerFullName,
+  /**
+   * ⭐ NEW: Validate appointment time
+   * Check: thời gian nhập có nằm trong doctor schedule không và có doctor khả dụng không
+   * @param {Object} params
+   * @param {string} params.reservedByUserId - ID của user đang reserve (có thể là patientUserId hoặc staffUserId)
+   */
+  async validateAppointmentTime({ 
+    doctorUserId, 
+    serviceId, 
+    date, 
+    startTime, 
+    patientUserId = null, 
+    appointmentFor = 'self', 
+    customerFullName, 
     customerEmail,
     reservedByUserId = null // ⭐ THÊM: ID của user đang reserve (staff hoặc patient)
   }) {

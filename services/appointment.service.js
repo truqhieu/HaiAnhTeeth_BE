@@ -82,10 +82,12 @@ class AppointmentService {
 
     // Validate required fields
     if (!patientUserId || !doctorUserId || !serviceId || !doctorScheduleId || !selectedSlot) {
+      console.log('❌ LỖI: Thiếu thông tin bắt buộc để đặt lịch');
       throw new Error('Vui lòng nhập đầy đủ thông tin để đặt lịch tư vấn.');
     }
 
     if (!selectedSlot.startTime || !selectedSlot.endTime) {
+      console.log('❌ LỖI: Thông tin khung giờ không hợp lệ (thiếu startTime hoặc endTime)');
       throw new Error('Thông tin khung giờ không hợp lệ. Vui lòng chọn lại thời gian.');
     }
 
@@ -206,12 +208,12 @@ class AppointmentService {
             // Không cộng buffer time nữa - slot tiếp theo có thể bắt đầu ngay sau slot đã booked
             // Conflict nếu: slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime
             if (slotStartTime < appointmentEndTime && slotEndTime > appointmentStartTime) {
-              console.log(`❌ Customer ${fullName} đã có lịch khám vào khung giờ này`);
+              console.log(`❌ LỖI: Customer "${fullName}" đã có lịch khám trùng giờ (${aptStartTime.toLocaleString('vi-VN')} - ${aptEndTime.toLocaleString('vi-VN')})`);
               throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
             }
           }
         } else {
-          console.log(` Customer ${fullName} đã có lịch khám vào khung giờ này`);
+          console.log(`❌ LỖI: Customer "${fullName}" đã có lịch khám trùng giờ`);
           throw new Error(`${fullName} đã có lịch khám vào khung giờ này rồi. Vui lòng chọn khung giờ khác!`);
         }
       }
@@ -219,7 +221,6 @@ class AppointmentService {
 
     // ⭐ CRITICAL: Validate appointment time against working hours
     // This prevents bookings outside working hours (e.g., 20:00 when afternoon ends at 18:00)
-    console.log('🔍 [createConsultationAppointment] Validating appointment time against working hours...');
     try {
       // Extract date from selectedSlot.startTime
       const slotDate = new Date(selectedSlot.startTime);
@@ -239,7 +240,7 @@ class AppointmentService {
 
       console.log('✅ [createConsultationAppointment] Time validation passed');
     } catch (validationError) {
-      console.error('❌ [createConsultationAppointment] Time validation failed:', validationError.message);
+      console.log(`❌ LỖI: Validation thời gian thất bại - ${validationError.message}`);
       throw validationError; // Re-throw to stop appointment creation
     }
 
@@ -291,20 +292,16 @@ class AppointmentService {
         const isConflict = slotStartTime < aptEndTime && slotEndTime > aptStartTime;
 
         if (isConflict) {
-          console.log(`❌ Patient ${patientUserId} đã có lịch khám vào khung giờ này với bác sĩ ${doctorUserId}:`);
-          console.log(`   - Appointment ID: ${apt._id}`);
-          console.log(`   - Time: ${aptStartTime.toISOString()} - ${aptEndTime.toISOString()}`);
-          console.log(`   - New slot: ${slotStartTime.toISOString()} - ${slotEndTime.toISOString()}`);
+          console.log(`❌ LỖI: Bệnh nhân đã có lịch khám trùng giờ với bác sĩ này`);
         }
 
         return isConflict;
       });
 
       if (hasConflict) {
+        console.log(`❌ LỖI: Bệnh nhân đã có lịch khám trùng giờ với bác sĩ này`);
         throw new Error('Bạn đã có lịch khám vào khung giờ này với bác sĩ này. Vui lòng chọn thời gian khác!');
       }
-
-      console.log(`✅ Patient ${patientUserId} không có conflict với bác sĩ ${doctorUserId}`);
     }
 
 
@@ -312,6 +309,7 @@ class AppointmentService {
     const nowRounded = new Date(nowUtc);
     nowRounded.setSeconds(0, 0);
     if (slotStartTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
+      console.log(`❌ LỖI: Không thể đặt lịch vào thời gian quá khứ (${slotStartTime.toLocaleString('vi-VN')})`);
       throw new Error('Không thể đặt thời gian ở quá khứ');
     }
 
@@ -350,10 +348,7 @@ class AppointmentService {
     }
 
     if (conflictingTimeslots.length > 0) {
-      console.log('❌ Khung giờ bị conflict với timeslots đã có:', conflictingTimeslots.length);
-      conflictingTimeslots.forEach(ts => {
-        console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
-      });
+      console.log(`❌ LỖI: Khung giờ đã được đặt hoặc đang chờ thanh toán (${conflictingTimeslots.length} timeslots conflict)`);
       throw new Error(`Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.`);
     }
 
@@ -453,6 +448,7 @@ class AppointmentService {
     // Nếu đặt cho người khác, tạo Customer
     if (appointmentFor === 'other') {
       if (!fullName || !email || !phoneNumber) {
+        console.log('❌ LỖI: Thiếu thông tin customer (fullName, email hoặc phoneNumber)');
         throw new Error('Vui lòng nhập đầy đủ họ tên, email và số điện thoại của người được đặt lịch (customer)');
       }
 
@@ -528,11 +524,6 @@ class AppointmentService {
       });
 
       customerId = newCustomer._id;
-      console.log('✅ Đã tạo Customer cho người được đặt lịch:');
-      console.log('   - Customer ID:', newCustomer._id);
-      console.log('   - Họ tên:', fullName);
-      console.log('   - Email:', email);
-      console.log('   - SĐT:', phoneNumber);
     }
 
     let timeslotRecord = null;
@@ -577,7 +568,6 @@ class AppointmentService {
       timeslotRecord.status = service.isPrepaid ? 'Reserved' : 'Booked';
 
       await timeslotRecord.save();
-      console.log('✅ Sử dụng timeslot đã giữ chỗ:', timeslotRecord._id);
     } else {
       // Tạo Timeslot mới từ slot được chọn
       // ⭐ FIX: Use timezone-aware parsing to prevent UTC conversion issues
@@ -598,12 +588,6 @@ class AppointmentService {
         reservedByUserId: patientUserId,
         reservedUntil: null
       });
-
-      console.log('✅ Đã tạo Timeslot mới:', timeslotRecord._id);
-      console.log('   - Start Time (UTC):', startTimeUTC.toISOString());
-      console.log('   - End Time (UTC):', endTimeUTC.toISOString());
-      console.log('   - Start Time (VN):', startTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
-      console.log('   - End Time (VN):', endTimeUTC.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }));
     }
 
     // Xác định type dựa vào category
@@ -624,19 +608,9 @@ class AppointmentService {
       // Nếu cần thanh toán trước, set status PendingPayment và expire sau 3 phút (cho demo)
       appointmentStatus = 'PendingPayment';
       paymentHoldExpiresAt = new Date(Date.now() + 3 * 60 * 1000); // 3 phút (demo)
-      console.log('💳 Appointment cần thanh toán trước, giữ slot đến:', paymentHoldExpiresAt);
     }
 
     // Tạo appointment mới
-    console.log('✅ Tạo appointment với data:', {
-      patientUserId,
-      customerId,
-      doctorUserId,
-      serviceId,
-      status: appointmentStatus,
-      type: appointmentType,
-      mode: appointmentMode
-    });
 
     const newAppointment = await Appointment.create({
       patientUserId, // Người đặt lịch (booker)
@@ -664,19 +638,11 @@ class AppointmentService {
         const currentPhone = patient.phoneNumber;
         if (!currentPhone || String(currentPhone) !== String(phoneNumber)) {
           await User.findByIdAndUpdate(patientUserId, { phoneNumber: phoneNumber });
-          console.log('✅ Đã cập nhật phoneNumber cho user:', patientUserId, phoneNumber);
         }
       }
     } catch (phoneErr) {
       console.warn('⚠️ Không thể cập nhật phoneNumber cho user:', phoneErr?.message);
     }
-    console.log('✅ Appointment đã được tạo:', {
-      id: newAppointment._id,
-      patientUserId: newAppointment.patientUserId,
-      customerId: newAppointment.customerId,
-      appointmentFor: newAppointment.appointmentFor,
-      status: newAppointment.status
-    });
 
     // Update timeslot với appointmentId
     // ⭐ FIXED: Update status thành "Reserved" nếu cần thanh toán
@@ -717,10 +683,6 @@ class AppointmentService {
       await Appointment.findByIdAndUpdate(newAppointment._id, {
         paymentId: paymentRecord._id
       });
-
-      console.log('✅ Đã tạo Payment record:', paymentRecord._id);
-      console.log('💰 Số tiền cần thanh toán:', finalPrice, 'VND');
-      console.log('📱 QR Code:', qrData.qrUrl);
     }
 
     // Populate thông tin đầy đủ
@@ -731,9 +693,6 @@ class AppointmentService {
       .populate('timeslotId', 'startTime endTime')
       .populate('customerId', 'fullName email phoneNumber')
       .populate('paymentId');
-
-    console.log('✅ Appointment đã tạo với mode:', populatedAppointment.mode);
-    console.log('✅ Status:', populatedAppointment.status);
 
     //Thông báo cho lễ tân 
     const listStaff = await User.find({ role: "Staff" })
@@ -778,6 +737,9 @@ class AppointmentService {
         QRurl: paymentRecord.QRurl || (qrData ? qrData.qrUrl : null)
       };
     }
+
+    // ✅ LOG - Đặt lịch thành công
+    console.log('✅ Đặt lịch thành công');
 
     return responsePayload;
   }
@@ -3405,44 +3367,44 @@ class AppointmentService {
   }
 
 
-  // ⭐ Cập nhật createFollowUpAppointment với fix đầy đủ
-  async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
-    if (!originalAppointmentId) {
-      throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
-    }
-    if (!followUpDate) {
-      throw new Error('Vui lòng chọn thời gian tái khám');
-    }
+// ⭐ Cập nhật createFollowUpAppointment với fix đầy đủ
+async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
+  if (!originalAppointmentId) {
+    throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
+  }
+  if (!followUpDate) {
+    throw new Error('Vui lòng chọn thời gian tái khám');
+  }
 
-    // ⭐ FIX: Parse followUpDate giống createConsultationAppointment (đảm bảo Date object đúng)
-    let startTime;
-    if (followUpDate instanceof Date) {
-      startTime = new Date(followUpDate.getTime());
-    } else {
-      startTime = new Date(followUpDate);
-    }
-
-    if (Number.isNaN(startTime.getTime())) {
-      throw new Error('Thời gian tái khám không hợp lệ');
-    }
-
-    console.log('🔍 [createFollowUpAppointment] followUpDate input:', followUpDate, typeof followUpDate);
-    console.log('🔍 [createFollowUpAppointment] parsed startTime:', startTime.toISOString());
-    console.log('🔍 [createFollowUpAppointment] startTime UTC:', {
-      year: startTime.getUTCFullYear(),
-      month: startTime.getUTCMonth() + 1,
-      day: startTime.getUTCDate(),
-      hour: startTime.getUTCHours(),
-      minute: startTime.getUTCMinutes()
-    });
-
-    // ⭐ FIX: Sử dụng logic validation giống createConsultationAppointment
-    const nowUtc = new Date();
-    const nowRounded = new Date(nowUtc);
-    nowRounded.setSeconds(0, 0);
-    if (startTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
-      throw new Error('Không thể đặt thời gian ở quá khứ');
-    }
+  // ⭐ FIX: Parse followUpDate giống createConsultationAppointment (đảm bảo Date object đúng)
+  let startTime;
+  if (followUpDate instanceof Date) {
+    startTime = new Date(followUpDate.getTime());
+  } else {
+    startTime = new Date(followUpDate);
+  }
+  
+  if (Number.isNaN(startTime.getTime())) {
+    throw new Error('Thời gian tái khám không hợp lệ');
+  }
+  
+  console.log('🔍 [createFollowUpAppointment] followUpDate input:', followUpDate, typeof followUpDate);
+  console.log('🔍 [createFollowUpAppointment] parsed startTime:', startTime.toISOString());
+  console.log('🔍 [createFollowUpAppointment] startTime UTC:', {
+    year: startTime.getUTCFullYear(),
+    month: startTime.getUTCMonth() + 1,
+    day: startTime.getUTCDate(),
+    hour: startTime.getUTCHours(),
+    minute: startTime.getUTCMinutes()
+  });
+  
+  // ⭐ FIX: Sử dụng logic validation giống createConsultationAppointment
+  const nowUtc = new Date();
+  const nowRounded = new Date(nowUtc);
+  nowRounded.setSeconds(0, 0);
+  if (startTime.getTime() < (nowRounded.getTime() - PAST_TIME_ALLOWANCE_MS)) {
+    throw new Error('Không thể đặt thời gian ở quá khứ');
+  }
 
     const originalAppointment = await Appointment.findById(originalAppointmentId)
       .populate('patientUserId', 'fullName email phoneNumber')
@@ -3451,254 +3413,209 @@ class AppointmentService {
       .populate('doctorUserId', 'fullName email')
       .populate('timeslotId', 'startTime endTime');
 
-    if (!originalAppointment) {
-      throw new Error('Không tìm thấy ca khám gốc');
-    }
+  if (!originalAppointment) {
+    throw new Error('Không tìm thấy ca khám gốc');
+  }
 
-    const doctorUserId = originalAppointment.doctorUserId?._id || originalAppointment.doctorUserId;
-    const patientUserId = originalAppointment.patientUserId?._id || originalAppointment.patientUserId || null;
-    const customerId = originalAppointment.customerId?._id || originalAppointment.customerId || null;
+  const doctorUserId = originalAppointment.doctorUserId?._id || originalAppointment.doctorUserId;
+  const patientUserId = originalAppointment.patientUserId?._id || originalAppointment.patientUserId || null;
+  const customerId = originalAppointment.customerId?._id || originalAppointment.customerId || null;
+  
+  // ⭐ Ưu tiên dùng serviceIds từ parameter (array từ dịch vụ bổ sung), nếu không có thì dùng serviceId, nếu không có thì dùng từ appointment gốc
+  let finalServiceIds = [];
+  if (serviceIds && Array.isArray(serviceIds) && serviceIds.length > 0) {
+    finalServiceIds = serviceIds;
+  } else if (serviceId) {
+    finalServiceIds = [serviceId];
+  } else if (originalAppointment.serviceId?._id || originalAppointment.serviceId) {
+    finalServiceIds = [originalAppointment.serviceId?._id || originalAppointment.serviceId];
+  }
+  
+  if (finalServiceIds.length === 0) {
+    throw new Error('Không tìm thấy dịch vụ để tạo tái khám');
+  }
+  
+  // ⭐ Lấy service đầu tiên để tính duration và tạo timeslot
+  const finalServiceId = finalServiceIds[0];
 
-    // ⭐ Ưu tiên dùng serviceIds từ parameter (array từ dịch vụ bổ sung), nếu không có thì dùng serviceId, nếu không có thì dùng từ appointment gốc
-    let finalServiceIds = [];
-    if (serviceIds && Array.isArray(serviceIds) && serviceIds.length > 0) {
-      finalServiceIds = serviceIds;
-    } else if (serviceId) {
-      finalServiceIds = [serviceId];
-    } else if (originalAppointment.serviceId?._id || originalAppointment.serviceId) {
-      finalServiceIds = [originalAppointment.serviceId?._id || originalAppointment.serviceId];
-    }
+  const service = await Service.findById(finalServiceId);
+  if (!service) {
+    throw new Error('Dịch vụ của ca khám không tồn tại');
+  }
 
-    if (finalServiceIds.length === 0) {
-      throw new Error('Không tìm thấy dịch vụ để tạo tái khám');
-    }
+  const durationMinutes = service.durationMinutes || 30;
+  const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
+  
+  console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
+  console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
 
-    // ⭐ Lấy service đầu tiên để tính duration và tạo timeslot
-    const finalServiceId = finalServiceIds[0];
+  // ⭐ FIX: Tính dateStr từ startTime theo format YYYY-MM-DD
+  const dateStr = `${startTime.getUTCFullYear()}-${String(startTime.getUTCMonth() + 1).padStart(2, '0')}-${String(startTime.getUTCDate()).padStart(2, '0')}`;
+  
+  console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
 
-    const service = await Service.findById(finalServiceId);
-    if (!service) {
-      throw new Error('Dịch vụ của ca khám không tồn tại');
-    }
+  // ⭐ FIX: Gọi hàm _getDoctorScheduleForFollowUp với đầy đủ tham số theo đúng thứ tự
+  const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(
+    doctorUserId,           // param 1: doctorUserId
+    finalServiceId,         // param 2: serviceId
+    dateStr,                // param 3: dateStr (format: YYYY-MM-DD)
+    originalAppointment.appointmentFor || 'self',  // param 4: appointmentFor
+    startTime               // param 5: startTime (Date object)
+  );
 
-    const durationMinutes = service.durationMinutes || 30;
-    const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
-    // ⭐⭐⭐ CHECK TRÙNG LỊCH BỆNH NHÂN (BẮT BUỘC PHẢI CÓ TRONG TÁI KHÁM!!!)
-    if (patientUserId) {
-      const patientConflict = await Timeslot.findOne({
-        reservedByUserId: patientUserId,
-        status: { $in: ['Booked', 'Reserved'] },
+  if (!doctorSchedule) {
+    throw new Error('Bác sĩ không có lịch làm việc vào thời gian đã chọn');
+  }
+  
+  const startTimeDate = new Date(startTime);
+  startTimeDate.setUTCHours(0, 0, 0, 0);
+  const startTimeDateEnd = new Date(startTimeDate);
+  startTimeDateEnd.setUTCHours(23, 59, 59, 999);
 
-        // Không cho phép trùng hoàn toàn với ca đang tạo tái khám (tránh false positive)
-        // _id: { $ne: timeslot?._id },
-
-        // Overlap logic chuẩn 100%
-        startTime: { $lt: endTime },
-        endTime: { $gt: startTime }
-      }).populate('appointmentId', 'status type');
-
-      if (patientConflict) {
-        if (patientConflict.appointmentId?._id?.toString() === originalAppointmentId.toString()) {
-        } else if (patientConflict.appointmentId?.status === 'Cancelled') {
-        } else {
-          console.log('❌ Bệnh nhân đã có lịch khác:', {
-            existing: {
-              start: patientConflict.startTime,
-              end: patientConflict.endTime,
-              appointmentId: patientConflict.appointmentId?._id
-            },
-            tryingToBook: { startTime, endTime }
-          });
-
-          const formatVNTime = (date) => {
-            return new Date(date).toLocaleTimeString('vi-VN', {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-              timeZone: 'Asia/Ho_Chi_Minh'
-            });
-          };
-
-          const existingStart = formatVNTime(patientConflict.startTime);
-          const existingEnd = formatVNTime(patientConflict.endTime);
-
-          throw new Error(
-            `Bệnh nhân đã có lịch khám khác vào lúc ${existingStart} - ${existingEnd}. Vui lòng chọn giờ tái khám khác`
-          );
-        }
+  // ⭐ FIX: Check conflict với Appointments có overlap
+  const bookedAppointments = await Appointment.find({
+    doctorUserId,
+    status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] },
+    timeslotId: { $exists: true },
+    _id: { $ne: originalAppointmentId }
+  }).populate({
+    path: 'timeslotId',
+    select: 'startTime endTime',
+    match: {
+      startTime: { 
+        $gte: startTimeDate,
+        $lte: startTimeDateEnd
       }
     }
+  });
 
-    console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
-    console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
+  const validAppointments = bookedAppointments.filter(apt => apt.timeslotId !== null);
 
-    // ⭐ FIX: Tính dateStr từ startTime theo format YYYY-MM-DD
-    const dateStr = `${startTime.getUTCFullYear()}-${String(startTime.getUTCMonth() + 1).padStart(2, '0')}-${String(startTime.getUTCDate()).padStart(2, '0')}`;
+  const hasConflictWithAppointments = validAppointments.some(apt => {
+    const aptStart = new Date(apt.timeslotId.startTime);
+    const aptEnd = new Date(apt.timeslotId.endTime);
+    
+    return (startTime.getTime() < aptEnd.getTime() && endTime.getTime() > aptStart.getTime());
+  });
 
-    console.log('🔍 [createFollowUpAppointment] dateStr for validation:', dateStr);
+  if (hasConflictWithAppointments) {
+    throw new Error('Khung giờ tái khám bị trùng với ca khám khác của bác sĩ.');
+  }
 
-    // ⭐ FIX: Gọi hàm _getDoctorScheduleForFollowUp với đầy đủ tham số theo đúng thứ tự
-    const { doctorSchedule } = await this._getDoctorScheduleForFollowUp(
-      doctorUserId,           // param 1: doctorUserId
-      finalServiceId,         // param 2: serviceId
-      dateStr,                // param 3: dateStr (format: YYYY-MM-DD)
-      originalAppointment.appointmentFor || 'self',  // param 4: appointmentFor
-      startTime               // param 5: startTime (Date object)
-    );
+  // ⭐ FIX: Check conflict với Timeslots
+  const conflictingTimeslotsRaw = await Timeslot.find({
+    doctorUserId,
+    startTime: { $lt: endTime },
+    endTime: { $gt: startTime },
+    status: { $in: ['Reserved', 'Booked'] }
+  });
 
-    if (!doctorSchedule) {
-      throw new Error('Bác sĩ không có lịch làm việc vào thời gian đã chọn');
-    }
+  const nowForConflict = new Date();
+  const conflictingTimeslots = [];
+  const doctorCreatingFollowUp = actingDoctorId || doctorUserId;
 
-    const startTimeDate = new Date(startTime);
-    startTimeDate.setUTCHours(0, 0, 0, 0);
-    const startTimeDateEnd = new Date(startTimeDate);
-    startTimeDateEnd.setUTCHours(23, 59, 59, 999);
-
-    // ⭐ FIX: Check conflict với Appointments có overlap
-    const bookedAppointments = await Appointment.find({
-      doctorUserId,
-      status: { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress'] },
-      timeslotId: { $exists: true },
-      _id: { $ne: originalAppointmentId }
-    }).populate({
-      path: 'timeslotId',
-      select: 'startTime endTime',
-      match: {
-        startTime: {
-          $gte: startTimeDate,
-          $lte: startTimeDateEnd
-        }
-      }
-    });
-
-    const validAppointments = bookedAppointments.filter(apt => apt.timeslotId !== null);
-
-    const hasConflictWithAppointments = validAppointments.some(apt => {
-      const aptStart = new Date(apt.timeslotId.startTime);
-      const aptEnd = new Date(apt.timeslotId.endTime);
-
-      return (startTime.getTime() < aptEnd.getTime() && endTime.getTime() > aptStart.getTime());
-    });
-
-    if (hasConflictWithAppointments) {
-      throw new Error('Khung giờ tái khám bị trùng với ca khám khác của bác sĩ.');
-    }
-
-    // ⭐ FIX: Check conflict với Timeslots
-    const conflictingTimeslotsRaw = await Timeslot.find({
-      doctorUserId,
-      startTime: { $lt: endTime },
-      endTime: { $gt: startTime },
-      status: { $in: ['Reserved', 'Booked'] }
-    });
-
-    const nowForConflict = new Date();
-    const conflictingTimeslots = [];
-    const doctorCreatingFollowUp = actingDoctorId || doctorUserId;
-
-    for (const ts of conflictingTimeslotsRaw) {
-      if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
-        await Timeslot.updateOne(
-          { _id: ts._id },
-          {
-            $set: {
-              status: 'Available',
-              reservedUntil: null,
-              reservedByUserId: null,
-              appointmentId: null
-            }
+  for (const ts of conflictingTimeslotsRaw) {
+    if (ts.status === 'Reserved' && ts.reservedUntil && ts.reservedUntil <= nowForConflict) {
+      await Timeslot.updateOne(
+        { _id: ts._id },
+        {
+          $set: {
+            status: 'Available',
+            reservedUntil: null,
+            reservedByUserId: null,
+            appointmentId: null
           }
-        );
-        continue;
-      }
+        }
+      );
+      continue;
+    }
 
       if (ts.status === 'Reserved' && ts.reservedByUserId &&
         ts.reservedByUserId.toString() === doctorCreatingFollowUp.toString()) {
-        continue;
-      }
+      continue;
+    }
 
       conflictingTimeslots.push(ts);
     }
 
-    // if (conflictingTimeslots.length > 0) {
-    //   console.log('❌ Khung giờ tái khám bị conflict với timeslots đã có:', conflictingTimeslots.length);
-    //   conflictingTimeslots.forEach(ts => {
-    //     console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
-    //   });
-    //   throw new Error('Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.');
-    // }
-
-    // ⭐ FIX: Tạo timeslot với Date objects mới
-    const timeslot = await Timeslot.create({
-      doctorScheduleId: doctorSchedule._id,
-      doctorUserId,
-      serviceId: finalServiceId,
-      startTime: new Date(startTime),
-      endTime: new Date(endTime),
-      breakAfterMinutes: 0,
-      status: 'Booked',
-      reservedByUserId: patientUserId,
-      appointmentId: null
+  if (conflictingTimeslots.length > 0) {
+    console.log('❌ Khung giờ tái khám bị conflict với timeslots đã có:', conflictingTimeslots.length);
+    conflictingTimeslots.forEach(ts => {
+      console.log(`   - Timeslot ${ts._id}: ${ts.startTime} - ${ts.endTime} (${ts.status})`);
     });
+    throw new Error('Khung giờ này đã có người đặt hoặc đang chờ thanh toán. Vui lòng chọn thời gian khác.');
+  }
 
-    console.log('✅ [createFollowUpAppointment] Created timeslot:', {
-      timeslotId: timeslot._id,
-      startTime: timeslot.startTime.toISOString(),
-      endTime: timeslot.endTime.toISOString()
-    });
+  // ⭐ FIX: Tạo timeslot với Date objects mới
+  const timeslot = await Timeslot.create({
+    doctorScheduleId: doctorSchedule._id,
+    doctorUserId,
+    serviceId: finalServiceId,
+    startTime: new Date(startTime),
+    endTime: new Date(endTime),
+    breakAfterMinutes: 0,
+    status: 'Booked',
+    reservedByUserId: patientUserId,
+    appointmentId: null
+  });
+  
+  console.log('✅ [createFollowUpAppointment] Created timeslot:', {
+    timeslotId: timeslot._id,
+    startTime: timeslot.startTime.toISOString(),
+    endTime: timeslot.endTime.toISOString()
+  });
 
-    const followUpAppointment = await Appointment.create({
-      patientUserId,
-      customerId,
-      doctorUserId,
-      serviceId: finalServiceId,
-      additionalServiceIds: finalServiceIds,
-      timeslotId: timeslot._id,
-      status: 'Approved',
-      type: 'FollowUp',
-      mode: originalAppointment.mode,
-      notes: followUpNote || 'Tái khám theo chỉ định bác sĩ',
-      bookedByUserId: actingDoctorId || doctorUserId,
-      appointmentFor: originalAppointment.appointmentFor || 'self',
-      followUpOfAppointmentId: originalAppointment._id
-    });
+  const followUpAppointment = await Appointment.create({
+    patientUserId,
+    customerId,
+    doctorUserId,
+    serviceId: finalServiceId,
+    additionalServiceIds: finalServiceIds,
+    timeslotId: timeslot._id,
+    status: 'Approved',
+    type: 'FollowUp',
+    mode: originalAppointment.mode,
+    notes: followUpNote || 'Tái khám theo chỉ định bác sĩ',
+    bookedByUserId: actingDoctorId || doctorUserId,
+    appointmentFor: originalAppointment.appointmentFor || 'self',
+    followUpOfAppointmentId: originalAppointment._id
+  });
 
-    const medicalRecordOrigin = await MedicalRecord.findOne({ appointmentId: originalAppointment._id }).populate('prescriptions', 'medicine dosage duration');
+  const medicalRecordOrigin = await MedicalRecord.findOne({ appointmentId: originalAppointment._id }).populate('prescriptions', 'medicine dosage duration');
 
-    const medicalRecord = await MedicalRecord.create({
-      appointmentId: followUpAppointment._id,
-      doctorUserId: doctorUserId,
-      patientUserId: patientUserId,
-      customerId: customerId,
-      nurseId: medicalRecordOrigin?.nurseId || null,
-      patientAge: medicalRecordOrigin?.patientAge || 0,
-      address: medicalRecordOrigin?.address || '',
-      additionalServiceIds: finalServiceIds,
-      nurseNote: medicalRecordOrigin?.nurseNote || '',
-      diagnosis: medicalRecordOrigin?.diagnosis || '',
-      conclusion: medicalRecordOrigin?.conclusion || '',
-      prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
-        medicine: item?.medicine || '',
-        dosage: item?.dosage || '',
-        duration: item?.duration || ''
-      })),
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+  const medicalRecord = await MedicalRecord.create({
+    appointmentId: followUpAppointment._id,
+    doctorUserId: doctorUserId,
+    patientUserId: patientUserId,
+    customerId: customerId,
+    nurseId: medicalRecordOrigin?.nurseId || null,
+    patientAge: medicalRecordOrigin?.patientAge || 0,
+    address: medicalRecordOrigin?.address || '',
+    additionalServiceIds: finalServiceIds,
+    nurseNote: medicalRecordOrigin?.nurseNote || '',
+    diagnosis: medicalRecordOrigin?.diagnosis || '',
+    conclusion: medicalRecordOrigin?.conclusion || '',
+    prescriptions: (medicalRecordOrigin?.prescriptions || []).map(item => ({
+      medicine: item?.medicine || '',
+      dosage: item?.dosage || '',
+      duration: item?.duration || ''
+    })),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
 
     await Timeslot.findByIdAndUpdate(timeslot._id, {
       appointmentId: followUpAppointment._id
     });
 
-    const formattedFollowUpDate = new Date(startTime).toLocaleDateString('vi-VN');
-    const followUpTime = new Date(startTime).toLocaleTimeString('vi-VN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
+const formattedFollowUpDate = new Date(startTime).toLocaleDateString('vi-VN');
+const followUpTime = new Date(startTime).toLocaleTimeString('vi-VN', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false
+});
 
-    console.log(`✅ [createFollowUpAppointment] Tạo lịch tái khám thành công cho bệnh nhân vào ${formattedFollowUpDate} lúc ${followUpTime}`);
+console.log(`✅ [createFollowUpAppointment] Tạo lịch tái khám thành công cho bệnh nhân vào ${formattedFollowUpDate} lúc ${followUpTime}`);
 
     try {
       await emailService.sendReExaminationEmail({
@@ -3717,31 +3634,33 @@ class AppointmentService {
     }
 
 
-    if (patientUserId) {
-      const followUpDisplayTime = new Date(startTime).toLocaleString('vi-VN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        timeZone: 'Asia/Ho_Chi_Minh'
-      });
-      try {
-        await notificationService.createNotification({
-          userId: patientUserId,
-          createdByUserId: actingDoctorId || doctorUserId,
-          title: 'Đã tạo lịch tái khám',
-          message: `Bác sĩ đã đặt lịch tái khám vào ${followUpDisplayTime}`,
-          relatedAppointmentId: followUpAppointment._id,
-          link: null
-        });
-      } catch (error) {
-        console.warn('⚠️ Không thể gửi thông báo tái khám cho bệnh nhân:', error.message);
-      }
-    }
 
-    return await Appointment.findById(followUpAppointment._id).populate('timeslotId', 'startTime endTime');
+
+  if (patientUserId) {
+    const followUpDisplayTime = new Date(startTime).toLocaleString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Asia/Ho_Chi_Minh'
+    });
+    try {
+      await notificationService.createNotification({
+        userId: patientUserId,
+        createdByUserId: actingDoctorId || doctorUserId,
+        title: 'Đã tạo lịch tái khám',
+        message: `Bác sĩ đã đặt lịch tái khám vào ${followUpDisplayTime}`,
+        relatedAppointmentId: followUpAppointment._id,
+        link: null
+      });
+    } catch (error) {
+      console.warn('⚠️ Không thể gửi thông báo tái khám cho bệnh nhân:', error.message);
+    }
   }
+
+  return await Appointment.findById(followUpAppointment._id).populate('timeslotId', 'startTime endTime');
+}
 
   async updateFollowUpAppointment({ followUpAppointmentId, followUpDate, followUpNote = '', actingDoctorId }) {
     if (!followUpAppointmentId) {
