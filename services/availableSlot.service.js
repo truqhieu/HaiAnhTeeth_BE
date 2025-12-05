@@ -2237,7 +2237,8 @@ class AvailableSlotService {
     appointmentFor = 'self', 
     customerFullName, 
     customerEmail,
-    reservedByUserId = null // ⭐ THÊM: ID của user đang reserve (staff hoặc patient)
+    reservedByUserId = null, // ⭐ ID của user đang reserve (staff hoặc patient)
+    reservedTimeslotId = null // ⭐ ID của timeslot đã reserve (để loại trừ khỏi conflict check)
   }) {
     // 1. Lấy schedule ranges
     const scheduleRangeResult = await this.getDoctorScheduleRange({
@@ -2611,6 +2612,12 @@ class AvailableSlotService {
         slot.reservedByUserId.toString() === userIdToCheck.toString()) {
         // Đây là reservation của chính user này → bỏ qua, không tính là conflict
         console.log(`   ✅ Skipping own reservation: ${slot._id} (reserved by ${userIdToCheck})`);
+        continue;
+      }
+
+      // ⭐ FIX: Loại trừ timeslot cụ thể đã được reserve (khi staff tạo walk-in với reserved slot)
+      if (reservedTimeslotId && slot._id.toString() === reservedTimeslotId.toString()) {
+        console.log(`   ✅ Skipping reserved timeslot: ${slot._id} (reservedTimeslotId provided)`);
         continue;
       }
 
