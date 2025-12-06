@@ -1520,50 +1520,50 @@ class AvailableSlotService {
     if (schedules.length === 0) {
       // ⭐ FIX: Khi bác sĩ không có lịch làm việc, vẫn phải trả về cả 2 buổi (sáng và chiều)
       // với status "Đã hết chỗ" hoặc "Đã qua thời gian làm việc" tùy theo thời gian hiện tại
-      
+
       const defaultWorkingHours = {
         morningStart: '08:00',
         morningEnd: '12:00',
         afternoonStart: '14:00',
         afternoonEnd: '18:00'
       };
-      
+
       const workingHours = doctorProfile?.workingHours || defaultWorkingHours;
-      
+
       // Tính thời gian cho buổi sáng
       const morningStart = new Date(searchDate);
       const [morningStartHour, morningStartMinute] = workingHours.morningStart.split(':').map(Number);
       morningStart.setUTCHours(morningStartHour - 7, morningStartMinute, 0, 0);
-      
+
       const morningEnd = new Date(searchDate);
       const [morningEndHour, morningEndMinute] = workingHours.morningEnd.split(':').map(Number);
       morningEnd.setUTCHours(morningEndHour - 7, morningEndMinute, 0, 0);
-      
+
       // Tính thời gian cho buổi chiều
       const afternoonStart = new Date(searchDate);
       const [afternoonStartHour, afternoonStartMinute] = workingHours.afternoonStart.split(':').map(Number);
       afternoonStart.setUTCHours(afternoonStartHour - 7, afternoonStartMinute, 0, 0);
-      
+
       const afternoonEnd = new Date(searchDate);
       const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
       afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
-      
+
       // Kiểm tra ngày hiện tại
       const now = new Date();
       const today = new Date();
       const todayDateStr = today.toISOString().split('T')[0];
       const searchDateStr = searchDate.toISOString().split('T')[0];
       const isToday = todayDateStr === searchDateStr;
-      
+
       // Helper: Kiểm tra shift đã qua chưa
       const isShiftPassed = (shiftEnd) => {
         if (!isToday) return false;
         return now.getTime() > shiftEnd.getTime();
       };
-      
+
       const morningShiftPassed = isShiftPassed(morningEnd);
       const afternoonShiftPassed = isShiftPassed(afternoonEnd);
-      
+
       const scheduleRanges = [
         {
           shift: 'Morning',
@@ -1582,7 +1582,7 @@ class AvailableSlotService {
           displayRange: afternoonShiftPassed ? 'Đã qua thời gian làm việc' : 'Đã hết chỗ'
         }
       ];
-      
+
       return {
         doctorId: doctorUserId,
         doctorName: doctor.fullName,
@@ -2189,6 +2189,8 @@ class AvailableSlotService {
     const checkLeaveDate = new Date(date);
     checkLeaveDate.setUTCHours(12, 0, 0, 0);
 
+
+    // ---- CHECK NGÀY NGHỈ PHÉP ----
     const approvedLeave = await LeaveRequest.findOne({
       userId: doctorUserId,
       status: 'Approved',
@@ -2199,11 +2201,26 @@ class AvailableSlotService {
 
     if (approvedLeave) {
       const doctor = await User.findById(doctorUserId).select('fullName');
-      const leaveStart = new Date(approvedLeave.startDate);
-      const leaveEnd = new Date(approvedLeave.endDate);
 
-      const formatDate = (d) => d.toLocaleDateString('vi-VN');
-      const message = `Bác sĩ đang nghỉ phép từ ${formatDate(leaveStart)} đến ${formatDate(leaveEnd)}. Vui lòng chọn ngày khác.`;
+
+      // ⭐ FIX: Convert Date → dd/mm/yyyy
+      // const formatDate = (dateObj) => {
+      //   return dateObj.toLocaleDateString('vi-VN', {
+      //     timeZone: 'Asia/Ho_Chi_Minh'
+      //   });
+      // };
+
+
+      const startStr = date.getDate(approvedLeave.startDate);
+      const startMonth = date.getMonth(approvedLeave.startDate);
+      const endStr = date.getDate(approvedLeave.endDate);
+      const endMonth = date.getMonth(approvedLeave.endDate);
+
+
+      const message = startStr === endStr
+        ? `Bạn đang có lịch nghỉ phép ngày ${startStr}/${startMonth + 1}. Vui lòng chọn ngày khác.`
+        : `Bạn đang có lịch nghỉ phép từ ${startStr}/${startMonth + 1} đến ${endStr}/${endMonth + 1}. Vui lòng chọn ngày khác.`;
+
 
       return {
         doctorId: doctorUserId,
@@ -2219,8 +2236,18 @@ class AvailableSlotService {
       };
     }
 
-    return this.getDoctorScheduleRange({ doctorUserId, serviceId, date, patientUserId, appointmentFor });
+
+    // ---- KHÔNG NGHỈ → LẤY LỊCH BÌNH THƯỜNG ----
+    return this.getDoctorScheduleRange({
+      doctorUserId,
+      serviceId,
+      date,
+      patientUserId: null,
+      appointmentFor
+    });
   }
+
+
 
   /**
    * ⭐ NEW: Validate appointment time
@@ -2228,14 +2255,14 @@ class AvailableSlotService {
    * @param {Object} params
    * @param {string} params.reservedByUserId - ID của user đang reserve (có thể là patientUserId hoặc staffUserId)
    */
-  async validateAppointmentTime({ 
-    doctorUserId, 
-    serviceId, 
-    date, 
-    startTime, 
-    patientUserId = null, 
-    appointmentFor = 'self', 
-    customerFullName, 
+  async validateAppointmentTime({
+    doctorUserId,
+    serviceId,
+    date,
+    startTime,
+    patientUserId = null,
+    appointmentFor = 'self',
+    customerFullName,
     customerEmail,
     reservedByUserId = null, // ⭐ ID của user đang reserve (staff hoặc patient)
     reservedTimeslotId = null // ⭐ ID của timeslot đã reserve (để loại trừ khỏi conflict check)

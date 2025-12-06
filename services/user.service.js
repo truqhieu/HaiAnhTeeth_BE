@@ -22,11 +22,11 @@ class UserService {
       ],
     });
     return result;
-  }  
+  }
 
   async registerUser(userData) {
     const { fullName, email, password, gender, dateOfBirth } = userData;
-    const role = 'Patient'; 
+    const role = 'Patient';
 
     if (!fullName || !email || !password) {
       throw new Error('Dữ liệu đầu vào không hợp lệ');
@@ -126,7 +126,7 @@ class UserService {
 
     // Tạo JWT token
     const jwtToken = jwt.sign(
-      { 
+      {
         userId: newUser._id,
         email: newUser.email,
         role: newUser.role
@@ -151,7 +151,7 @@ class UserService {
     if (user.status === 'Lock') {
       throw new Error('Tài khoản của bạn đã bị khóa');
     }
-    
+
     if (user.status !== 'Active') {
       throw new Error('Tài khoản của bạn chưa được kích hoạt');
     }
@@ -163,7 +163,7 @@ class UserService {
 
     // Tạo JWT token
     const token = jwt.sign(
-      { 
+      {
         userId: user._id,
         email: user.email,
         role: user.role
@@ -181,7 +181,7 @@ class UserService {
     if (user.role === 'Patient') {
       let patient = await Patient.findOne({ patientUserId: user._id });
       console.log('🔍 [LOGIN] Patient record found:', patient ? 'Yes' : 'No');
-      
+
       if (!patient) {
         // ⭐ Tự động tạo Patient record nếu chưa có (cho user cũ)
         console.log('🔍 [LOGIN] Creating Patient record for existing user');
@@ -190,7 +190,7 @@ class UserService {
         });
         await patient.save();
       }
-      
+
       if (patient) {
         console.log('🔍 [LOGIN] EmergencyContact data:', JSON.stringify(patient.emergencyContact));
         emergencyContact = patient.emergencyContact || null;
@@ -202,7 +202,7 @@ class UserService {
 
   async getUserProfile(userId) {
     const user = await User.findById(userId).select('-passwordHash');
-    
+
     if (!user) {
       throw new Error('Không tìm thấy thông tin người dùng');
     }
@@ -212,7 +212,7 @@ class UserService {
     if (user.role === 'Patient') {
       let patient = await Patient.findOne({ patientUserId: userId });
       console.log('🔍 [GET PROFILE] Patient record found:', patient ? 'Yes' : 'No');
-      
+
       if (!patient) {
         // ⭐ Tự động tạo Patient record nếu chưa có (cho user cũ)
         console.log('🔍 [GET PROFILE] Creating Patient record for existing user');
@@ -221,7 +221,7 @@ class UserService {
         });
         await patient.save();
       }
-      
+
       if (patient) {
         console.log('🔍 [GET PROFILE] EmergencyContact data:', JSON.stringify(patient.emergencyContact));
         emergencyContact = patient.emergencyContact || null;
@@ -258,8 +258,8 @@ class UserService {
     // Cập nhật password trực tiếp vào database (bypass middleware)
     await User.collection.updateOne(
       { _id: user._id },
-      { 
-        $set: { 
+      {
+        $set: {
           passwordHash: newPasswordHash,
           updatedAt: new Date()
         }
@@ -282,13 +282,13 @@ class UserService {
     if (user.status === 'Lock') {
       throw new Error('Tài khoản của bạn đã bị khóa');
     }
-    
+
     if (user.status !== 'Active') {
       throw new Error('Tài khoản của bạn chưa được kích hoạt');
     }
 
     const resetToken = user.generateResetPasswordToken();
-    
+
     // Lưu user với reset token và expire time
     await user.save({ validateBeforeSave: false });
 
@@ -326,8 +326,8 @@ class UserService {
     // Cập nhật password trực tiếp vào database (bypass middleware)
     await User.collection.updateOne(
       { _id: user._id },
-      { 
-        $set: { 
+      {
+        $set: {
           passwordHash: newPasswordHash,
           resetPasswordToken: undefined,
           resetPasswordExpire: undefined,
@@ -341,221 +341,257 @@ class UserService {
     return updatedUser;
   }
 
-async updateProfile(userId, data, file) {
-  let uploadedImageId = null;
-  let tempFilePath = null;
+  async updateProfile(userId, data, file) {
+    let uploadedImageId = null;
+    let tempFilePath = null;
 
-  try {
-    const allowedFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'emergencyContact'];
+    try {
+      const allowedFields = ['fullName', 'phoneNumber', 'address', 'dob', 'gender', 'emergencyContact'];
 
-    const user = await User.findById(userId);
-    if (!user) {
-      throw new Error('Không tìm thấy thông tin người dùng');
-    }
-
-    const updates = {};
-    let emergencyContactUpdate = null;
-
-    for (const key of Object.keys(data)) {
-      if (!allowedFields.includes(key)) continue;
-      const value = data[key];
-
-      // === fullName ===
-      if (key === 'fullName') {
-        const cleanFullName = (value || '').trim();
-        if (!cleanFullName) {
-          throw new Error('Họ tên không được để trống');
-        }
-        if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(cleanFullName)) {
-          throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
-        }
-        if (cleanFullName.length < 2) {
-          throw new Error('Độ dài họ và tên không hợp lệ (tối thiểu 2 ký tự)');
-        }
-        updates.fullName = cleanFullName;
+      const user = await User.findById(userId);
+      if (!user) {
+        throw new Error('Không tìm thấy thông tin người dùng');
       }
 
-      // === phoneNumber ===
-      if (key === 'phoneNumber') {
-        const cleanPhone = (value || '').trim();
-        if (!cleanPhone) {
-          updates.phoneNumber = null;
-        } else {
-          if (!/^[0-9]{10}$/.test(cleanPhone) || !cleanPhone.startsWith('0')) {
-            throw new Error('Số điện thoại phải bắt đầu bằng 0 và có đúng 10 chữ số');
+      const updates = {};
+      let emergencyContactUpdate = null;
+      let shouldClearEmergencyContact = false;
+
+      for (const key of Object.keys(data)) {
+        if (!allowedFields.includes(key)) continue;
+        const value = data[key];
+
+        // === fullName ===
+        if (key === 'fullName') {
+          const cleanFullName = (value || '').trim();
+          if (!cleanFullName) {
+            throw new Error('Họ tên không được để trống');
           }
-          updates.phoneNumber = cleanPhone;
+          if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(cleanFullName)) {
+            throw new Error('Họ tên không được chứa số hoặc ký tự đặc biệt');
+          }
+          if (cleanFullName.length < 2) {
+            throw new Error('Độ dài họ và tên không hợp lệ (tối thiểu 2 ký tự)');
+          }
+          updates.fullName = cleanFullName;
+        }
+
+        // === phoneNumber ===
+        if (key === 'phoneNumber') {
+          const cleanPhone = (value || '').trim();
+          if (!cleanPhone) {
+            updates.phoneNumber = null;
+          } else {
+            if (!/^[0-9]{10}$/.test(cleanPhone) || !cleanPhone.startsWith('0')) {
+              throw new Error('Số điện thoại phải bắt đầu bằng 0 và có đúng 10 chữ số');
+            }
+            updates.phoneNumber = cleanPhone;
+          }
+        }
+
+        // === address ===
+        if (key === 'address') {
+          const cleanAddress = (value || '').trim();
+          if (!cleanAddress) {
+            updates.address = null;
+          } else {
+            if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanAddress)) {
+              throw new Error('Địa chỉ không hợp lệ');
+            }
+            if (cleanAddress.length < 2) {
+              throw new Error('Độ dài địa chỉ không hợp lệ (tối thiểu 2 ký tự)');
+            }
+            updates.address = cleanAddress;
+          }
+        }
+
+        // === dob ===
+        if (key === 'dob') {
+          const birthDate = new Date(value);
+          if (isNaN(birthDate.getTime())) {
+            throw new Error('Ngày sinh không hợp lệ');
+          }
+
+          const now = new Date();
+          let age = now.getFullYear() - birthDate.getFullYear();
+          const m = now.getMonth() - birthDate.getMonth();
+          if (m < 0 || (m === 0 && now.getDate() < birthDate.getDate())) age--;
+
+          if (age < 18) {
+            throw new Error('Người dùng phải đủ 18 tuổi trở lên');
+          }
+
+          updates.dob = value;
+        }
+
+        // === gender ===
+        if (key === 'gender') {
+          updates.gender = value;
+        }
+
+        // === emergencyContact ===
+        if (key === 'emergencyContact') {
+          let ec = value;
+
+          // Nếu FE gửi string thì parse JSON
+          if (typeof ec === 'string') {
+            try {
+              ec = JSON.parse(ec);
+            } catch (e) {
+              throw new Error('Lỗi định dạng emergencyContact');
+            }
+          }
+
+          if (ec && typeof ec === 'object') {
+            const name = (ec.name || '').trim();
+            const phoneStr = (ec.phone || '').trim();
+            const relationship = ec.relationship || 'Other';
+
+            // ✅ Trường hợp user xóa hết cả name + phone:
+            // => không lưu nữa, và ĐÁNH DẤU là cần xóa khỏi DB
+            if (!name && !phoneStr) {
+              emergencyContactUpdate = null;
+              shouldClearEmergencyContact = true;
+              continue; // bỏ qua validate bên dưới
+            }
+
+            if (name) {
+              const nameF = name.trim();
+              if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ\s]+$/.test(nameF)) {
+                throw new Error('Tên người liên hệ khẩn cấp chỉ được chứa chữ cái và không chứa số');
+              }
+              if (nameF.length < 2) {
+                throw new Error('Tên người liên hệ khẩn cấp phải có độ dài tối thiểu 2 ký tự');
+              }
+            }
+
+            // ✅ Nếu có phone thì validate phone
+            if (phoneStr) {
+              const phoneDigits = phoneStr.replace(/\D/g, '');
+              const phoneRegex = /^[0-9]{10,11}$/;
+              if (!phoneRegex.test(phoneDigits) || !phoneDigits.startsWith('0')) {
+                throw new Error('Số điện thoại khẩn cấp phải bắt đầu bằng 0 và có 10-11 số');
+              }
+            }
+
+            // 🔹 name có cũng được, không có cũng không sao
+            const validRelationships = ['Father', 'Mother', 'Brother', 'Sister', 'Spouse', 'Friend', 'Other'];
+            const finalRelationship = validRelationships.includes(relationship)
+              ? relationship
+              : 'Other';
+
+            emergencyContactUpdate = {
+              name: name || null,
+              phone: phoneStr || null,
+              relationship: finalRelationship
+            };
+          }
         }
       }
 
-      // === address ===
-      if (key === 'address') {
-        const cleanAddress = (value || '').trim();
-        if (!cleanAddress) {
-          updates.address = null;
-        } else {
-          if (!/^[a-zA-ZÀ-Ỹà-ỹĐđ0-9\s,.\-\/]+$/.test(cleanAddress)) {
-            throw new Error('Địa chỉ không hợp lệ');
-          }
-          if (cleanAddress.length < 2) {
-            throw new Error('Độ dài địa chỉ không hợp lệ (tối thiểu 2 ký tự)');
-          }
-          updates.address = cleanAddress;
-        }
+      // ✅ Upload avatar nếu có
+      if (file) {
+        tempFilePath = file.path;
+        const result = await this.uploadImage(file.path);
+        uploadedImageId = result.public_id;
+        updates.avatar = result.secure_url;
+        updates.avatarId = result.public_id;
       }
 
-      // === dob ===
-      if (key === 'dob') {
-        const birthDate = new Date(value);
-        if (isNaN(birthDate.getTime())) {
-          throw new Error('Ngày sinh không hợp lệ');
-        }
-        const now = new Date();
-        let age = now.getFullYear() - birthDate.getFullYear();
-        const m = now.getMonth() - birthDate.getMonth();
-        if (m < 0 || (m === 0 && now.getDate() < birthDate.getDate())) age--;
-
-        if (age < 18) {
-          throw new Error('Người dùng phải đủ 18 tuổi trở lên');
-        }
-        updates.dob = value;
+      if (Object.keys(updates).length === 0 && !emergencyContactUpdate && !shouldClearEmergencyContact) {
+        throw new Error('Không có trường hợp lệ để cập nhật');
       }
 
-      // === gender ===
-      if (key === 'gender') {
-        updates.gender = value;
+      // ✅ Update user
+      const updatedUserDoc = await User.findByIdAndUpdate(
+        userId,
+        { $set: updates },
+        { new: true, runValidators: true }
+      ).select('-passwordHash -__v');
+
+      if (!updatedUserDoc) {
+        throw new Error('Không tìm thấy người dùng');
       }
 
-      // === emergencyContact ===
-      if (key === 'emergencyContact') {
-        let ec = value;
-
-        // Trong controller đã parse JSON rồi, nên tới đây `ec` thường là object
-        // Nhưng mình vẫn check thêm cho an toàn
-        if (typeof ec === 'string') {
-          try {
-            ec = JSON.parse(ec);
-          } catch (e) {
-            throw new Error('Lỗi định dạng emergencyContact');
-          }
-        }
-
-        if (ec && typeof ec === 'object') {
-          if (!ec.name || ec.name.trim().length === 0) {
-            throw new Error('emergencyContact.name không được để trống');
-          }
-          if (!ec.phone || ec.phone.trim().length === 0) {
-            throw new Error('emergencyContact.phone không được để trống');
-          }
-
-          const phoneDigits = ec.phone.replace(/\D/g, '');
-          const phoneRegex = /^[0-9]{10,11}$/;
-          if (!phoneRegex.test(phoneDigits) || !phoneDigits.startsWith('0')) {
-            throw new Error('emergencyContact.phone phải bắt đầu bằng 0 và có 10-11 số');
-          }
-
-          const validRelationships = ['Father', 'Mother', 'Brother', 'Sister', 'Spouse', 'Friend', 'Other'];
-          if (!validRelationships.includes(ec.relationship)) {
-            throw new Error(`emergencyContact.relationship phải là một trong: ${validRelationships.join(', ')}`);
-          }
-
-          emergencyContactUpdate = {
-            name: ec.name.trim(),
-            phone: ec.phone.trim(),
-            relationship: ec.relationship
-          };
-        }
+      // Xóa avatar cũ nếu có upload avatar mới
+      if (file && user.avatarId && user.avatarId !== uploadedImageId) {
+        await deleteOldImage(user.avatarId);
       }
-    }
 
-    // ✅ Upload avatar nếu có
-    if (file) {
-      tempFilePath = file.path;
-      const result = await this.uploadImage(file.path);
-      uploadedImageId = result.public_id;
-      updates.avatar = result.secure_url;
-      updates.avatarId = result.public_id;
-    }
+      // ✅ Xử lý emergencyContact trong Patient
+      let emergencyContactResponse = null;
 
-    if (Object.keys(updates).length === 0 && !emergencyContactUpdate) {
-      throw new Error('Không có trường hợp lệ để cập nhật');
-    }
-
-    // ✅ Update user
-    const updatedUserDoc = await User.findByIdAndUpdate(
-      userId,
-      { $set: updates },
-      { new: true, runValidators: true }
-    ).select('-passwordHash -__v');
-
-    if (!updatedUserDoc) {
-      throw new Error('Không tìm thấy người dùng');
-    }
-
-    if (file && user.avatarId && user.avatarId !== uploadedImageId) {
-      await deleteOldImage(user.avatarId);
-    }
-
-    // ✅ Upsert emergencyContact vào Patient nếu là Patient
-    let emergencyContactResponse = null;
-
-    if (updatedUserDoc.role === 'Patient' && emergencyContactUpdate) {
-      const patient = await Patient.findOneAndUpdate(
-        { patientUserId: updatedUserDoc._id },
-        { $set: { emergencyContact: emergencyContactUpdate } },
-        { new: true, upsert: true }
-      );
-
-      emergencyContactResponse = patient.emergencyContact;
-    }
-
-    // build object trả về (thêm emergencyContact cho FE)
-    const responseData = updatedUserDoc.toObject ? updatedUserDoc.toObject() : { ...updatedUserDoc };
-
-    if (updatedUserDoc.role === 'Patient') {
-      responseData.emergencyContact = emergencyContactResponse;
-    }
-
-    return responseData;
-
-  } catch (error) {
-    console.error('Lỗi cập nhật profile:', error);
-
-    if (uploadedImageId) {
-      console.warn(`⚠️ Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
-      await deleteOldImage(uploadedImageId);
-    }
-
-    throw new Error(error.message || 'Lỗi server. Vui lòng thử lại sau');
-  } finally {
-    if (tempFilePath) {
-      try {
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
+      if (updatedUserDoc.role === 'Patient') {
+        if (shouldClearEmergencyContact) {
+          // ❌ User xóa hết name + phone -> xóa luôn emergencyContact trong DB
+          const patient = await Patient.findOneAndUpdate(
+            { patientUserId: updatedUserDoc._id },
+            { $unset: { emergencyContact: '' } },
+            { new: true }
+          );
+          emergencyContactResponse = patient ? patient.emergencyContact : null;
+        } else if (emergencyContactUpdate) {
+          // ✏️ Có dữ liệu mới -> set/update emergencyContact
+          const patient = await Patient.findOneAndUpdate(
+            { patientUserId: updatedUserDoc._id },
+            { $set: { emergencyContact: emergencyContactUpdate } },
+            { new: true, upsert: true }
+          );
+          emergencyContactResponse = patient.emergencyContact;
         }
-      } catch (cleanupError) {
-        console.error('❌ Lỗi khi xóa file tạm:', cleanupError);
+        // nếu không có gì thay đổi emergency contact thì giữ nguyên
+      }
+
+      // build object trả về (thêm emergencyContact cho FE)
+      const responseData = updatedUserDoc.toObject
+        ? updatedUserDoc.toObject()
+        : { ...updatedUserDoc };
+
+      if (updatedUserDoc.role === 'Patient') {
+        responseData.emergencyContact = emergencyContactResponse;
+      }
+
+      return responseData;
+
+    } catch (error) {
+      console.error('Lỗi cập nhật profile:', error);
+
+      if (uploadedImageId) {
+        console.warn(`⚠️ Xóa ảnh upload vì có lỗi: ${uploadedImageId}`);
+        await deleteOldImage(uploadedImageId);
+      }
+
+      throw new Error(error.message || 'Lỗi server. Vui lòng thử lại sau');
+    } finally {
+      if (tempFilePath) {
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (cleanupError) {
+          console.error('❌ Lỗi khi xóa file tạm:', cleanupError);
+        }
       }
     }
   }
-}
 
 
 
-async changePassword(userId, data) {
-  const { oldPassword, newPassword, reNewPassword } = data;
 
-  // 1. Kiểm tra user tồn tại
-  const user = await User.findById(userId);
-  if (!user) throw new Error("Vui lòng đăng nhập");
+  async changePassword(userId, data) {
+    const { oldPassword, newPassword, reNewPassword } = data;
 
-  // 2. So sánh mật khẩu cũ
-  const isMatch = await bcrypt.compare(oldPassword, user.passwordHash);
-  if (!isMatch) throw new Error("Mật khẩu hiện tại không đúng, vui lòng nhập lại");
+    // 1. Kiểm tra user tồn tại
+    const user = await User.findById(userId);
+    if (!user) throw new Error("Vui lòng đăng nhập");
 
-  if(oldPassword === newPassword) throw new Error('Mật khẩu mới phải khác mật khẩu hiện tại')
+    // 2. So sánh mật khẩu cũ
+    const isMatch = await bcrypt.compare(oldPassword, user.passwordHash);
+    if (!isMatch) throw new Error("Mật khẩu hiện tại không đúng, vui lòng nhập lại");
 
-  // 3. Kiểm tra mật khẩu mới trùng xác nhận
+    if (oldPassword === newPassword) throw new Error('Mật khẩu mới phải khác mật khẩu hiện tại')
+
+    // 3. Kiểm tra mật khẩu mới trùng xác nhận
     if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length === 0) {
       throw new Error('Mật khẩu mới không được để trống');
     }
@@ -569,20 +605,20 @@ async changePassword(userId, data) {
     if (cleanPassword.length < 4) {
       throw new Error('Độ dài mật khẩu không hợp lệ (tối thiểu 4 ký tự)');
     }
-      if (newPassword !== reNewPassword)throw new Error("Mật khẩu mới không trùng nhau");
+    if (newPassword !== reNewPassword) throw new Error("Mật khẩu mới không trùng nhau");
 
-  // 4. Hash mật khẩu mới
-  const newHashedPassword = await bcrypt.hash(newPassword, 12);
+    // 4. Hash mật khẩu mới
+    const newHashedPassword = await bcrypt.hash(newPassword, 12);
 
-  // 5. Cập nhật vào DB
-  const updatePassword = await User.findByIdAndUpdate(
-    userId,
-    { passwordHash: newHashedPassword },
-    { new: true }
-  );
+    // 5. Cập nhật vào DB
+    const updatePassword = await User.findByIdAndUpdate(
+      userId,
+      { passwordHash: newHashedPassword },
+      { new: true }
+    );
 
-  return updatePassword;
-}
+    return updatePassword;
+  }
 
 }
 

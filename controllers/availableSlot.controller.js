@@ -67,8 +67,8 @@ const generateSlotsByDate = async (req, res) => {
     console.error('Lỗi generate slots by date:', error);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động') ||
-        error.message.includes('Vui lòng cung cấp')) {
+      error.message.includes('không hoạt động') ||
+      error.message.includes('Vui lòng cung cấp')) {
       return res.status(400).json({
         success: false,
         message: error.message
@@ -128,8 +128,8 @@ const getAvailableSlots = async (req, res) => {
     console.error('Lỗi lấy available slots:', error);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động') ||
-        error.message.includes('Vui lòng cung cấp')) {
+      error.message.includes('không hoạt động') ||
+      error.message.includes('Vui lòng cung cấp')) {
       return res.status(400).json({
         success: false,
         message: error.message
@@ -184,8 +184,8 @@ const getAvailableDoctors = async (req, res) => {
     console.error('Lỗi lấy danh sách bác sĩ có khung giờ rảnh:', error);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động') ||
-        error.message.includes('Vui lòng cung cấp')) {
+      error.message.includes('không hoạt động') ||
+      error.message.includes('Vui lòng cung cấp')) {
       return res.status(400).json({
         success: false,
         message: error.message
@@ -259,7 +259,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     const normalizedCustomerEmail = appointmentForValue === 'other' && customerEmail
       ? decodeURIComponent(customerEmail)
       : null;
-    
+
     // ⭐ FIX: Chỉ pass userIdForExclusion khi appointmentFor === 'self'
     // Khi appointmentFor === 'other', set patientUserId = null để KHÔNG exclude
     const userIdForExclusion = (appointmentForValue === 'self') ? (userId || patientUserId) : null;
@@ -290,9 +290,9 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     console.error('Error message:', error.message);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động') ||
-        error.message.includes('Vui lòng cung cấp') ||
-        error.message.includes('không khớp')) {
+      error.message.includes('không hoạt động') ||
+      error.message.includes('Vui lòng cung cấp') ||
+      error.message.includes('không khớp')) {
       return res.status(400).json({
         success: false,
         message: error.message
@@ -373,7 +373,7 @@ const getDoctorScheduleRange = async (req, res) => {
     console.error('Lỗi lấy doctor schedule range:', error);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động')) {
+      error.message.includes('không hoạt động')) {
       return res.status(400).json({
         success: false,
         message: error.message
@@ -428,7 +428,7 @@ const getDoctorScheduleRangeForFollowUp = async (req, res) => {
     console.error('Lỗi lấy doctor schedule range (follow-up):', error);
 
     if (error.message.includes('Không tìm thấy') ||
-        error.message.includes('không hoạt động')) {
+      error.message.includes('không hoạt động')) {
       return res.status(400).json({
         success: false,
         message: error.message

@@ -138,8 +138,8 @@ class AdminService {
       throw new Error('Số điện thoại phải bắt đầu bằng số 0');
     }
 
-    if (cleanPhone.length !== 10) {
-      throw new Error('Số điện thoại phải có đủ 10 số');
+    if (cleanPhone.length !== 10 || cleanPhone.length !== 11) {
+      throw new Error('Số điện thoại phải có đủ 10 hoặc 11 số');
     }
 
     // Validate address
