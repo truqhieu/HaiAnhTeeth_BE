@@ -59,8 +59,7 @@ router.post('/review', verifyToken, verifyRole(['Staff']), reviewAppointment);
 router.get('/pending', verifyToken, verifyRole(['Staff', 'Manager']), getPendingAppointments);
 
 //  API lấy danh sách tất cả lịch hẹn (có filter)
-// Patient xem lịch của mình, Staff/Manager/Doctor xem tất cả
-router.get('/all', verifyToken, getAllAppointments);
+router.get('/all', verifyToken, verifyRole(['Staff']), getAllAppointments);
 
 // ⭐ Lấy danh sách ca khám của người dùng hiện tại - Cần đăng nhập
 router.get('/my-appointments', verifyToken, getMyAppointments);

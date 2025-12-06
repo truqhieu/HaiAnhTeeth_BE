@@ -322,6 +322,7 @@ const forgotPassword = async (req, res) => {
     const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
     const resetLink = emailService.createResetPasswordLink(resetToken, email, baseUrl);
 
+    console.log('🔗 Reset password link generated:', resetLink);
 
     // Gửi email reset password
     try {

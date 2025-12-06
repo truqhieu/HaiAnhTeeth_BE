@@ -1087,7 +1087,7 @@ const requestReschedule = async (req, res) => {
         timeslotId: reservedTimeslot._id,
         startTime: newStart,
         endTime: newEnd,
-        reason: reason || 'Yêu cầu đổi lịch hẹn'
+        reason: reason 
       }
     });
 
@@ -1270,7 +1270,7 @@ const requestChangeDoctor = async (req, res) => {
       requestedData: {
         doctorUserId: newDoctorUserId,
         timeslotId: reservedTimeslot._id,
-        reason: reason || 'Yêu cầu đổi bác sĩ'
+        reason: reason 
       }
     });
 
