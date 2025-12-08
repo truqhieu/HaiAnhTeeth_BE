@@ -40,8 +40,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-25T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-30T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-25T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-30T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -60,8 +60,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     // 1. Pending Appointment
     const pendingTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T01:00:00.000Z'),
-      endTime: new Date('2025-12-25T01:10:00.000Z'),
+      startTime: new Date('2026-12-25T01:00:00.000Z'),
+      endTime: new Date('2026-12-25T01:10:00.000Z'),
       status: 'Reserved'
     });
     
@@ -87,8 +87,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     // 2. Approved Appointment
     const approvedTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T02:00:00.000Z'),
-      endTime: new Date('2025-12-25T02:10:00.000Z'),
+      startTime: new Date('2026-12-25T02:00:00.000Z'),
+      endTime: new Date('2026-12-25T02:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -114,8 +114,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     // 3. PendingPayment Appointment with Payment
     const pendingPaymentTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T03:00:00.000Z'),
-      endTime: new Date('2025-12-25T03:10:00.000Z'),
+      startTime: new Date('2026-12-25T03:00:00.000Z'),
+      endTime: new Date('2026-12-25T03:10:00.000Z'),
       status: 'Reserved'
     });
     
@@ -151,8 +151,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     // 4. Completed Appointment (cannot cancel)
     const completedTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T04:00:00.000Z'),
-      endTime: new Date('2025-12-25T04:10:00.000Z'),
+      startTime: new Date('2026-12-25T04:00:00.000Z'),
+      endTime: new Date('2026-12-25T04:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -178,8 +178,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
     // 5. CheckedIn Appointment (cannot cancel)
     const checkedInTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T05:00:00.000Z'),
-      endTime: new Date('2025-12-25T05:10:00.000Z'),
+      startTime: new Date('2026-12-25T05:00:00.000Z'),
+      endTime: new Date('2026-12-25T05:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -291,8 +291,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
       // Create a new approved appointment for this test
       const refundTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T06:00:00.000Z'),
-        endTime: new Date('2025-12-25T06:10:00.000Z'),
+        startTime: new Date('2026-12-25T06:00:00.000Z'),
+        endTime: new Date('2026-12-25T06:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -392,8 +392,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
       // Create a new appointment for this test
       const noReasonTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T07:00:00.000Z'),
-        endTime: new Date('2025-12-25T07:10:00.000Z'),
+        startTime: new Date('2026-12-25T07:00:00.000Z'),
+        endTime: new Date('2026-12-25T07:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -461,8 +461,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
       // Create appointment without payment
       const noPaymentTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T08:00:00.000Z'),
-        endTime: new Date('2025-12-25T08:10:00.000Z'),
+        startTime: new Date('2026-12-25T08:00:00.000Z'),
+        endTime: new Date('2026-12-25T08:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -497,8 +497,8 @@ describe('cancelAppointment - Appointment Cancellation', () => {
       // Create a new appointment for this test
       const timestampTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T09:00:00.000Z'),
-        endTime: new Date('2025-12-25T09:10:00.000Z'),
+        startTime: new Date('2026-12-25T09:00:00.000Z'),
+        endTime: new Date('2026-12-25T09:10:00.000Z'),
         status: 'Booked'
       });
       

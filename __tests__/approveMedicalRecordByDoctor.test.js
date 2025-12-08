@@ -39,8 +39,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-25T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-30T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-25T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-30T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -59,8 +59,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     // 1. Normal Appointment with Draft Medical Record (no follow-up)
     const normalTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T01:00:00.000Z'),
-      endTime: new Date('2025-12-25T01:10:00.000Z'),
+      startTime: new Date('2026-12-25T01:00:00.000Z'),
+      endTime: new Date('2026-12-25T01:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -97,8 +97,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     // 2. Appointment with Follow-up Required
     const followUpTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T02:00:00.000Z'),
-      endTime: new Date('2025-12-25T02:10:00.000Z'),
+      startTime: new Date('2026-12-25T02:00:00.000Z'),
+      endTime: new Date('2026-12-25T02:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -137,8 +137,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     // 3. Completed Appointment (cannot approve)
     const completedTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T03:00:00.000Z'),
-      endTime: new Date('2025-12-25T03:10:00.000Z'),
+      startTime: new Date('2026-12-25T03:00:00.000Z'),
+      endTime: new Date('2026-12-25T03:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -174,8 +174,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     // 4. Appointment without Medical Record
     const noRecordTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T04:00:00.000Z'),
-      endTime: new Date('2025-12-25T04:10:00.000Z'),
+      startTime: new Date('2026-12-25T04:00:00.000Z'),
+      endTime: new Date('2026-12-25T04:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -197,8 +197,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
     // 5. Already Finalized Appointment (idempotent test)
     const finalizedTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T05:00:00.000Z'),
-      endTime: new Date('2025-12-25T05:10:00.000Z'),
+      startTime: new Date('2026-12-25T05:00:00.000Z'),
+      endTime: new Date('2026-12-25T05:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -314,8 +314,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
       // Create appointment with multiple services
       const multiServiceTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T06:00:00.000Z'),
-        endTime: new Date('2025-12-25T06:10:00.000Z'),
+        startTime: new Date('2026-12-25T06:00:00.000Z'),
+        endTime: new Date('2026-12-25T06:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -414,8 +414,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
       // Create appointment with past follow-up date
       const pastDateTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T07:00:00.000Z'),
-        endTime: new Date('2025-12-25T07:10:00.000Z'),
+        startTime: new Date('2026-12-25T07:00:00.000Z'),
+        endTime: new Date('2026-12-25T07:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -468,8 +468,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
       // Create appointment with followUpRequired but no date
       const noDateTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T08:00:00.000Z'),
-        endTime: new Date('2025-12-25T08:10:00.000Z'),
+        startTime: new Date('2026-12-25T08:00:00.000Z'),
+        endTime: new Date('2026-12-25T08:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -519,8 +519,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
       // Create appointment with existing follow-up
       const existingFollowUpTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T09:00:00.000Z'),
-        endTime: new Date('2025-12-25T09:10:00.000Z'),
+        startTime: new Date('2026-12-25T09:00:00.000Z'),
+        endTime: new Date('2026-12-25T09:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -589,8 +589,8 @@ describe('approveMedicalRecordByDoctor - Medical Record Approval', () => {
       // Create new appointment for this test
       const populatedTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T10:00:00.000Z'),
-        endTime: new Date('2025-12-25T10:10:00.000Z'),
+        startTime: new Date('2026-12-25T10:00:00.000Z'),
+        endTime: new Date('2026-12-25T10:10:00.000Z'),
         status: 'Booked'
       });
       

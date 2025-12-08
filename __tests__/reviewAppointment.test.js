@@ -60,7 +60,7 @@ describe('reviewAppointment - UI Error Messages', () => {
   });
 
   const getFixedDate = (day = 15, hour = 2, minute = 0) => {
-    const date = new Date('2025-12-' + day.toString().padStart(2, '0'));
+    const date = new Date('2026-12-' + day.toString().padStart(2, '0'));
     date.setUTCHours(hour, minute, 0, 0);
     return date;
   };

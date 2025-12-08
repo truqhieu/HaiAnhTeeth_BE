@@ -42,8 +42,8 @@ describe('createWalkInAppointment - Walk-in Appointment Creation', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-15T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-20T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-15T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-20T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -85,7 +85,7 @@ describe('createWalkInAppointment - Walk-in Appointment Creation', () => {
   });
 
   const getFixedDate = (day = 15, hour = 10, minute = 0) => {
-    const date = new Date('2025-12-' + day.toString().padStart(2, '0'));
+    const date = new Date('2026-12-' + day.toString().padStart(2, '0'));
     date.setUTCHours(hour, minute, 0, 0);
     return date;
   };
@@ -393,7 +393,7 @@ describe('createWalkInAppointment - Walk-in Appointment Creation', () => {
 
   describe('WTC11 - Past Time Slot', () => {
     it('should throw error when trying to book past time', async () => {
-      const pastTime = new Date('2025-01-01T01:00:00.000Z');
+      const pastTime = new Date('2024-01-01T01:00:00.000Z');
       const pastEndTime = new Date(pastTime.getTime() + 10 * 60000);
 
       await expect(

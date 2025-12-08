@@ -45,8 +45,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-25T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-30T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-25T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-30T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -69,8 +69,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     // 1. Normal Appointment
     const normalTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T01:00:00.000Z'),
-      endTime: new Date('2025-12-25T01:10:00.000Z'),
+      startTime: new Date('2026-12-25T01:00:00.000Z'),
+      endTime: new Date('2026-12-25T01:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -103,8 +103,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     
     const walkInTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T02:00:00.000Z'),
-      endTime: new Date('2025-12-25T02:10:00.000Z'),
+      startTime: new Date('2026-12-25T02:00:00.000Z'),
+      endTime: new Date('2026-12-25T02:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -129,8 +129,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     // 3. Original + Follow-up Appointment Chain
     const originalTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T03:00:00.000Z'),
-      endTime: new Date('2025-12-25T03:10:00.000Z'),
+      startTime: new Date('2026-12-25T03:00:00.000Z'),
+      endTime: new Date('2026-12-25T03:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -169,8 +169,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     // Create follow-up appointment
     const followUpTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-26T01:00:00.000Z'),
-      endTime: new Date('2025-12-26T01:10:00.000Z'),
+      startTime: new Date('2026-12-26T01:00:00.000Z'),
+      endTime: new Date('2026-12-26T01:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -195,8 +195,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
     // 4. No Treatment Appointment
     const noTreatmentTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T04:00:00.000Z'),
-      endTime: new Date('2025-12-25T04:10:00.000Z'),
+      startTime: new Date('2026-12-25T04:00:00.000Z'),
+      endTime: new Date('2026-12-25T04:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -320,8 +320,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
       // Create a follow-up without previous record
       const followUpTimeslot2 = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-27T01:00:00.000Z'),
-        endTime: new Date('2025-12-27T01:10:00.000Z'),
+        startTime: new Date('2026-12-27T01:00:00.000Z'),
+        endTime: new Date('2026-12-27T01:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -431,8 +431,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
       // Create appointment with patient without DOB
       const noDobTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-25T05:00:00.000Z'),
-        endTime: new Date('2025-12-25T05:10:00.000Z'),
+        startTime: new Date('2026-12-25T05:00:00.000Z'),
+        endTime: new Date('2026-12-25T05:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -491,8 +491,8 @@ describe('getOrCreateMedicalRecord - Medical Record Auto-Creation', () => {
       // Create 3rd follow-up appointment
       const followUp2Timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-28T01:00:00.000Z'),
-        endTime: new Date('2025-12-28T01:10:00.000Z'),
+        startTime: new Date('2026-12-28T01:00:00.000Z'),
+        endTime: new Date('2026-12-28T01:10:00.000Z'),
         status: 'Booked'
       });
       

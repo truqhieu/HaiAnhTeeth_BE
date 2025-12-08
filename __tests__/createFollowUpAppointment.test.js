@@ -49,8 +49,8 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-20T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-25T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-20T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-25T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -68,8 +68,8 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
     // Create completed patient appointment for follow-up testing
     const patientTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-18T01:00:00.000Z'),
-      endTime: new Date('2025-12-18T01:10:00.000Z'),
+      startTime: new Date('2026-12-18T01:00:00.000Z'),
+      endTime: new Date('2026-12-18T01:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -99,8 +99,8 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
     
     const walkInTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-18T02:00:00.000Z'),
-      endTime: new Date('2025-12-18T02:10:00.000Z'),
+      startTime: new Date('2026-12-18T02:00:00.000Z'),
+      endTime: new Date('2026-12-18T02:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -189,7 +189,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
   });
 
   const getFixedDate = (day = 20, hour = 10, minute = 0) => {
-    const date = new Date('2025-12-' + day.toString().padStart(2, '0'));
+    const date = new Date('2026-12-' + day.toString().padStart(2, '0'));
     date.setUTCHours(hour, minute, 0, 0);
     return date;
   };
@@ -204,7 +204,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
     it('should create follow-up appointment successfully', async () => {
       const result = await appointmentService.createFollowUpAppointment({
         originalAppointmentId: completedPatientAppointment._id.toString(),
-        followUpDate: getFixedDate(20, 1, 0), // 2025-12-20 08:00 VN
+        followUpDate: getFixedDate(20, 1, 0), // 2026-12-20 08:00 VN
         followUpNote: 'Tái khám sau 1 tuần',
         actingDoctorId: DB_IDS.doctor1,
         serviceId: DB_IDS.examination
@@ -226,7 +226,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
     it('should create follow-up for walk-in customer', async () => {
       const result = await appointmentService.createFollowUpAppointment({
         originalAppointmentId: completedWalkInAppointment._id.toString(),
-        followUpDate: getFixedDate(20, 2, 0), // 2025-12-20 09:00 VN
+        followUpDate: getFixedDate(20, 2, 0), // 2026-12-20 09:00 VN
         followUpNote: 'Kiểm tra lại sau điều trị',
         actingDoctorId: DB_IDS.doctor1,
         serviceId: DB_IDS.examination // Use Examination, not Consultation
@@ -251,7 +251,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
       // For this test, we use the same service ID twice to demonstrate array handling
       const result = await appointmentService.createFollowUpAppointment({
         originalAppointmentId: completedPatientAppointment._id.toString(),
-        followUpDate: getFixedDate(20, 3, 0), // 2025-12-20 10:00 VN
+        followUpDate: getFixedDate(20, 3, 0), // 2026-12-20 10:00 VN
         followUpNote: 'Điều trị bổ sung - nhiều dịch vụ',
         actingDoctorId: DB_IDS.doctor1,
         serviceIds: [DB_IDS.examination] // Only Examination services allowed
@@ -276,7 +276,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
       
       const result = await appointmentService.createFollowUpAppointment({
         originalAppointmentId: completedPatientAppointment._id.toString(),
-        followUpDate: getFixedDate(21, 1, 0), // 2025-12-21 08:00 VN
+        followUpDate: getFixedDate(21, 1, 0), // 2026-12-21 08:00 VN
         followUpNote: customNote,
         actingDoctorId: DB_IDS.doctor1
       });
@@ -380,8 +380,8 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
       // Create appointment without service
       const noServiceTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-18T03:00:00.000Z'),
-        endTime: new Date('2025-12-18T03:10:00.000Z'),
+        startTime: new Date('2026-12-18T03:00:00.000Z'),
+        endTime: new Date('2026-12-18T03:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -438,7 +438,7 @@ describe('createFollowUpAppointment - Follow-up Appointment Creation', () => {
   describe('FTC13 - Time Slot Already Booked', () => {
     it('should throw error when time slot conflicts with existing appointment', async () => {
       // Create a conflicting appointment first
-      const conflictTime = getFixedDate(22, 1, 0); // 2025-12-22 08:00 VN
+      const conflictTime = getFixedDate(22, 1, 0); // 2026-12-22 08:00 VN
       
       const conflictTimeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,

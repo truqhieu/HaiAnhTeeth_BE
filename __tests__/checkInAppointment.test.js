@@ -30,8 +30,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-06T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-10T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-06T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-10T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -66,8 +66,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     it('should check-in approved appointment successfully', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T01:00:00.000Z'),
-        endTime: new Date('2025-12-06T01:10:00.000Z'),
+        startTime: new Date('2026-12-06T01:00:00.000Z'),
+        endTime: new Date('2026-12-06T01:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -108,8 +108,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     it('should allow check-in from No-Show status', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T02:00:00.000Z'),
-        endTime: new Date('2025-12-06T02:10:00.000Z'),
+        startTime: new Date('2026-12-06T02:00:00.000Z'),
+        endTime: new Date('2026-12-06T02:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -154,8 +154,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     it('should throw error when checking in pending appointment', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T03:00:00.000Z'),
-        endTime: new Date('2025-12-06T03:10:00.000Z'),
+        startTime: new Date('2026-12-06T03:00:00.000Z'),
+        endTime: new Date('2026-12-06T03:10:00.000Z'),
         status: 'Reserved'
       });
       
@@ -188,8 +188,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     it('should throw error when appointment already checked in', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T04:00:00.000Z'),
-        endTime: new Date('2025-12-06T04:10:00.000Z'),
+        startTime: new Date('2026-12-06T04:00:00.000Z'),
+        endTime: new Date('2026-12-06T04:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -288,8 +288,8 @@ describe('checkInAppointment - Appointment Check-In', () => {
     it('should throw error when checking in completed appointment', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T06:00:00.000Z'),
-        endTime: new Date('2025-12-06T06:10:00.000Z'),
+        startTime: new Date('2026-12-06T06:00:00.000Z'),
+        endTime: new Date('2026-12-06T06:10:00.000Z'),
         status: 'Booked'
       });
       

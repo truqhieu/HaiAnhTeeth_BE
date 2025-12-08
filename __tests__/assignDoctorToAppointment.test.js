@@ -61,7 +61,7 @@ describe('assignDoctorToAppointment - Doctor Assignment Flow', () => {
   });
 
   const getFixedDate = (day = 20, hour = 10, minute = 0) => {
-    const date = new Date('2025-12-' + day.toString().padStart(2, '0'));
+    const date = new Date('2026-12-' + day.toString().padStart(2, '0'));
     date.setUTCHours(hour, minute, 0, 0);
     return date;
   };

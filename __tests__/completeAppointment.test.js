@@ -32,8 +32,8 @@ describe('completeAppointment - Appointment Completion', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-06T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-10T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-06T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-10T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -76,8 +76,8 @@ describe('completeAppointment - Appointment Completion', () => {
     it('should complete in-progress appointment successfully', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T01:00:00.000Z'),
-        endTime: new Date('2025-12-06T01:10:00.000Z'),
+        startTime: new Date('2026-12-06T01:00:00.000Z'),
+        endTime: new Date('2026-12-06T01:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -133,8 +133,8 @@ describe('completeAppointment - Appointment Completion', () => {
     it('should transition from CheckedIn to InProgress', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T02:00:00.000Z'),
-        endTime: new Date('2025-12-06T02:10:00.000Z'),
+        startTime: new Date('2026-12-06T02:00:00.000Z'),
+        endTime: new Date('2026-12-06T02:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -180,8 +180,8 @@ describe('completeAppointment - Appointment Completion', () => {
     it('should allow completing directly from CheckedIn status', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T03:00:00.000Z'),
-        endTime: new Date('2025-12-06T03:10:00.000Z'),
+        startTime: new Date('2026-12-06T03:00:00.000Z'),
+        endTime: new Date('2026-12-06T03:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -221,8 +221,8 @@ describe('completeAppointment - Appointment Completion', () => {
     it('should throw error when starting from Approved', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T04:00:00.000Z'),
-        endTime: new Date('2025-12-06T04:10:00.000Z'),
+        startTime: new Date('2026-12-06T04:00:00.000Z'),
+        endTime: new Date('2026-12-06T04:10:00.000Z'),
         status: 'Booked'
       });
       
@@ -319,8 +319,8 @@ describe('completeAppointment - Appointment Completion', () => {
     it('should throw error when appointment already completed', async () => {
       const timeslot = await Timeslot.create({
         doctorUserId: DB_IDS.doctor1,
-        startTime: new Date('2025-12-06T06:00:00.000Z'),
-        endTime: new Date('2025-12-06T06:10:00.000Z'),
+        startTime: new Date('2026-12-06T06:00:00.000Z'),
+        endTime: new Date('2026-12-06T06:10:00.000Z'),
         status: 'Booked'
       });
       

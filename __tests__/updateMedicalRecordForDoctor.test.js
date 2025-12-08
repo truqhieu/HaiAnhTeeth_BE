@@ -38,8 +38,8 @@ describe('updateMedicalRecordForDoctor - Medical Record Updates', () => {
     console.log('✅ Connected to MongoDB');
     
     // Clean up test data
-    const testDateStart = new Date('2025-12-25T00:00:00.000Z');
-    const testDateEnd = new Date('2025-12-30T00:00:00.000Z');
+    const testDateStart = new Date('2026-12-25T00:00:00.000Z');
+    const testDateEnd = new Date('2026-12-30T00:00:00.000Z');
     
     await Appointment.deleteMany({
       createdAt: { $gte: testDateStart, $lt: testDateEnd }
@@ -58,8 +58,8 @@ describe('updateMedicalRecordForDoctor - Medical Record Updates', () => {
     // 1. Normal Appointment with Draft Medical Record
     const normalTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T01:00:00.000Z'),
-      endTime: new Date('2025-12-25T01:10:00.000Z'),
+      startTime: new Date('2026-12-25T01:00:00.000Z'),
+      endTime: new Date('2026-12-25T01:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -94,8 +94,8 @@ describe('updateMedicalRecordForDoctor - Medical Record Updates', () => {
     // 2. Completed Appointment
     const completedTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor1,
-      startTime: new Date('2025-12-25T02:00:00.000Z'),
-      endTime: new Date('2025-12-25T02:10:00.000Z'),
+      startTime: new Date('2026-12-25T02:00:00.000Z'),
+      endTime: new Date('2026-12-25T02:10:00.000Z'),
       status: 'Booked'
     });
     
@@ -132,8 +132,8 @@ describe('updateMedicalRecordForDoctor - Medical Record Updates', () => {
     // 3. Different Doctor Appointment
     const differentDoctorTimeslot = await Timeslot.create({
       doctorUserId: DB_IDS.doctor2,
-      startTime: new Date('2025-12-25T03:00:00.000Z'),
-      endTime: new Date('2025-12-25T03:10:00.000Z'),
+      startTime: new Date('2026-12-25T03:00:00.000Z'),
+      endTime: new Date('2026-12-25T03:10:00.000Z'),
       status: 'Booked'
     });
     
