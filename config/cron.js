@@ -1,58 +1,93 @@
-// cron/jobs.cron.js
 const cron = require('node-cron');
 const Promotion = require('../models/promotion.model');
 const PromotionService = require('../models/promotionService.model')
 const Appointment = require('../models/appointment.model');
 const appointmentService = require('../services/appointment.service');
 const leaveRequestService = require('../services/leaveRequest.service');
+const LeaveRequest = require('../models/leaveRequest.model');
 
-// ===== 1️⃣ Cron auto check date promotion =====
-cron.schedule('* * * * *', async () => {  // chạy mỗi phút
+function getTodayVN() {
+    const now = new Date();
+    const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    return vnTime.toISOString().slice(0, 10);
+}
+
+
+
+// ===== ✅ CRON PROMOTION - EXPIRED THEO NGÀY VN =====
+cron.schedule('* * * * *', async () => {
     try {
-        const now = new Date();
-        // Expire promotion
+        const todayVN = getTodayVN();
+        console.log('⏰ [CRON PROMO] todayVN =', todayVN);
+
+        // 1️⃣ EXPIRED
         const expired = await Promotion.updateMany(
-            { endDate: { $lt: now }, status: { $ne: 'Expired' } },
+            {
+                status: { $ne: 'Expired' },
+                $expr: {
+                    $lt: [
+                        { $dateToString: { format: "%Y-%m-%d", date: "$endDate" } },
+                        todayVN
+                    ]
+                }
+            },
             { $set: { status: 'Expired' } }
         );
 
-
-        const expiredList = await Promotion.find({ endDate: { $lt: now } });
-        const expiredIds = expiredList.map(p => p._id);
-        // Xóa tất cả promotionService của các promotion hết hạn
-        // const deleteExpiredService = await PromotionService.deleteMany({
-        // promotionId: { $in: expiredIds }
-        // });
-
-
-
-        // Active promotion
+        // 2️⃣ ACTIVE
         const active = await Promotion.updateMany(
             {
-            startDate : { $lte : now },
-            endDate : { $gt : now },
-            status :  {$ne : 'Active' }
+                status: { $ne: 'Active' },
+                $expr: {
+                    $and: [
+                        {
+                            $lte: [
+                                { $dateToString: { format: "%Y-%m-%d", date: "$startDate" } },
+                                todayVN
+                            ]
+                        },
+                        {
+                            $gte: [
+                                { $dateToString: { format: "%Y-%m-%d", date: "$endDate" } },
+                                todayVN
+                            ]
+                        }
+                    ]
+                }
             },
-            {$set : { status : 'Active' }}
+            { $set: { status: 'Active' } }
         );
 
-        // Upcoming
+        // 3️⃣ UPCOMING
         const upcoming = await Promotion.updateMany(
-            {startDate : { $gt : now }, status :  { $ne : 'Upcoming' }},
-            {$set : { status : 'Upcoming' }}
-        )
+            {
+                status: { $ne: 'Upcoming' },
+                $expr: {
+                    $gt: [
+                        { $dateToString: { format: "%Y-%m-%d", date: "$startDate" } },
+                        todayVN
+                    ]
+                }
+            },
+            { $set: { status: 'Upcoming' } }
+        );
 
-        // Check
-        if (expired.modifiedCount > 0) console.log(`✅ Cập nhật ${expired.modifiedCount} khuyến mãi hết hạn.`);
-        if (active.modifiedCount > 0) console.log(`✅ Cập nhật ${active.modifiedCount} khuyến mãi đang diễn ra.`);
-        if (upcoming.modifiedCount > 0) console.log(`✅ Cập nhật ${upcoming.modifiedCount} khuyến mãi sắp tới.`);
+        if (expired.modifiedCount > 0)
+            console.log(`✅ ${expired.modifiedCount} → Expired`);
+        if (active.modifiedCount > 0)
+            console.log(`✅ ${active.modifiedCount} → Active`);
+        if (upcoming.modifiedCount > 0)
+            console.log(`✅ ${upcoming.modifiedCount} → Upcoming`);
 
-    } catch (error) {
-        console.error('❌ Lỗi khi cập nhật khuyến mãi:', error);
+    } catch (err) {
+        console.error('❌ [CRON PROMOTION] error:', err.message);
     }
-}, {
-    timezone: "Asia/Ho_Chi_Minh"
 });
+
+
+
+
+
 
 // ===== 2️⃣ Cron auto confirm doctor assignment =====
 cron.schedule('0 * * * *', async () => {  // chạy mỗi giờ
@@ -91,3 +126,38 @@ cron.schedule('0 0 * * *', async () => {  // chạy mỗi ngày lúc 00:00
 }, {
     timezone: "Asia/Ho_Chi_Minh"
 });
+
+
+// ===== ✅ CRON LEAVE REQUEST - PENDING → EXPIRED THEO NGÀY VN =====
+cron.schedule('* * * * *', async () => {
+    try {
+        const todayVN = getTodayVN();
+        console.log('⏰ [CRON LEAVE] todayVN =', todayVN);
+
+        const expiredLeave = await LeaveRequest.updateMany(
+            {
+                status: 'Pending',
+                $expr: {
+                    $lt: [
+                        { $dateToString: { format: "%Y-%m-%d", date: "$endDate" } },
+                        todayVN
+                    ]
+                }
+            },
+            { $set: { status: 'Expired' } }
+        );
+
+        console.log('🔍 [CRON LEAVE] expiredLeave =', expiredLeave);
+
+        if (expiredLeave.modifiedCount > 0) {
+            console.log(`✅ [CRON] ${expiredLeave.modifiedCount} leave request → Expired`);
+        }
+
+    } catch (err) {
+        console.error('❌ [CRON LEAVE] error:', err.message);
+    }
+});
+
+
+
+
