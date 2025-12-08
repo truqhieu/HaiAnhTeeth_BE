@@ -29,12 +29,12 @@ class EmailService {
   }
 
   createVerificationLink(token, email, baseUrl) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     return `${frontendUrl}/verify-email?token=${token}&email=${email}`;
   }
 
   createResetPasswordLink(token, email, baseUrl) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     return `${frontendUrl}/reset-password?token=${token}&email=${email}`;
   }
 
