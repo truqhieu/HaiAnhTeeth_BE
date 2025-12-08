@@ -297,7 +297,7 @@ class ServiceService {
       // Double check thời gian (đảm bảo chắc chắn)
       const isActive = now >= promo.startDate && now <= promo.endDate;
       if (!isActive || promo.status === 'Expired') continue;
-      
+
       let finalPrice = service.price;
       if (promo.discountType === 'Percent') {
         finalPrice = service.price * (1 - promo.discountValue / 100);
@@ -529,13 +529,13 @@ class ServiceService {
   /**
    * Xóa service
    */
-  // async deleteService(id) {
-  //   const service = await Service.findByIdAndDelete(id);
-  //   if (!service) {
-  //     throw new Error('Không tìm thấy dịch vụ để xóa');
-  //   }
-  //   return true;
-  // }
+  async deleteService(id) {
+    const service = await Service.findByIdAndDelete(id);
+    if (!service) {
+      throw new Error('Không tìm thấy dịch vụ để xóa');
+    }
+    return true;
+  }
 }
 
 module.exports = new ServiceService();

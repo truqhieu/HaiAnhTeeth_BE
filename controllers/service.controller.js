@@ -66,9 +66,9 @@ const getAllServices = async (req, res) => {
 
 const getDiscountedServices = async (req, res) => {
   try {
-    const { 
+    const {
       status,
-      page = 1, 
+      page = 1,
       limit = 15,
       search,
       category,
@@ -119,18 +119,18 @@ const getDiscountedServiceDetail = async (req, res) => {
 const viewDetailService = async (req, res) => {
   try {
     const detailService = await serviceService.getServiceById(req.params.id);
-        res.status(200).json({
+    res.status(200).json({
       success: true,
       message: 'Chi tiết dịch vụ',
       data: detailService
     });
-    } catch (error) {
-        console.error('Lỗi xem chi tiết dịch vụ', error);
+  } catch (error) {
+    console.error('Lỗi xem chi tiết dịch vụ', error);
     return res.status(400).json({
       success: false,
       message: error.message || 'Đã xảy ra lỗi khi xem chi tiết dịch vụ'
     });
-    }
+  }
 };
 
 const updateService = async (req, res) => {
@@ -161,28 +161,28 @@ const updateService = async (req, res) => {
   }
 };
 
-// const deleteService = async (req, res) => {
-//   try {
-//     await serviceService.deleteService(req.params.id);
-//         res.status(200).json({
-//       status: true,
-//       message: 'Xóa dịch vụ thành công.'
-//     });
-//     } catch (error) {
-//         console.error('Lỗi xóa dịch vụ', error);
-//     return res.status(500).json({
-//       success: false,
-//       message: error.message || 'Đã xảy ra lỗi khi xóa dịch vụ'
-//     });
-//     }
-// };
+const deleteService = async (req, res) => {
+  try {
+    await serviceService.deleteService(req.params.id);
+    res.status(200).json({
+      status: true,
+      message: 'Xóa dịch vụ thành công.'
+    });
+  } catch (error) {
+    console.error('Lỗi xóa dịch vụ', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Đã xảy ra lỗi khi xóa dịch vụ'
+    });
+  }
+};
 
 module.exports = {
-createService,
-getAllServices,
-viewDetailService,
-getDiscountedServiceDetail,
-getDiscountedServices,
-updateService,
-// deleteService
+  createService,
+  getAllServices,
+  viewDetailService,
+  getDiscountedServiceDetail,
+  getDiscountedServices,
+  updateService,
+  deleteService
 };

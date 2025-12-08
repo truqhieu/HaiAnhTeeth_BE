@@ -571,7 +571,7 @@ const updateProfile = async (req, res) => {
 
   } catch (error) {
     console.error('Lỗi cập nhật profile:', error);
-    res.status(500).json({ success: false, message: 'Lỗi server. Vui lòng thử lại sau' });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
