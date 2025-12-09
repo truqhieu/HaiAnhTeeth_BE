@@ -115,10 +115,12 @@ const listTitle = async (req, res) => {
   try {
     const policies = await policyService.listTitle();
 
+    const result = [...policies, { title: 'Other' }]
+
     res.status(200).json({
       success: true,
-      message: `Tìm thấy ${policies.length} chính sách`,
-      data: policies
+      message: `Danh sách chính sách`,
+      data: result
     });
   } catch (error) {
     console.error('Lỗi lấy danh sách chính sách:', error);
