@@ -593,7 +593,7 @@ class AIBookingLangchainService {
             success: false,
             found: false,
             message: `Không tìm thấy bác sĩ "${doctorName}".`,
-            suggestions: availableDoctors.slice(0, 5).map(d => ({
+            suggestions: availableDoctors.map(d => ({
               id: d._id.toString(),
               name: d.fullName,
               specialization: d.specialization || '',
@@ -1603,6 +1603,8 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       shouldShowServices: false,
       shouldShowSlots: false,
       shouldShowDoctors: false,  // ⭐ NEW: Flag to show doctor list
+      shouldShowPrepaidServices: false, // ⭐ NEW Case 45: Flag to show only prepaid services
+      prepaidServicesResult: null, // ⭐ NEW Case 45: Store prepaid services list
       timeDetected: false,
       timeValue: null,
       isOneShotPrompt: false, // ⭐ FIX Case 6: Track one-shot prompts
@@ -1854,6 +1856,35 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
     }
     } // Close else block for isDoctorListQuery
     
+    // ⭐ NEW Case 45: Detect if user is ASKING about PREPAID services specifically
+    // Patterns: "dịch vụ nào cần thanh toán trước", "dịch vụ nào phải thanh toán trước", "dịch vụ prepaid"
+    const isPrepaidServiceQuery = /(dịch\s*vụ\s+nào\s+.*thanh\s*toán\s+trước|dịch\s*vụ\s+nào\s+.*trả\s*tiền\s+trước|dịch\s*vụ\s+.*prepaid|prepaid\s+.*service)/iu.test(userPrompt);
+    
+    if (isPrepaidServiceQuery) {
+      console.log('🔍 [Pre-process] Detected PREPAID service query, will show only prepaid services');
+      try {
+        // Call get_services() to fetch all active services
+        const allServicesResult = await tools[0].func({}); // get_services with no filters
+        const allServices = JSON.parse(allServicesResult);
+        
+        if (allServices.success && allServices.services) {
+          // Filter to only include prepaid services
+          const prepaidServices = allServices.services.filter(s => s.isPrepaid === true);
+          
+          console.log(`✅ [Pre-process] Found ${prepaidServices.length} prepaid services out of ${allServices.services.length} total services`);
+          
+          results.shouldShowPrepaidServices = true;
+          results.prepaidServicesResult = {
+            success: true,
+            services: prepaidServices,
+            count: prepaidServices.length
+          };
+        }
+      } catch (error) {
+        console.error('❌ [Pre-process] Error fetching prepaid services:', error);
+      }
+      // Don't process other service patterns
+    } else {
     // ⭐ NEW: Detect if user is ASKING about service list (not selecting a specific service)
     // Patterns: "có những dịch vụ nào", "danh sách dịch vụ", "hiện có dịch vụ", "cho tôi xem các dịch vụ"
     const isServiceListQuery = /(có\s+những\s+dịch\s*vụ\s+nào|danh\s*sách\s+dịch\s*vụ|hiện\s+có\s+.*dịch\s*vụ|cho\s+tôi\s+xem\s+.*dịch\s*vụ|các\s+dịch\s*vụ\s+nào|dịch\s*vụ\s+nào\s+(đang|hiện))/iu.test(userPrompt);
@@ -1914,6 +1945,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       }
     }
     } // Close else block for isServiceListQuery
+    } // Close else block for isPrepaidServiceQuery
     
     // Detect time input (when we have doctor + date but no time, or in one-shot)
     // ⭐ FIX: Allow time detection even if serviceId is missing, as long as we have doctor and date (either in context or just detected)
@@ -2324,20 +2356,20 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         this.updateConversationContext(patientUserId, { needsSpecificDayOfWeek: true });
       }
       
-      if (!context.date && !context.needsSpecificDayOfWeek && !context.rejectedPastDate) {
+      if (!context.date && !context.needsSpecificDayOfWeek) {
         const todayStr = DateHelper.getTodayVN();
         const tomorrowStr = DateHelper.getTomorrowVN();
         const dayAfterTomorrowStr = DateHelper.getDayAfterTomorrowVN();
         
         if (lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai')) {
-          this.updateConversationContext(patientUserId, { date: tomorrowStr });
-          console.log(`📅 [LangChain] Parsed date: "ngày mai" → ${tomorrowStr}`);
+          this.updateConversationContext(patientUserId, { date: tomorrowStr, rejectedPastDate: false });
+          console.log(`📅 [LangChain] Parsed date: "ngày mai" → ${tomorrowStr}, cleared rejectedPastDate flag`);
         } else if (lowerPrompt.includes('hôm nay') || lowerPrompt.includes('nay')) {
-          this.updateConversationContext(patientUserId, { date: todayStr });
-          console.log(`📅 [LangChain] Parsed date: "hôm nay" → ${todayStr}`);
+          this.updateConversationContext(patientUserId, { date: todayStr, rejectedPastDate: false });
+          console.log(`📅 [LangChain] Parsed date: "hôm nay" → ${todayStr}, cleared rejectedPastDate flag`);
         } else if (lowerPrompt.includes('ngày kia')) {
-          this.updateConversationContext(patientUserId, { date: dayAfterTomorrowStr });
-          console.log(`📅 [LangChain] Parsed date: "ngày kia" → ${dayAfterTomorrowStr}`);
+          this.updateConversationContext(patientUserId, { date: dayAfterTomorrowStr, rejectedPastDate: false });
+          console.log(`📅 [LangChain] Parsed date: "ngày kia" → ${dayAfterTomorrowStr}, cleared rejectedPastDate flag`);
         } else {
           // ⭐ NEW: Detect specific date format (DD/MM or DD/MM/YYYY)
           const datePattern = /(ngày\s+)?(\d{1,2})\/(\d{1,2})(\/(\d{4}))?/i;
@@ -2374,9 +2406,9 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 };
               }
               
-              // Date is valid and in the future
-              this.updateConversationContext(patientUserId, { date: parsedDateStr });
-              console.log(`📅 [LangChain] Parsed date: "${day}/${month}/${year}" → ${parsedDateStr}`);
+              // Date is valid and in the future - clear rejectedPastDate flag
+              this.updateConversationContext(patientUserId, { date: parsedDateStr, rejectedPastDate: false });
+              console.log(`📅 [LangChain] Parsed date: "${day}/${month}/${year}" → ${parsedDateStr}, cleared rejectedPastDate flag`);
             } else {
               console.log(`⚠️ [LangChain] Invalid date: ${day}/${month}/${year}`);
             }
@@ -2398,6 +2430,50 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         this.updateConversationContext(patientUserId, { 
           requestedServiceName: preProcessedData.requestedServiceName 
         });
+      }
+      
+      // ⭐ NEW Case 45: Early return for prepaid service query
+      if (preProcessedData.shouldShowPrepaidServices && preProcessedData.prepaidServicesResult) {
+        console.log('💳 [Early Return] Prepaid service query detected, showing filtered list');
+        
+        const prepaidServicesData = preProcessedData.prepaidServicesResult;
+        
+        if (prepaidServicesData.success && prepaidServicesData.services && prepaidServicesData.services.length > 0) {
+          // Format the response with service details
+          let prepaidServiceResponse = `Các dịch vụ cần thanh toán trước tại phòng khám:\n\n`;
+          
+          prepaidServicesData.services.forEach((service, idx) => {
+            const priceFormatted = new Intl.NumberFormat('vi-VN').format(service.price);
+            prepaidServiceResponse += `${idx + 1}. ${service.name} - ${priceFormatted}đ (${service.durationMinutes} phút)\n`;
+          });
+          
+          prepaidServiceResponse += `\nTất cả các dịch vụ trên yêu cầu thanh toán trước khi đặt lịch. Bạn muốn đặt lịch cho dịch vụ nào?`;
+          
+          return {
+            success: true,
+            response: prepaidServiceResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: prepaidServiceResponse },
+            ],
+            needsMoreInfo: true
+          };
+        } else {
+          // No prepaid services found
+          const noPrepaidResponse = 'Hiện tại không có dịch vụ nào yêu cầu thanh toán trước. Tất cả các dịch vụ khác có thể thanh toán sau khi hoàn thành.';
+          
+          return {
+            success: true,
+            response: noPrepaidResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: noPrepaidResponse },
+            ],
+            needsMoreInfo: true
+          };
+        }
       }
       
       // ⭐ NEW: Early return if needsSpecificDayOfWeek flag is set
@@ -3187,14 +3263,18 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 serviceId: updatedContext.serviceId,
               });
               const slots = JSON.parse(slotsResult);
-              if (slots.success) {
+              if (slots.success && slots.scheduleRanges && slots.scheduleRanges.length > 0) {
                 finalResponse += `\n\nKhung giờ khả dụng của ${newDoctorName} ngày ${updatedContext.date}:`;
-                if (slots.morning && slots.morning.length > 0) {
-                  finalResponse += `\n- Buổi sáng: ${slots.workingHours.morningStart} - ${slots.workingHours.morningEnd}`;
+                
+                // Extract morning and afternoon display ranges from scheduleRanges
+                for (const range of slots.scheduleRanges) {
+                  if (range.shift === 'Morning' && range.displayRange) {
+                    finalResponse += `\n- ${range.shiftDisplay || 'Buổi sáng'}: ${range.displayRange}`;
+                  } else if (range.shift === 'Afternoon' && range.displayRange) {
+                    finalResponse += `\n- ${range.shiftDisplay || 'Buổi chiều'}: ${range.displayRange}`;
+                  }
                 }
-                if (slots.afternoon && slots.afternoon.length > 0) {
-                  finalResponse += `\n- Buổi chiều: ${slots.workingHours.afternoonStart} - ${slots.workingHours.afternoonEnd}`;
-                }
+                
                 finalResponse += '\n\nBạn muốn chọn giờ nào?';
               }
             } catch (e) {

@@ -90,6 +90,11 @@ console.log('🔔 Khởi động Appointment Monitor...');
 appointmentMonitor.startMonitoring(60); // Check mỗi 60 phút (1 giờ)
 console.log('');
 
+// ⭐ THÊM: Khởi động Auto No-Show Job (auto-mark appointments as No-Show at midnight)
+const autoNoShowJob = require('./jobs/autoNoShowJob');
+autoNoShowJob();
+console.log('');
+
 
 // Routes
 app.get('/', (req, res) => {

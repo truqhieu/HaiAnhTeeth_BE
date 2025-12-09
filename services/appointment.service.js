@@ -2112,6 +2112,8 @@ class AppointmentService {
 
   /**
    * Hủy appointment
+   * - Nếu là Consultation (tư vấn online): trả về requiresConfirmation=true + policies
+   * - Nếu là Examination (khám trực tiếp): hủy trực tiếp
    */
   async cancelAppointment({ appointmentId, userId, cancelReason, bankInfo = null }) {
     try {
@@ -2119,7 +2121,10 @@ class AppointmentService {
       console.log(`   - Type: ${typeof appointmentId}`);
       console.log(`   - Value: ${appointmentId}`);
 
-      const appointment = await Appointment.findById(appointmentId);
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('serviceId', 'serviceName price')
+        .populate('paymentId', 'status amount');
+        
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
       }
@@ -2130,6 +2135,59 @@ class AppointmentService {
         throw new Error('Lịch hẹn này không thể hủy được');
       }
 
+      // ⭐ Kiểm tra type: Consultation cần confirmation, Examination hủy trực tiếp
+      if (appointment.type === 'Consultation' && appointment.mode === 'Online') {
+        // ⭐ Trả về requiresConfirmation=true + policies để frontend hiển thị modal
+        console.log('📋 Consultation appointment - yêu cầu xác nhận hủy với policies');
+        
+        // ⭐ Lấy policies từ database với title "Chính sách không hoàn tiền"
+        const Policy = require('../models/policy.model');
+        let policies = [];
+        
+        try {
+          const dbPolicies = await Policy.getPoliciesByType('Chính sách không hoàn tiền');
+          policies = dbPolicies.map(policy => ({
+            _id: policy._id.toString(),
+            title: policy.title,
+            description: policy.description,
+            active: policy.active,
+            status: policy.status,
+            createdAt: policy.createdAt,
+            updatedAt: policy.updatedAt
+          }));
+          console.log(`✅ Đã lấy ${policies.length} policies từ database`);
+        } catch (policyError) {
+          console.error('⚠️ Lỗi lấy policies từ database:', policyError);
+          // Fallback: sử dụng policy mặc định nếu không lấy được từ DB
+          policies.push({
+            _id: 'fallback',
+            title: 'Lưu ý',
+            description: 'Sau khi hủy, bạn có thể đặt lịch tư vấn mới bất kỳ lúc nào.',
+            active: true,
+            status: 'Active',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+        }
+
+        return {
+          success: true,
+          requiresConfirmation: true,
+          data: {
+            appointmentId: appointment._id,
+            type: appointment.type,
+            mode: appointment.mode,
+            serviceName: appointment.serviceId?.serviceName,
+            paymentStatus: appointment.paymentId?.status,
+            paymentAmount: appointment.paymentId?.amount,
+            policies
+          }
+        };
+      }
+
+      // ⭐ Examination hoặc FollowUp: Hủy trực tiếp (không cần confirmation)
+      console.log('🏥 Examination/FollowUp appointment - hủy trực tiếp');
+      
       // Cập nhật thông tin hủy
       appointment.status = 'Cancelled';
       appointment.cancelReason = cancelReason || 'Người dùng hủy lịch hẹn';
@@ -2181,6 +2239,7 @@ class AppointmentService {
 
       return {
         success: true,
+        requiresConfirmation: false,
         message: 'Hủy lịch hẹn thành công',
         data: {
           appointmentId: appointment._id,

@@ -1127,23 +1127,26 @@ class AvailableSlotService {
     let userSelfBookedSlots = [];
     let userOtherBookedSlots = [];
     if (patientUserId) {
+      // ⭐ FIX: Query tất cả appointments của patient, sau đó filter theo ngày
+      // KHÔNG dùng populate match vì nó không filter appointments, chỉ filter timeslot
       const patientAppointments = await Appointment.find({
         patientUserId: patientUserId,
         status: { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress'] },
         timeslotId: { $exists: true }
       }).populate({
         path: 'timeslotId',
-        select: 'startTime endTime doctorUserId',
-        match: {
-          startTime: {
-            $gte: new Date(searchDate.getTime()),
-            $lt: new Date(searchDate.getTime() + 24 * 60 * 60 * 1000)
-          }
-        }
+        select: 'startTime endTime doctorUserId'
       });
 
+      // ⭐ Filter appointments theo ngày AFTER populate
       const userAppointmentsWithSlots = patientAppointments
-        .filter(apt => apt.timeslotId)
+        .filter(apt => {
+          if (!apt.timeslotId) return false;
+          const slotDate = new Date(apt.timeslotId.startTime);
+          const slotDateStr = slotDate.toISOString().split('T')[0];
+          const searchDateStr = searchDate.toISOString().split('T')[0];
+          return slotDateStr === searchDateStr;
+        })
         .map(apt => ({
           start: new Date(apt.timeslotId.startTime),
           end: new Date(apt.timeslotId.endTime),
@@ -1319,8 +1322,11 @@ class AvailableSlotService {
           slotsToExclude = [...userSelfBookedSlots, ...sameDoctorOtherSlots];
           console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (self: ${userSelfBookedSlots.length}, other doctor matches: ${sameDoctorOtherSlots.length})`);
         } else if (appointmentFor === 'other') {
-          slotsToExclude = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
-          console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (CHỈ bác sĩ ${currentDoctorId} - appointmentFor=other):`);
+          // ⭐ Khi đặt cho người thân: Exclude slots của BẢN THÂN + NGƯỜI THÂN KHÁC với CÙNG bác sĩ
+          const sameDoctorSelfSlots = userSelfBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          const sameDoctorOtherSlots = userOtherBookedSlots.filter(slot => slot.doctorId === currentDoctorId);
+          slotsToExclude = [...sameDoctorSelfSlots, ...sameDoctorOtherSlots];
+          console.log(`\n🔴 [Doctor ${doctor.fullName}] EXCLUDING USER BOOKED SLOTS (appointmentFor=other):`);
           console.log(`   - Total user slots: ${userOtherBookedSlots.length}, Excluding: ${slotsToExclude.length}`);
         }
 
@@ -2369,16 +2375,46 @@ class AvailableSlotService {
           const aptEndDisplay = `${String(aptEndVN).padStart(2, '0')}:${String(aptEnd.getUTCMinutes()).padStart(2, '0')}`;
 
           // Case 1: User đã có appointment cho BẢN THÂN vào giờ này
-          // ⭐ CHỈ kiểm tra conflict nếu CÙNG bác sĩ (cho phép đặt cùng giờ với bác sĩ khác)
           if (apt.appointmentFor === 'self') {
-            // Kiểm tra xem có cùng bác sĩ không
-            if (apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId) {
+            console.log(`🔍 [validateAppointmentTime] Found self-appointment at ${aptStartDisplay}-${aptEndDisplay}, current request appointmentFor: ${appointmentFor}`);
+            // ⭐ Kiểm tra appointmentFor của REQUEST hiện tại
+            if (appointmentFor === 'self') {
+              console.log(`❌ [validateAppointmentTime] Blocking: Booking for SELF, conflict with self-appointment with ANY doctor`);
+              // Đang đặt cho BẢN THÂN → KHÔNG cho phép đặt trùng giờ với BẤT KỲ bác sĩ nào
+              // ⭐ Lấy thông tin bác sĩ của appointment hiện tại để hiển thị trong error message
+              const aptDoctorId = apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null;
+              let aptDoctorName = 'một bác sĩ khác';
+              
+              // Nếu có doctorUserId, lấy tên bác sĩ
+              if (aptDoctorId) {
+                try {
+                  const aptDoctor = await User.findById(aptDoctorId).select('fullName');
+                  if (aptDoctor) {
+                    aptDoctorName = `bác sĩ ${aptDoctor.fullName}`;
+                  }
+                } catch (err) {
+                  console.error('Error fetching doctor name:', err);
+                }
+              }
+              
               throw new Error(
-                `Bạn đã có lịch khám cho bản thân với bác sĩ này vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
+                `Bạn đã có lịch khám vào ${aptStartDisplay} - ${aptEndDisplay} với ${aptDoctorName}. ` +
                 `Vui lòng chọn thời gian khác.`
               );
+            } else if (appointmentFor === 'other') {
+              console.log(`🔍 [validateAppointmentTime] Booking for OTHER, checking if SAME doctor...`);
+              // Đang đặt cho NGƯỜI THÂN → CHỈ check conflict nếu CÙNG bác sĩ
+              if (apt.timeslotId.doctorUserId && apt.timeslotId.doctorUserId.toString() === doctorUserId) {
+                console.log(`❌ [validateAppointmentTime] Blocking: SAME doctor (${doctorUserId}), conflict with self-appointment`);
+                throw new Error(
+                  `Bạn đã có lịch khám cho bản thân với bác sĩ này vào ${aptStartDisplay} - ${aptEndDisplay}. ` +
+                  `Vui lòng chọn bác sĩ khác hoặc thời gian khác.`
+                );
+              } else {
+                console.log(`✅ [validateAppointmentTime] Allowing: DIFFERENT doctor, no conflict`);
+              }
+              // ⭐ Nếu khác bác sĩ → cho phép (không throw error)
             }
-            // ⭐ Nếu khác bác sĩ → cho phép (không throw error)
           }
 
           // Case 2: User đã đặt cho NGƯỜI THÂN vào giờ này

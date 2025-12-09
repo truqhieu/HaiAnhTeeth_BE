@@ -558,10 +558,10 @@ const updateAppointmentStatus = async (req, res) => {
       });
     }
 
-    if (!['CheckedIn', 'InProgress', 'Completed', 'Cancelled', 'No-Show'].includes(status)) {
+    if (!['Approved', 'CheckedIn', 'InProgress', 'Completed', 'Cancelled', 'No-Show'].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận: CheckedIn, InProgress, Completed, Cancelled, No-Show'
+        message: 'Trạng thái không hợp lệ. Chỉ chấp nhận: Approved, CheckedIn, InProgress, Completed, Cancelled, No-Show'
       });
     }
 

@@ -449,7 +449,7 @@ const getDoctorScheduleRangeForFollowUp = async (req, res) => {
  */
 const validateAppointmentTime = async (req, res) => {
   try {
-    const { doctorUserId, serviceId, date, startTime } = req.query;
+    const { doctorUserId, serviceId, date, startTime, appointmentFor, customerFullName, customerEmail } = req.query;
 
     // Validation
     if (!doctorUserId || !serviceId || !date || !startTime) {
@@ -477,13 +477,25 @@ const validateAppointmentTime = async (req, res) => {
 
     // Lấy patientUserId từ req.user (nếu đã login)
     const patientUserId = req.user?.userId || null;
+    
+    // ⭐ Normalize appointmentFor và customer info
+    const appointmentForValue = appointmentFor || 'self';
+    const normalizedCustomerFullName = appointmentForValue === 'other' && customerFullName
+      ? decodeURIComponent(customerFullName)
+      : null;
+    const normalizedCustomerEmail = appointmentForValue === 'other' && customerEmail
+      ? decodeURIComponent(customerEmail)
+      : null;
 
     const result = await availableSlotService.validateAppointmentTime({
       doctorUserId,
       serviceId,
       date: searchDate,
       startTime: slotStart,
-      patientUserId
+      patientUserId,
+      appointmentFor: appointmentForValue,
+      customerFullName: normalizedCustomerFullName,
+      customerEmail: normalizedCustomerEmail
     });
 
     res.status(200).json({
