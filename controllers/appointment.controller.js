@@ -504,10 +504,36 @@ const getMyAppointments = async (req, res) => {
       }
     );
     
+    // ⭐ Check for pending requests (reschedule/change doctor) for each appointment
+    const PatientRequest = require('../models/patientRequest.model');
+    const appointmentIds = appointments.map(apt => apt._id);
+    
+    const pendingRequests = await PatientRequest.find({
+      appointmentId: { $in: appointmentIds },
+      status: 'Pending'
+    }).select('appointmentId requestType');
+    
+    // Create a map of appointmentId -> pending request types
+    const pendingRequestMap = {};
+    pendingRequests.forEach(req => {
+      const aptId = req.appointmentId.toString();
+      if (!pendingRequestMap[aptId]) {
+        pendingRequestMap[aptId] = [];
+      }
+      pendingRequestMap[aptId].push(req.requestType);
+    });
+    
+    // Add pending request info to each appointment
+    const appointmentsWithPendingInfo = appointments.map(apt => ({
+      ...apt.toObject ? apt.toObject() : apt,
+      hasPendingReschedule: pendingRequestMap[apt._id?.toString()]?.includes('Reschedule') || false,
+      hasPendingChangeDoctor: pendingRequestMap[apt._id?.toString()]?.includes('ChangeDoctor') || false
+    }));
+    
     return res.status(200).json({
       success: true,
       message: 'Lấy danh sách lịch hẹn của bạn thành công',
-      data: appointments
+      data: appointmentsWithPendingInfo
     });
 
   } catch (error) {
@@ -871,7 +897,7 @@ const requestReschedule = async (req, res) => {
     if (existingRequest) {
       return res.status(400).json({
         success: false,
-        message: 'Đã có yêu cầu đổi lịch đang chờ xử lý'
+        message: 'Vui lòng chờ staff duyệt đơn đổi lịch hẹn của bạn trước khi gửi yêu cầu mới'
       });
     }
 
@@ -1060,16 +1086,35 @@ const requestReschedule = async (req, res) => {
     }
 
     // Tạo timeslot với status "Reserved" để tránh xung đột
+      // ⭐ CRITICAL FIX: Phải set reservedUntil để tránh bị cleanup ngay lập tức
+      // Timeslot này sẽ được giữ cho đến khi PatientRequest được approve/reject
+      const reservedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 ngày
+      
       reservedTimeslot = await Timeslot.create({
       doctorUserId: appointment.doctorUserId._id,
       serviceId: appointment.serviceId._id,
       startTime: newStart,
       endTime: newEnd,
         status: 'Reserved',
-        reservedByUserId: userId
+        reservedByUserId: userId,
+        reservedUntil: reservedUntil // ⭐ CRITICAL: Prevent immediate cleanup
     });
 
       console.log('✅ Created new reserved timeslot:', reservedTimeslot._id);
+      console.log('   - Doctor:', appointment.doctorUserId._id);
+      console.log('   - Service:', appointment.serviceId._id);
+      console.log('   - Start:', newStart.toISOString());
+      console.log('   - End:', newEnd.toISOString());
+      console.log('   - Status:', reservedTimeslot.status);
+      console.log('   - Reserved by:', userId);
+      
+      // ⭐ Verify timeslot was saved to database
+      const verifyTimeslot = await Timeslot.findById(reservedTimeslot._id);
+      if (verifyTimeslot) {
+        console.log('✅ Timeslot verified in database:', verifyTimeslot._id);
+      } else {
+        console.error('❌ ERROR: Timeslot NOT found in database after creation!');
+      }
     }
 
     // Tạo PatientRequest
@@ -1180,7 +1225,7 @@ const requestChangeDoctor = async (req, res) => {
     if (existingRequest) {
       return res.status(400).json({
         success: false,
-        message: 'Đã có yêu cầu đổi bác sĩ đang chờ xử lý'
+        message: 'Vui lòng chờ staff duyệt đơn đổi bác sĩ của bạn trước khi gửi yêu cầu mới'
       });
     }
 
@@ -1243,18 +1288,30 @@ const requestChangeDoctor = async (req, res) => {
     if (existingTimeslot) {
       return res.status(400).json({
         success: false,
-        message: 'Bác sĩ mới đã có khung giờ này được đặt hoặc đang chờ xử lý'
+      message: 'Bác sĩ mới đã có khung giờ này được đặt hoặc đang chờ xử lý'
       });
     }
 
     // Tạo timeslot với status "Reserved" cho bác sĩ mới
+    // ⭐ CRITICAL FIX: Phải set reservedUntil và reservedByUserId để tránh bị cleanup ngay lập tức
+    // Timeslot này sẽ được giữ cho đến khi PatientRequest được approve/reject
+    const reservedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 ngày
+    
     const reservedTimeslot = await Timeslot.create({
       doctorUserId: newDoctorUserId,
       serviceId: appointment.serviceId._id,
       startTime: currentStartTime,
       endTime: currentEndTime,
-      status: 'Reserved'
+      status: 'Reserved',
+      reservedByUserId: userId, // ⭐ CRITICAL: Track who reserved this slot
+      reservedUntil: reservedUntil // ⭐ CRITICAL: Prevent immediate cleanup
     });
+
+    console.log('✅ Created reserved timeslot for new doctor:', reservedTimeslot._id);
+    console.log('   - New Doctor:', newDoctorUserId);
+    console.log('   - Start:', currentStartTime.toISOString());
+    console.log('   - End:', currentEndTime.toISOString());
+    console.log('   - Reserved until:', reservedUntil.toISOString());
 
     // Tạo PatientRequest
     const request = new PatientRequest({

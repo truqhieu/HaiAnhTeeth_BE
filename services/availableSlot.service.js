@@ -1614,8 +1614,7 @@ class AvailableSlotService {
       status: { $in: ['Reserved', 'Booked'] }
     }).populate('appointmentId', 'timeslotId');
 
-    // ⭐ GIẢM LOG: Comment lại để giảm spam log
-    // console.log(`🔍 [getDoctorScheduleRange] Found ${allTimeslots.length} timeslots (Reserved/Booked) for doctor ${doctorUserId} on ${searchDate.toISOString().split('T')[0]}`);
+    console.log(`🔍 [getDoctorScheduleRange] Found ${allTimeslots.length} timeslots (Reserved/Booked) for doctor ${doctorUserId} on ${searchDate.toISOString().split('T')[0]}`);
 
     const nowForReservation = new Date();
     const activeTimeslots = [];
@@ -1822,7 +1821,13 @@ class AvailableSlotService {
     }
 
     // Gộp tất cả booked slots (doctor + user) và merge các slots có overlap
-    const allBookedSlotsFinal = [...uniqueBookedSlots, ...userBookedSlots];
+    // ⭐ CRITICAL FIX: Đảm bảo TẤT CẢ timeslots Reserved/Booked đều được exclude
+    // KHÔNG exclude user's own timeslots vì chúng có thể là từ PatientRequest pending
+    const allBookedSlotsFinal = [...uniqueBookedSlots];
+    
+    // ⭐ CHỈ thêm user's appointments vào exclude list, KHÔNG thêm user's reserved timeslots
+    // vì reserved timeslots đã được include trong uniqueBookedSlots rồi
+    allBookedSlotsFinal.push(...userBookedSlots);
 
     // ⭐ FIX: Merge các slots có overlap thay vì chỉ loại bỏ exact duplicates
     // Sắp xếp theo start time trước
@@ -1852,13 +1857,12 @@ class AvailableSlotService {
 
     const bookedSlots = finalUniqueBookedSlots.sort((a, b) => a.start - b.start);
 
-    // ⭐ GIẢM LOG: Comment lại để giảm spam log
-    // console.log(`🔍 [getDoctorScheduleRange] Total unique booked slots (doctor + user): ${bookedSlots.length}`);
-    // bookedSlots.forEach((slot, idx) => {
-    //   const vnStart = new Date(slot.start.getTime() + 7 * 60 * 60 * 1000);
-    //   const vnEnd = new Date(slot.end.getTime() + 7 * 60 * 60 * 1000);
-    //   console.log(`   - Slot ${idx + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
-    // });
+    console.log(`🔍 [getDoctorScheduleRange] Total unique booked slots (doctor + user): ${bookedSlots.length}`);
+    bookedSlots.forEach((slot, idx) => {
+      const vnStart = new Date(slot.start.getTime() + 7 * 60 * 60 * 1000);
+      const vnEnd = new Date(slot.end.getTime() + 7 * 60 * 60 * 1000);
+      console.log(`   - Slot ${idx + 1}: ${vnStart.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${vnEnd.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
+    });
 
     // Helper function - Convert UTC sang giờ VN (UTC+7)
     const formatTime = (date) => {
