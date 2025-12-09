@@ -165,6 +165,73 @@ class AIBookingLangchainService {
   }
 
   /**
+   * ⭐ NEW: Helper method to get active doctors (excluding those on leave)
+   * Used by find_service_by_name to show doctor list after service selection
+   */
+  async _getActiveDoctorsNotOnLeave() {
+    try {
+      console.log('🔍 [_getActiveDoctorsNotOnLeave] Fetching active doctors...');
+      
+      // Get all doctors with Active status
+      const doctors = await User.find({ role: 'Doctor', status: 'Active' })
+        .select('_id fullName specialization')
+        .sort({ fullName: 1 })
+        .lean();
+      
+      console.log(`📋 [_getActiveDoctorsNotOnLeave] Found ${doctors.length} doctors with Active status`);
+      
+      // Filter by working hours
+      const doctorModels = await Doctor.find({
+        doctorUserId: { $in: doctors.map(d => d._id) }
+      }).select('doctorUserId workingHours').lean();
+      
+      const hasCompleteWorkingHours = (workingHours) => {
+        if (!workingHours || typeof workingHours !== 'object') return false;
+        const hasMorning = workingHours.morningStart && workingHours.morningEnd;
+        const hasAfternoon = workingHours.afternoonStart && workingHours.afternoonEnd;
+        return hasMorning || hasAfternoon;
+      };
+      
+      const doctorWorkingHoursMap = new Map();
+      doctorModels.forEach(doc => {
+        doctorWorkingHoursMap.set(doc.doctorUserId.toString(), doc.workingHours);
+      });
+      
+      // Filter doctors with working hours
+      const doctorsWithWorkingHours = doctors.filter(doctor => {
+        const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
+        return hasCompleteWorkingHours(workingHours);
+      });
+      
+      console.log(`📋 [_getActiveDoctorsNotOnLeave] ${doctorsWithWorkingHours.length} doctors have working hours`);
+      
+      // ⭐ Filter out doctors on leave (use current date to check)
+      const today = new Date();
+      today.setHours(12, 0, 0, 0); // Noon to check leave status
+      
+      const activeDoctorsNotOnLeave = [];
+      for (const doctor of doctorsWithWorkingHours) {
+        const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, today);
+        if (!isOnLeave) {
+          activeDoctorsNotOnLeave.push({
+            id: doctor._id.toString(),
+            name: doctor.fullName,
+            specialization: doctor.specialization || '',
+          });
+        } else {
+          console.log(`⚠️ [_getActiveDoctorsNotOnLeave] Doctor ${doctor.fullName} is on leave - EXCLUDED`);
+        }
+      }
+      
+      console.log(`✅ [_getActiveDoctorsNotOnLeave] Final result: ${activeDoctorsNotOnLeave.length} active doctors (not on leave)`);
+      return activeDoctorsNotOnLeave;
+    } catch (error) {
+      console.error('❌ [_getActiveDoctorsNotOnLeave] Error:', error);
+      return []; // Return empty array on error
+    }
+  }
+
+  /**
    * Create LangChain tools from the existing function implementations
    */
   createTools(patientUserId) {
@@ -224,7 +291,10 @@ class AIBookingLangchainService {
       name: 'find_service_by_name',
       description: `Tìm dịch vụ theo tên (fuzzy matching).
       GỌI TOOL NÀY KHI: Người dùng nhắc đến tên dịch vụ cụ thể (ví dụ: "làm sạch răng", "khám tổng quát").
-      SAU KHI GỌI: Nếu found=true → Lưu serviceId và tiếp tục. Nếu multiple=true → Hiển thị danh sách cho user chọn.`,
+      SAU KHI GỌI: 
+      - Nếu found=true → Lưu serviceId, CONFIRM dịch vụ đã chọn, HIỂN THỊ danh sách bác sĩ đang hoạt động, và HỎI người dùng chọn bác sĩ.
+      - Nếu multiple=true → Hiển thị danh sách dịch vụ cho user chọn.
+      ⭐ QUAN TRỌNG: Tool này sẽ TỰ ĐỘNG trả về danh sách bác sĩ đang hoạt động (không nghỉ phép).`,
       schema: z.object({
         serviceName: z.string().describe('Tên dịch vụ hoặc từ khóa'),
         category: z.string().optional().describe('Category để filter'),
@@ -247,6 +317,10 @@ class AIBookingLangchainService {
 
           if (service) {
             this.updateConversationContext(patientUserId, { serviceId: service._id.toString() });
+            
+            // ⭐ NEW: Fetch active doctors (excluding those on leave)
+            const activeDoctors = await this._getActiveDoctorsNotOnLeave();
+            
             const result = {
               success: true,
               found: true,
@@ -255,8 +329,10 @@ class AIBookingLangchainService {
                 name: service.serviceName,
                 durationMinutes: service.durationMinutes,
               },
+              activeDoctors: activeDoctors, // ⭐ NEW: Include doctor list
+              showDoctorList: true, // ⭐ NEW: Flag to tell AI to show doctors
             };
-            console.log('✅ [Tool] find_service_by_name result:', result);
+            console.log(`✅ [Tool] find_service_by_name result: service found, ${activeDoctors.length} active doctors`);
             return JSON.stringify(result);
           }
 
@@ -268,6 +344,10 @@ class AIBookingLangchainService {
 
           if (services.length === 1) {
             this.updateConversationContext(patientUserId, { serviceId: services[0]._id.toString() });
+            
+            // ⭐ NEW: Fetch active doctors (excluding those on leave)
+            const activeDoctors = await this._getActiveDoctorsNotOnLeave();
+            
             const result = {
               success: true,
               found: true,
@@ -276,8 +356,10 @@ class AIBookingLangchainService {
                 name: services[0].serviceName,
                 durationMinutes: services[0].durationMinutes,
               },
+              activeDoctors: activeDoctors, // ⭐ NEW: Include doctor list
+              showDoctorList: true, // ⭐ NEW: Flag to tell AI to show doctors
             };
-            console.log('✅ [Tool] find_service_by_name result (partial match):', result);
+            console.log(`✅ [Tool] find_service_by_name result (partial match): service found, ${activeDoctors.length} active doctors`);
             return JSON.stringify(result);
           } else if (services.length > 1) {
             const result = {
@@ -308,6 +390,7 @@ class AIBookingLangchainService {
         }
       },
     });
+
 
     // Tool 3: Get Doctors
     const getDoctorsTool = new DynamicStructuredTool({
@@ -766,6 +849,7 @@ class AIBookingLangchainService {
             afternoon: afternoonSlots.length > 0 ? { slots: afternoonSlots, isFull: false } : null,
             morningDisplay, // ⭐ Pre-formatted string for agent to use
             afternoonDisplay, // ⭐ Pre-formatted string for agent to use
+            scheduleRanges: scheduleResult.scheduleRanges, // ⭐ FIX: Pass through scheduleRanges for fallback code to use NEW format
             bookedTimeslots: bookedTimeslots // ⭐ Return booked slots for reference
           });
         } catch (error) {
@@ -1474,16 +1558,95 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       serviceResult: null,
       shouldShowServices: false,
       shouldShowSlots: false,
+      shouldShowDoctors: false,  // ⭐ NEW: Flag to show doctor list
       timeDetected: false,
       timeValue: null,
       isOneShotPrompt: false, // ⭐ FIX Case 6: Track one-shot prompts
       doctorChanged: false,    // ⭐ FIX Case 1: Track doctor changes
+      needsSpecificDayOfWeek: false, // ⭐ NEW: Flag when user says "tuần sau" without specific day
     };
+    
+    // ⭐ NEW: Detect "tuần sau" without specific day of week
+    // Pattern: "tuần sau" OR "tuần tới" WITHOUT "thứ X" in the same sentence
+    const hasNextWeekGeneral = /(tuần\s+sau|tuần\s+tới|mỗi\s+tuần\s+sau|mỗi\s+tuần\s+tới)/i.test(userPrompt);
+    const hasSpecificDayOfWeek = /(thứ\s+[2-8]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật)/i.test(userPrompt);
+    
+    // ⭐ NEW: Parse specific day of week to calculate date
+    if (hasSpecificDayOfWeek) {
+      console.log('🗓️ [Pre-process] Detected specific day of week, calculating date...');
+      
+      // Map Vietnamese day names to day numbers (Monday = 1, Sunday = 0)
+      const dayMap = {
+        'thứ 2': 1, 'thứ hai': 1,
+        'thứ 3': 2, 'thứ ba': 2,
+        'thứ 4': 3, 'thứ tư': 3,
+        'thứ 5': 4, 'thứ năm': 4,
+        'thứ 6': 5, 'thứ sáu': 5,
+        'thứ 7': 6, 'thứ bảy': 6,
+        'thứ 8': 0, 'chủ nhật': 0, // Sunday
+      };
+      
+      let targetDayOfWeek = null;
+      const lowerPrompt = userPrompt.toLowerCase();
+      
+      // Find which day user mentioned
+      for (const [dayName, dayNum] of Object.entries(dayMap)) {
+        if (lowerPrompt.includes(dayName)) {
+          targetDayOfWeek = dayNum;
+          console.log(`✅ [Pre-process] Found day: ${dayName} -> ${dayNum}`);
+          break;
+        }
+      }
+      
+      if (targetDayOfWeek !== null) {
+        // Calculate the date for this day of week
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Determine if it's next week or this week
+        const isNextWeek = hasNextWeekGeneral || context.needsSpecificDayOfWeek;
+        
+        if (isNextWeek) {
+          // Calculate Monday of next week first
+          const currentDayOfWeek = today.getDay(); // 0=Sunday, 1=Monday, ..., 6=Saturday
+          const daysUntilNextMonday = currentDayOfWeek === 0 ? 1 : (8 - currentDayOfWeek);
+          
+          const nextMonday = new Date(today);
+          nextMonday.setDate(today.getDate() + daysUntilNextMonday);
+          
+          // Then calculate the target day from next Monday
+          const targetDate = new Date(nextMonday);
+          const daysFromMonday = targetDayOfWeek === 0 ? 6 : (targetDayOfWeek - 1); // Monday=0, ..., Sunday=6
+          targetDate.setDate(nextMonday.getDate() + daysFromMonday);
+          
+          const dateStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
+          
+          console.log(`✅ [Pre-process] Calculated date for next week: ${dateStr}`);
+          
+          // Update context with calculated date
+          this.updateConversationContext(patientUserId, { 
+            date: dateStr,
+            needsSpecificDayOfWeek: false // Clear the flag since we now have the date
+          });
+          
+          // Don't set needsSpecificDayOfWeek flag since we already have the date
+          results.needsSpecificDayOfWeek = false;
+          results.parsedDate = dateStr;
+        }
+      }
+    } else if (hasNextWeekGeneral && !hasSpecificDayOfWeek) {
+      console.log('⚠️ [Pre-process] User said "tuần sau" without specific day, will ask for day of week');
+      results.needsSpecificDayOfWeek = true;
+      // Don't parse date yet, need to ask user which day they want
+      // Also store in context so next message knows to parse day of week
+      this.updateConversationContext(patientUserId, { needsSpecificDayOfWeek: true });
+    }
     
     // ⭐ FIX Case 6: Detect one-shot prompts (all info provided at once)
     // Count how many entities are in this single prompt
     const hasDoctor = /bác\s*sĩ\s+[a-zA-ZÀ-ỹ]+|bs\s+[a-zA-ZÀ-ỹ]+/iu.test(userPrompt);
-    const hasService = /(làm\s*sạch|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu.test(userPrompt);
+    // ⭐ FIX: Broaden to catch more service keywords (e.g., "lấy cao răng", "cao răng", "cạo vôi")
+    const hasService = /(dịch\s*vụ|làm|khám|nhổ|bọc|tẩy|niềng|trồng|lấy|mài|gắn|cạo|vệ\s*sinh|cao)/iu.test(userPrompt);
     const hasDate = /(ngày\s+mai|hôm\s+nay|mai|nay|ngày\s+kia|\d{1,2}\/\d{1,2}(\/\d{4})?)/i.test(userPrompt);
     const hasTime = /\d{1,2}(:\d{2})?\s*(h|giờ|sáng|chiều)?/i.test(userPrompt);
     
@@ -1493,6 +1656,16 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       console.log('🎯 [Pre-process] ONE-SHOT PROMPT detected with', entityCount, 'entities');
     }
     
+    // ⭐ NEW: Detect if user is ASKING about doctor list (not selecting a specific doctor)
+    // Patterns: "có những bác sĩ nào", "danh sách bác sĩ", "hiện có bác sĩ nào", "bác sĩ nào đang làm"
+    const isDoctorListQuery = /(có\s+những\s+bác\s*sĩ\s+nào|danh\s*sách\s+bác\s*sĩ|hiện\s+có\s+.*bác\s*sĩ|bác\s*sĩ\s+nào\s+(đang|hiện))/iu.test(userPrompt);
+    
+    if (isDoctorListQuery) {
+      console.log('🔍 [Pre-process] Detected doctor list query, will show doctor list instead of searching');
+      results.shouldShowDoctors = true;
+      results.isDoctorListQuery = true;
+      // Don't process doctor name patterns below
+    } else {
     // Detect doctor mention (support Vietnamese names)
     const doctorPatterns = [
       /bác\s*sĩ\s+([a-zA-ZÀ-ỹ]+)/iu,  // Vietnamese characters
@@ -1599,15 +1772,28 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         break;
       }
     }
+    } // Close else block for isDoctorListQuery
     
+    // ⭐ NEW: Detect if user is ASKING about service list (not selecting a specific service)
+    // Patterns: "có những dịch vụ nào", "danh sách dịch vụ", "hiện có dịch vụ", "cho tôi xem các dịch vụ"
+    const isServiceListQuery = /(có\s+những\s+dịch\s*vụ\s+nào|danh\s*sách\s+dịch\s*vụ|hiện\s+có\s+.*dịch\s*vụ|cho\s+tôi\s+xem\s+.*dịch\s*vụ|các\s+dịch\s*vụ\s+nào|dịch\s*vụ\s+nào\s+(đang|hiện))/iu.test(userPrompt);
+    
+    if (isServiceListQuery) {
+      console.log('🔍 [Pre-process] Detected service list query, will show service list instead of searching');
+      results.shouldShowServices = true;
+      results.isServiceListQuery = true;
+      // Don't process service name patterns below
+    } else {
     // Detect service mention (support Vietnamese)
     const servicePatterns = [
       // Pattern 1: "dịch vụ [service name]" - stop before time keywords
       /dịch\s*vụ\s+(.+?)(?=\s+(?:vào|lúc|ngày|với)|$)/iu,
       // Pattern 2: "khám [service type]" - stop before time/doctor keywords
       /khám\s+(.+?)(?=\s+(?:với|vào|lúc|ngày)|$)/iu,
-      // Pattern 3: Match specific known services
-      /(làm\s*sạch\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|mài\s*răng|gắn\s*đinh)/iu,
+      // Pattern 3: "lấy [service type]" - catch "lấy cao răng", "lấy tủy"
+      /lấy\s+(.+?)(?=\s+(?:với|vào|lúc|ngày)|$)/iu,
+      // Pattern 4: Match specific known services
+      /(làm\s*sạch\s*răng|khám\s*tổng\s*quát|nhổ\s*răng|bọc\s*răng|tẩy\s*trắng|niềng\s*răng|trồng\s*răng|lấy\s*tủy|lấy\s*cao\s*răng|cao\s*răng|cạo\s*vôi|mài\s*răng|gắn\s*đinh)/iu,
     ];
     
     for (const pattern of servicePatterns) {
@@ -1647,6 +1833,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         break;
       }
     }
+    } // Close else block for isServiceListQuery
     
     // Detect time input (when we have doctor + date but no time, or in one-shot)
     // ⭐ FIX: Allow time detection even if serviceId is missing, as long as we have doctor and date (either in context or just detected)
@@ -1907,6 +2094,48 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       results.requestedTimePhrase = results.timeValue;
     }
     
+    // ⭐ NEW Case 43: Parse weekday names when needsSpecificDayOfWeek is set
+    if (context.needsSpecificDayOfWeek) {
+      console.log('📅 [Pre-process] needsSpecificDayOfWeek flag is set, parsing weekday name...');
+      
+      // Map weekday names to numbers (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
+      const weekdayMap = {
+        'thứ 2': 1, 'thứ hai': 1, 'thứ ２': 1, 'monday': 1, 't2': 1,
+        'thứ 3': 2, 'thứ ba': 2, 'thứ ３': 2, 'tuesday': 2, 't3': 2,
+        'thứ 4': 3, 'thứ tư': 3, 'thứ ４': 3, 'wednesday': 3, 't4': 3,
+        'thứ 5': 4, 'thứ năm': 4, 'thứ ５': 4, 'thursday': 4, 't5': 4,
+        'thứ 6': 5, 'thứ sáu': 5, 'thứ ６': 5, 'friday': 5, 't6': 5,
+        'thứ 7': 6, 'thứ bảy': 6, 'thứ ７':6, 'saturday': 6, 't7': 6,
+        'chủ nhật': 0, 'chủ nhật': 0, 'sunday': 0, 'cn': 0,
+      };
+      
+      // Try to find weekday in user prompt
+      let targetDayOfWeek = null;
+      for (const [key, value] of Object.entries(weekdayMap)) {
+        if (lowerPrompt.includes(key)) {
+          targetDayOfWeek = value;
+          console.log(`📅 [Pre-process] Parsed weekday: "${key}" → ${value}`);
+          break;
+        }
+      }
+      
+      if (targetDayOfWeek !== null) {
+        // Calculate next week's date for this weekday
+        const calculatedDate = DateHelper.getNextWeekDayVN(targetDayOfWeek);
+        console.log(`📅 [Pre-process] Calculated date for next week: ${calculatedDate}`);
+        
+        // Update context with calculated date and clear the flag
+        this.updateConversationContext(patientUserId, { 
+          date: calculatedDate,
+          needsSpecificDayOfWeek: false // Clear flag so we don't ask again
+        });
+        console.log(`✅ [Pre-process] Updated context with date=${calculatedDate}, cleared needsSpecificDayOfWeek flag`);
+      } else {
+        console.log('⚠️ [Pre-process] Could not parse weekday name from prompt, flag remains');
+        // Keep the flag so fallback will ask again
+      }
+    }
+    
     return results;
   }
 
@@ -1971,6 +2200,12 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
     console.log('🤖 [LangChain] Processing message:', userPrompt);
     console.log('📝 [LangChain] Conversation history:', conversationHistory.length, 'messages');
     console.log('🆕 [LangChain] Is new conversation:', isNewConversation);
+    
+    // ⭐ FIX Case 38: Declare payment capture variables at function start
+    // so both fallback logic AND intermediateSteps logic can access them
+    let capturedPaymentInfo = null;
+    let capturedRequirePayment = false;
+    let capturedAppointmentData = null;
     
     // ⭐ Clear context if this is a new conversation
     if (isNewConversation) {
@@ -2084,6 +2319,26 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         this.updateConversationContext(patientUserId, { 
           requestedServiceName: preProcessedData.requestedServiceName 
         });
+      }
+      
+      // ⭐ NEW: Early return if needsSpecificDayOfWeek flag is set
+      // MUST ask for specific day BEFORE proceeding to agent
+      if (preProcessedData.needsSpecificDayOfWeek || context.needsSpecificDayOfWeek) {
+        console.log('🗓️ [Early Return] needsSpecificDayOfWeek flag detected, asking which day');
+        
+        const askDayResponse = 'Bạn muốn đặt lịch vào thứ mấy trong tuần sau?\n\n';
+        const askDayResponse2 = 'Ví dụ: "thứ 2", "thứ 3", "thứ 4", "thứ 5", "thứ 6", "thứ 7", hoặc "chủ nhật"';
+        
+        return {
+          success: true,
+          response: askDayResponse + askDayResponse2,
+          conversationHistory: [
+            ...conversationHistory,
+            { role: 'user', content: userPrompt },
+            { role: 'assistant', content: askDayResponse + askDayResponse2 },
+          ],
+          needsMoreInfo: true
+        };
       }
       
       // Create prompt
@@ -2408,6 +2663,115 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           } catch (error) {
             console.error('❌ [Fallback] Error handling find doctor by time:', error);
             finalResponse = 'Xin lỗi, có lỗi xảy ra khi tìm bác sĩ rảnh. Vui lòng thử lại.';
+          }
+        }
+
+        // ⭐ NEW: Handle "tuần sau" without specific day - Ask which day
+        if (preProcessedData.needsSpecificDayOfWeek || context.needsSpecificDayOfWeek) {
+          console.log('🗓️ [Fallback] User said "tuần sau" without specific day, asking which day');
+          
+          finalResponse = 'Bạn muốn đặt lịch vào thứ mấy trong tuần sau?\n\n';
+          finalResponse += 'Ví dụ: "thứ 2", "thứ 3", "thứ 4", "thứ 5", "thứ 6", "thứ 7", hoặc "chủ nhật"';
+          
+          // Return immediately
+          return {
+            success: true,
+            response: finalResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: finalResponse },
+            ],
+            needsMoreInfo: true
+          };
+        }
+
+        // ⭐ NEW: Handle doctor list query ("Hiện có những bác sĩ nào")
+        if (preProcessedData.isDoctorListQuery || preProcessedData.shouldShowDoctors) {
+          console.log('🔍 [Fallback] User asked for doctor list, showing all active doctors');
+          
+          try {
+            // ⭐ NEW: Parse date from prompt if user asks "có bác sĩ nào vào [date]"
+            let requestedDate = null;
+            const lowerPrompt = userPrompt.toLowerCase();
+            
+            if (lowerPrompt.includes('sáng mai') || lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai')) {
+              requestedDate = DateHelper.getTomorrowVN();
+              console.log(`🗓️ [Fallback] User requested tomorrow: ${requestedDate}`);
+            } else if (lowerPrompt.includes('hôm nay') || lowerPrompt.includes('nay')) {
+              requestedDate = DateHelper.getTodayVN();
+              console.log(`🗓️ [Fallback] User requested today: ${requestedDate}`);
+            }
+            
+            // Call get_doctors tool to get list of all active doctors
+            const doctorsResult = await tools[2].func({}); // get_doctors is index 2
+            const doctorsParsed = JSON.parse(doctorsResult);
+            
+            if (doctorsParsed.success && doctorsParsed.doctors && doctorsParsed.doctors.length > 0) {
+              let availableDoctors = doctorsParsed.doctors;
+              
+              // ⭐ NEW: Filter out doctors on leave if date is specified
+              if (requestedDate) {
+                console.log(`🔍 [Fallback] Filtering doctors on leave for date: ${requestedDate}`);
+                const checkDate = new Date(requestedDate);
+                checkDate.setHours(12, 0, 0, 0); // Set to noon to avoid timezone issues
+                
+                const filteredDoctors = [];
+                for (const doctor of doctorsParsed.doctors) {
+                  try {
+                    const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor.id, checkDate);
+                    if (!isOnLeave) {
+                      filteredDoctors.push(doctor);
+                    } else {
+                      console.log(`⚠️ [Fallback] Doctor ${doctor.name} is on leave on ${requestedDate}, excluding from list`);
+                    }
+                  } catch (e) {
+                    console.error(`❌ [Fallback] Error checking leave for doctor ${doctor.id}:`, e);
+                    // Include doctor if error checking leave status
+                    filteredDoctors.push(doctor);
+                  }
+                }
+                availableDoctors = filteredDoctors;
+                console.log(`✅ [Fallback] Filtered to ${availableDoctors.length}/${doctorsParsed.doctors.length} available doctors`);
+              }
+              
+              if (availableDoctors.length > 0) {
+                if (requestedDate) {
+                  finalResponse = `Vào ngày ${requestedDate}, hệ thống có các bác sĩ sau:\n`;
+                } else {
+                  finalResponse = 'Hiện tại hệ thống có các bác sĩ sau:\n';
+                }
+                
+                availableDoctors.forEach((doctor, idx) => {
+                  finalResponse += `\n${idx + 1}. Bác sĩ ${doctor.name}`;
+                });
+                finalResponse += '\n\nBạn muốn đặt lịch với bác sĩ nào?';
+              } else {
+                // All doctors are on leave
+                if (requestedDate) {
+                  finalResponse = `Rất tiếc, tất cả bác sĩ đều có lịch nghỉ phép vào ngày ${requestedDate}. Bạn có thể chọn ngày khác không?`;
+                } else {
+                  finalResponse = 'Hiện tại không có bác sĩ nào đang hoạt động. Vui lòng thử lại sau.';
+                }
+              }
+            } else {
+              finalResponse = 'Hiện tại không có bác sĩ nào đang hoạt động. Vui lòng thử lại sau.';
+            }
+            
+            // Return immediately
+            return {
+              success: true,
+              response: finalResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: finalResponse },
+              ],
+              needsMoreInfo: true
+            };
+          } catch (error) {
+            console.error('❌ [Fallback] Error getting doctor list:', error);
+            finalResponse = 'Xin lỗi, có lỗi xảy ra khi lấy danh sách bác sĩ. Vui lòng thử lại.';
           }
         }
 
@@ -2874,9 +3238,41 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           finalResponse = `Bạn đã chọn ${doctorName} cho dịch vụ "${serviceName}". Bạn muốn đặt lịch vào ngày nào? (Ví dụ: "ngày mai", "hôm nay", hoặc "22/11/2025")`;
         } else if ((preProcessedData.serviceCalled || toolsCalled.includes('find_service_by_name')) && 
                    updatedContext.serviceId && !updatedContext.doctorId) {
-          // ⭐ NEW: Service was just selected, but no doctor yet - ask for doctor
+          // ⭐ NEW: Service was just selected, but no doctor yet
           const serviceName = preProcessedData.serviceResult?.service?.name || 'dịch vụ bạn chọn';
-          finalResponse = `Bạn đã chọn dịch vụ "${serviceName}". Bạn muốn đặt lịch với bác sĩ nào? (Ví dụ: "bác sĩ Hải", "bác sĩ Dương")`;
+          const serviceDuration = preProcessedData.serviceResult?.service?.durationMinutes;
+          
+          // ⭐ FIX Case 42: Check if serviceResult has activeDoctors list
+          if (preProcessedData.serviceResult?.showDoctorList && 
+              preProcessedData.serviceResult?.activeDoctors &&
+              preProcessedData.serviceResult.activeDoctors.length > 0) {
+            console.log(`✅ [Fallback] Service selected with ${preProcessedData.serviceResult.activeDoctors.length} active doctors - displaying list`);
+            
+            // Format response with service confirmation + doctor list
+            finalResponse = `✅ Bạn đã chọn dịch vụ "${serviceName}"`;
+            if (serviceDuration) {
+              finalResponse += ` (${serviceDuration} phút)`;
+            }
+            finalResponse += '.';
+            
+            // Add doctor list
+            finalResponse += '\n\nBạn muốn đặt lịch với bác sĩ nào? Dưới đây là danh sách bác sĩ đang hoạt động:';
+            preProcessedData.serviceResult.activeDoctors.forEach((doctor, idx) => {
+              finalResponse += `\n${idx + 1}. ${doctor.name}`;
+              if (doctor.specialization) {
+                finalResponse += ` - ${doctor.specialization}`;
+              }
+            });
+            finalResponse += '\n\nVui lòng cho tôi biết bác sĩ bạn muốn chọn!';
+          } else {
+            // Fallback to generic message if no active doctors available
+            console.log('⚠️ [Fallback] Service selected but no activeDoctors in result - using generic message');
+            finalResponse = `Bạn đã chọn dịch vụ "${serviceName}"`;
+            if (serviceDuration) {
+              finalResponse += ` (${serviceDuration} phút)`;
+            }
+            finalResponse += '. Bạn muốn đặt lịch với bác sĩ nào? (Ví dụ: "bác sĩ Hải", "bác sĩ Dương")';
+          }
         } else if ((preProcessedData.serviceCalled || toolsCalled.includes('find_service_by_name')) && 
                    updatedContext.serviceId && updatedContext.doctorId && !updatedContext.date) {
           // ⭐ NEW: Service was just selected, but no date yet - ask for date
@@ -3015,32 +3411,23 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               serviceId: updatedContext.serviceId,
             });
             const slots = JSON.parse(slotsResult);
+            
             if (slots.success) {
               finalResponse = `Các khung giờ khả dụng ngày ${updatedContext.date}:`;
-              if (slots.morning && slots.morning.start && !slots.morning.isFull) {
-                // ⭐ Use pre-calculated gaps if available, otherwise show range
-                if (slots.morning.gaps && slots.morning.gaps.length > 0) {
-                  finalResponse += `\n- Buổi sáng: ${slots.morning.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
-                } else {
-                  finalResponse += `\n- Buổi sáng: ${slots.morning.start}-${slots.morning.end}`;
-                }
-              } else if (slots.morning && slots.morning.isFull) {
-                finalResponse += `\n- Buổi sáng: Đã hết chỗ`;
+              
+              // ⭐ Dùng morningDisplay/afternoonDisplay (đã có exclude logic từ getDoctorScheduleRange)
+              if (slots.morningDisplay) {
+                finalResponse += `\n- Buổi sáng: ${slots.morningDisplay}`;
               } else {
                 finalResponse += `\n- Buổi sáng: Đã qua thời gian làm việc`;
               }
-              if (slots.afternoon && slots.afternoon.start && !slots.afternoon.isFull) {
-                // ⭐ Use pre-calculated gaps if available, otherwise show range
-                if (slots.afternoon.gaps && slots.afternoon.gaps.length > 0) {
-                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.gaps.map(g => `${g.start}-${g.end}`).join(', ')}`;
-                } else {
-                  finalResponse += `\n- Buổi chiều: ${slots.afternoon.start}-${slots.afternoon.end}`;
-                }
-              } else if (slots.afternoon && slots.afternoon.isFull) {
-                finalResponse += `\n- Buổi chiều: Đã hết chỗ`;
-              } else if (!slots.morning || !slots.morning.start) {
+              
+              if (slots.afternoonDisplay) {
+                finalResponse += `\n- Buổi chiều: ${slots.afternoonDisplay}`;
+              } else {
                 finalResponse += `\n- Buổi chiều: Không có thời gian khả dụng`;
               }
+              
               finalResponse += '\n\nBạn muốn chọn giờ nào?';
             } else {
               finalResponse = 'Vui lòng chọn khung giờ bạn muốn đặt lịch.';
@@ -3164,6 +3551,12 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                     if (requiresPayment) {
                       // Payment required - do NOT show appointment code
                       finalResponse = `✅ Đặt lịch thành công! Vui lòng thanh toán để hoàn tất đặt lịch.\n\n📅 Thông tin lịch hẹn:\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Chờ thanh toán'}\n\nVui lòng quét mã QR để thanh toán.`;
+                      
+                      // ⭐ FIX Case 38: Save payment info to be included in response
+                      capturedRequirePayment = true;
+                      capturedPaymentInfo = appointmentResult.payment || null;
+                      capturedAppointmentData = appointmentResult.appointment || null;
+                      console.log('💳 [Fallback] Saved payment info for response:', { requirePayment: true, hasPayment: !!capturedPaymentInfo });
                     } else {
                       // No payment required - do NOT show appointment code
                       finalResponse = `✅ Đặt lịch thành công!\n\n📅 Thông tin lịch hẹn:\n- Bác sĩ: ${appt?.doctorName || 'N/A'}\n- Dịch vụ: ${appt?.serviceName || 'N/A'}\n- Ngày: ${updatedContext.date}\n- Giờ: ${selectedTime}-${endTime}\n- Trạng thái: ${appt?.status || 'Đã đặt'}\n\nChúng tôi sẽ gửi thông báo xác nhận qua email. Cảm ơn bạn!`;
@@ -3257,7 +3650,40 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             console.error('❌ [Fallback] Error showing services:', e);
             finalResponse = 'Vui lòng cho tôi biết bác sĩ và dịch vụ bạn muốn đặt.';
           }
-        } else {
+        } 
+        // ⭐ NEW Case 43: Service + Date present, but missing Doctor
+        else if (updatedContext.serviceId && updatedContext.date && !updatedContext.doctorId) {
+          console.log('🔧 [Fallback] Case 43: ServiceId + Date present, asking for doctor...');
+          
+          try {
+            // Get service name for confirmation
+            const service = await Service.findById(updatedContext.serviceId);
+            const serviceName = service?.name || 'dịch vụ bạn đã chọn';
+            
+            // Get doctors for this service
+            const doctorsResult = await tools[2].func({ 
+              serviceId: updatedContext.serviceId 
+            });
+            const doctorsParsed = JSON.parse(doctorsResult);
+            
+            if (doctorsParsed.success && doctorsParsed.doctors && doctorsParsed.doctors.length > 0) {
+              finalResponse = `Dịch vụ: ${serviceName}, Ngày: ${updatedContext.date}.\n\nDanh sách bác sĩ khả dụng:`;
+              doctorsParsed.doctors.forEach((d, idx) => {
+                finalResponse += `\n${idx + 1}. ${d.name}`;
+                if (d.specialization) {
+                  finalResponse += ` - ${d.specialization}`;
+                }
+              });
+              finalResponse += '\n\nBạn muốn chọn bác sĩ nào?';
+            } else {
+              finalResponse = `Dịch vụ: ${serviceName}, Ngày: ${updatedContext.date}.\n\nVui lòng chọn bác sĩ bạn muốn đặt lịch.`;
+            }
+          } catch (e) {
+            console.error('❌ [Fallback] Error getting doctors for Case 43:', e);
+            finalResponse = 'Vui lòng cho tôi biết bác sĩ bạn muốn đặt lịch.';
+          }
+        }
+        else {
           finalResponse = 'Vui lòng cung cấp thêm thông tin để tôi có thể giúp bạn đặt lịch. Bạn có thể cho tôi biết dịch vụ và ngày bạn muốn khám.';
         }
         
@@ -3276,11 +3702,7 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
       // Get final context state for response
       const finalContext = this.getConversationContext(patientUserId);
       
-      // ⭐ BỔ SUNG: Capture payment info from create_appointment tool (nếu có)
-      // Không ảnh hưởng logic hiện tại, chỉ thêm thông tin payment
-      let capturedPaymentInfo = null;
-      let capturedRequirePayment = false;
-      let capturedAppointmentData = null;
+      // ⭐ NOTE: Payment capture variables declared at function start (line ~2057)
       
       if (result.intermediateSteps && result.intermediateSteps.length > 0) {
         for (const step of result.intermediateSteps) {

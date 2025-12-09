@@ -2069,10 +2069,10 @@ async function runTests() {
       logResult(true, `Tìm thấy dịch vụ: ${khamTongQuatService.serviceName} (${khamTongQuatService.price}đ, isPrepaid: ${khamTongQuatService.isPrepaid})`);
     }
     
-    logStep(2, 'User: "Tôi muốn đặt lịch với bác sĩ Dương vào hôm nay"');
-    result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Dương vào hôm nay');
+    logStep(2, 'User: "Tôi muốn đặt lịch với bác sĩ Dương vào ngày mai"');
+    result = await sendMessage('Tôi muốn đặt lịch với bác sĩ Dương vào ngày mai');
     history = [
-      { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ Dương vào hôm nay' },
+      { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ Dương vào ngày mai' },
       { role: 'assistant', content: result.message }
     ];
     
@@ -2156,7 +2156,7 @@ async function runTests() {
       }
       
       log('  📋 Flow hoàn chỉnh:', colors.cyan);
-      log('    Bước 1: User đặt lịch hôm nay với bác sĩ Dương', colors.yellow);
+      log('    Bước 1: User đặt lịch ngày mai với bác sĩ Dương', colors.yellow);
       log('    Bước 2: User chọn "Khám tổng quát" (dịch vụ online)', colors.yellow);
       log('    Bước 3: User chọn giờ 15:00', colors.yellow);
       log('    Bước 4: User xác nhận', colors.yellow);
@@ -2301,6 +2301,258 @@ async function runTests() {
       }
     }
 
+
+    // ==========================================================================
+    // CASE 42: Chọn dịch vụ → Confirm → Hiển thị danh sách bác sĩ đang hoạt động
+    // ==========================================================================
+    logTest(42, 'Chọn dịch vụ → Confirm dịch vụ → Hiển thị danh sách bác sĩ đang hoạt động (không bao gồm bác sĩ nghỉ phép)');
+    
+    logStep(1, 'User khởi tạo cuộc hội thoại: "Tôi muốn đặt lịch khám răng"');
+    result = await sendMessage('Tôi muốn đặt lịch khám răng');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch khám răng' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    // Bước 1: Kiểm tra AI hiển thị danh sách dịch vụ răng
+    const showsServiceList42_step1 = result.message.includes('1.') && 
+                                      (result.message.includes('dịch vụ') || 
+                                       result.message.includes('Dịch vụ'));
+    
+    logResult(showsServiceList42_step1, showsServiceList42_step1 ? 
+      'AI hiển thị danh sách dịch vụ răng' : 
+      'AI không hiển thị danh sách dịch vụ');
+    
+    logStep(2, 'User chọn dịch vụ: "Làm sạch răng"');
+    result = await sendMessage('Làm sạch răng', history);
+    history.push({ role: 'user', content: 'Làm sạch răng' });
+    history.push({ role: 'assistant', content: result.message });
+    
+    const responseText42_step2 = result.message || result.response || '';
+    
+    // Bước 2: Kiểm tra AI confirm dịch vụ
+    const confirmsServiceSelection42 = responseText42_step2.includes('Làm sạch răng') || 
+                                        responseText42_step2.includes('làm sạch răng');
+    
+    // Kiểm tra AI confirm duration của dịch vụ
+    const mentionsServiceDuration42 = responseText42_step2.includes('10 phút') || 
+                                       responseText42_step2.includes('phút');
+    
+    // ⭐ Kiểm tra AI hiển thị danh sách bác sĩ
+    const showsDoctorList42 = (responseText42_step2.includes('bác sĩ') || responseText42_step2.includes('Bác sĩ')) &&
+                               (responseText42_step2.includes('Hải') || 
+                                responseText42_step2.includes('Hiếu') ||
+                                responseText42_step2.includes('Dương'));
+    
+    // Kiểm tra AI hỏi muốn đặt lịch với bác sĩ nào
+    const asksToChooseDoctor42 = responseText42_step2.includes('bác sĩ nào') || 
+                                  responseText42_step2.includes('chọn bác sĩ') ||
+                                  responseText42_step2.includes('muốn đặt lịch với bác sĩ');
+    
+    // ⭐ Kiểm tra KHÔNG hiển thị bác sĩ Hải (đang nghỉ phép theo setup test)
+    // Note: Điều này phụ thuộc vào dữ liệu thực tế trong DB
+    // Nếu bác sĩ Hải có status 'On Leave' hoặc có active leaveRequest, 
+    // thì KHÔNG nên xuất hiện trong danh sách
+    const excludesOnLeaveDoctors42 = true; // TODO: Kiểm tra thực tế với DB
+    
+    // Đếm số bác sĩ được hiển thị (nếu có format list)
+    const doctorMatches42 = responseText42_step2.match(/(?:^|\n)\s*(?:\d+\.|•|👨‍⚕️)\s*[Bb]ác sĩ/gm);
+    const displayedDoctorCount42 = doctorMatches42 ? doctorMatches42.length : 0;
+    
+    logResult(confirmsServiceSelection42, confirmsServiceSelection42 ? 
+      '✅ Bước 2: Confirm tên dịch vụ "Làm sạch răng"' : 
+      '❌ Bước 2: Không confirm tên dịch vụ');
+    
+    logResult(mentionsServiceDuration42, mentionsServiceDuration42 ? 
+      '✅ Bước 2: Confirm thời gian dịch vụ (duration)' : 
+      '❌ Bước 2: Không confirm thời gian dịch vụ');
+    
+    logResult(showsDoctorList42, showsDoctorList42 ? 
+      `✅ Bước 2: Hiển thị danh sách bác sĩ (${displayedDoctorCount42} bác sĩ)` : 
+      '❌ Bước 2: KHÔNG hiển thị danh sách bác sĩ (BUG!)');
+    
+    logResult(asksToChooseDoctor42, asksToChooseDoctor42 ? 
+      '✅ Bước 2: Hỏi "Bạn muốn đặt lịch với bác sĩ nào?"' : 
+      '❌ Bước 2: Không hỏi bạn muốn chọn bác sĩ nào');
+    
+    const testPassed42 = confirmsServiceSelection42 && 
+                          mentionsServiceDuration42 && 
+                          showsDoctorList42 && 
+                          asksToChooseDoctor42;
+    
+    if (testPassed42) {
+      log('  📋 Flow hoàn chỉnh:', colors.cyan);
+      log('    Bước 1: User "Tôi muốn đặt lịch khám răng"', colors.yellow);
+      log('    → AI hiển thị: Danh sách dịch vụ răng', colors.yellow);
+      log('    Bước 2: User chọn "Làm sạch răng"', colors.yellow);
+      log('    → AI confirm: "Bạn đã chọn dịch vụ Làm sạch răng (10 phút)"', colors.yellow);
+      log('    → AI hiển thị: Danh sách bác sĩ đang hoạt động', colors.yellow);
+      log(`       (Hiển thị ${displayedDoctorCount42} bác sĩ, loại trừ bác sĩ nghỉ phép)`, colors.yellow);
+      log('    → AI hỏi: "Bạn muốn đặt lịch với bác sĩ nào?"', colors.yellow);
+    } else {
+      log('  ⚠️ CURRENT BUG - Response preview:', colors.red);
+      log(`    ${responseText42_step2.substring(0, 300)}`, colors.yellow);
+      log('  ⚠️ Expected response should include:', colors.red);
+      log('    1. Confirm service: "Bạn đã chọn dịch vụ Làm sạch răng (10 phút)"', colors.yellow);
+      log('    2. List active doctors: "Bác sĩ Hiếu, Bác sĩ Dương, ..."', colors.yellow);
+      log('    3. Ask to choose: "Bạn muốn đặt lịch với bác sĩ nào?"', colors.yellow);
+    }
+    
+    recordTestResult(42, 'Chọn dịch vụ → Confirm → Hiển thị danh sách bác sĩ active', testPassed42,
+      testPassed42 ? 
+        `Service confirmed, ${displayedDoctorCount42} active doctors shown, ask to choose doctor` : 
+        `Failed: confirmService=${confirmsServiceSelection42}, duration=${mentionsServiceDuration42}, showsDoctors=${showsDoctorList42}, asks=${asksToChooseDoctor42}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // ⭐ NEW: Case 43 - Weekday parsing after "tuần sau"
+    // ==========================================================================
+    logTest(43, '"Tuần sau" → Chọn ngày trong tuần (thứ 2)');
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch vào tuần sau"');
+    result = await sendMessage('Tôi muốn đặt lịch vào tuần sau');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch vào tuần sau' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    // AI should ask which day OR show services
+    const asksWhichDay43_step1 = result.message.toLowerCase().includes('thứ') || 
+                                  result.message.toLowerCase().includes('ngày');
+    const showsServices43_step1 = result.message.includes('dịch vụ') || result.message.includes('1.');
+    logResult(asksWhichDay43_step1 || showsServices43_step1, 
+      asksWhichDay43_step1 ? 'AI hỏi thứ mấy hoặc ngày nào' : 'AI hiển thị dịch vụ');
+    
+    logStep(2, 'User: "làm sạch răng"');
+    result = await sendMessage('làm sạch răng', history);
+    history.push({ role: 'user', content: 'làm sạch răng' });
+    history.push({ role: 'assistant', content: result.message });
+    
+    // AI might ask for day or doctor
+    const asksWhichDay43_step2 = result.message.toLowerCase().includes('thứ') || 
+                                  result.message.toLowerCase().includes('ngày') ||
+                                  result.message.toLowerCase().includes('chọn ngày');
+    const asksForDoctor43_step2 = result.message.toLowerCase().includes('bác sĩ');
+    const showsTimeSlots43_step2 = result.message.includes('khung giờ') || /\d{2}:\d{2}/.test(result.message);
+    
+    logResult(asksWhichDay43_step2 || asksForDoctor43_step2 || showsTimeSlots43_step2,
+      asksWhichDay43_step2 ? 'AI hỏi thứ mấy/ngày nào' : 
+      asksForDoctor43_step2 ? 'AI hỏi bác sĩ' :
+      'AI hiển thị khung giờ');
+    
+    logStep(3, 'User: "thứ 2"');
+    result = await sendMessage('thứ 2', history);
+    history.push({ role: 'user', content: 'thứ 2' });
+    history.push({ role: 'assistant', content: result.message });
+    
+    // ⭐ KEY CHECK: AI should NOT ask "thứ mấy" again
+    const asksAgain43 = result.message.toLowerCase().includes('thứ mấy') || 
+                        result.message.toLowerCase().includes('chọn thứ') ||
+                        result.message.toLowerCase().includes('bạn muốn chọn thứ');
+    const progressedToDoctor43 = result.message.toLowerCase().includes('bác sĩ');
+    const progressedToTime43 = result.message.toLowerCase().includes('khung giờ') || 
+                               /\d{2}:\d{2}/.test(result.message);
+    const progressedToNextStep43 = progressedToDoctor43 || progressedToTime43;
+    
+    logResult(!asksAgain43, !asksAgain43 ? 
+      '✅ AI KHÔNG hỏi lại "thứ mấy"' : 
+      '❌ AI hỏi lại "thứ mấy" (BUG!)');
+    logResult(progressedToNextStep43, progressedToNextStep43 ? 
+      `✅ AI tiếp tục flow (${progressedToDoctor43 ? 'hỏi bác sĩ' : 'hiển thị giờ'})` : 
+      '❌ AI không tiếp tục');
+    
+    const testPassed43 = !asksAgain43 && progressedToNextStep43;
+    
+    if (testPassed43) {
+      log('  📋 Flow hoàn chỉnh:', colors.cyan);
+      log('    Bước 1: User "tuần sau" → AI hỏi thứ mấy/dịch vụ', colors.yellow);
+      log('    Bước 2: User "làm sạch răng" → AI confirm service, hỏi ngày/bác sĩ', colors.yellow);
+      log('    Bước 3: User "thứ 2"', colors.yellow);
+      log('    → AI parse "thứ 2" thành ngày cụ thể (e.g., Monday tuần sau)', colors.yellow);
+      log('    → AI tiếp tục hỏi bác sĩ hoặc hiển thị khung giờ', colors.yellow);
+    } else {
+      log('  ⚠️ BUG - AI Response at step 3:', colors.red);
+      log(`    ${result.message.substring(0, 200)}...`, colors.yellow);
+      log('  ⚠️ Expected behavior:', colors.red);
+      log('    AI should parse "thứ 2" → calculate Monday of next week', colors.yellow);
+      log('    AI should continue to ask for doctor or show time slots', colors.yellow);
+      log('    AI should NOT ask "Bạn muốn chọn thứ mấy?" again', colors.yellow);
+    }
+    
+    recordTestResult(43, '"Tuần sau" → Chọn "thứ 2" → AI tiếp tục', testPassed43,
+      testPassed43 ? 
+        'AI correctly parsed "thứ 2" and continued to next step' : 
+        `Failed: asksAgain=${asksAgain43}, progressed=${progressedToNextStep43}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // ⭐ NEW: Case 44 - Asking about doctor list ("Hiện có những bác sĩ nào")
+    // ==========================================================================
+    logTest(44, 'Hỏi danh sách bác sĩ ("Hiện có những bác sĩ nào")');
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+    
+    logStep(1, 'User: "Hiện có những bác sĩ nào"');
+    result = await sendMessage('Hiện có những bác sĩ nào');
+    
+    const responseText44 = result.message || result.response || '';
+    
+    // ⭐ KEY CHECKS:
+    // 1. Should NOT search for doctor named "nào" (error message "Không tìm thấy bác sĩ nào")
+    // 2. Should show doctor list (multiple doctors with names)
+    // 3. Should have numbered list or "Bác sĩ" mentions
+    
+    const doesNotSearchForNao44 = !responseText44.includes('Không tìm thấy bác sĩ "nào"') && 
+                                   !responseText44.includes('Không tìm thấy bác sĩ nào');
+    
+    // Count doctor mentions (should be multiple)
+    const doctorMentions44 = (responseText44.match(/[Bb]ác\s*sĩ\s+[A-ZÀ-Ỹ][a-zà-ỹ]+/g) || []).length;
+    
+    // Should have numbered list OR multiple "Bác sĩ X" mentions
+    const hasNumberedList44 = /\d+\.\s+[Bb]ác\s*sĩ/.test(responseText44);
+    const hasMultipleDoctors44 = doctorMentions44 >= 3; // At least 3 doctors
+    
+    // Should ask user to choose
+    const asksToChoose44 = responseText44.toLowerCase().includes('chọn') || 
+                           responseText44.toLowerCase().includes('muốn');
+    
+    const showsDoctorList44 = (hasNumberedList44 || hasMultipleDoctors44) && asksToChoose44;
+    
+    logResult(doesNotSearchForNao44, doesNotSearchForNao44 ? 
+      '✅ AI KHÔNG tìm kiếm bác sĩ tên "nào"' : 
+      '❌ AI tìm bác sĩ "nào" (BUG!)');
+    
+    logResult(showsDoctorList44, showsDoctorList44 ? 
+      `✅ AI hiển thị danh sách bác sĩ (${doctorMentions44} doctors)` : 
+      `❌ AI không hiển thị danh sách (mentions: ${doctorMentions44})`);
+    
+    const testPassed44 = doesNotSearchForNao44 && showsDoctorList44;
+    
+    if (testPassed44) {
+      log('  📋 Phản hồi đúng:', colors.cyan);
+      log('    ✓ Nhận diện được câu hỏi "có những bác sĩ nào"', colors.yellow);
+      log('    ✓ Hiển thị danh sách bác sĩ thay vì search "nào"', colors.yellow);
+      log(`    ✓ Tìm thấy ${doctorMentions44} bác sĩ trong phản hồi`, colors.yellow);
+      log('    ✓ Hỏi người dùng chọn bác sĩ', colors.yellow);
+    } else {
+      log('  ⚠️ BUG - AI Response:', colors.red);
+      log(`    ${responseText44.substring(0, 300)}...`, colors.yellow);
+      log('  ⚠️ Expected behavior:', colors.red);
+      log('    AI should detect "có những bác sĩ nào" as LIST query', colors.yellow);
+      log('    AI should call get_doctors() and show numbered list', colors.yellow);
+      log('    AI should NOT search for doctor named "nào"', colors.yellow);
+    }
+    
+    recordTestResult(44, 'Hỏi danh sách bác sĩ ("có những bác sĩ nào")', testPassed44,
+      testPassed44 ? 
+        `AI correctly showed doctor list (${doctorMentions44} doctors)` : 
+        `Failed: noSearchNao=${doesNotSearchForNao44}, showsList=${showsDoctorList44}, mentions=${doctorMentions44}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);

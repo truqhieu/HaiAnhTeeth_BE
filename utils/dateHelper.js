@@ -53,11 +53,21 @@ class DateHelper {
    * @returns {string} - "08:00"
    */
   static formatVietnameseTime(date) {
-    // Hiển thị thời gian UTC trực tiếp (không convert timezone)
-    // Vì thời gian trong DB đã được lưu theo giờ Việt Nam
+    // ⭐ CRITICAL FIX: Sử dụng Intl.DateTimeFormat với timezone Asia/Ho_Chi_Minh
+    // để hiển thị đúng giờ Việt Nam thay vì UTC
+    // Vì database lưu UTC time, cần convert sang VN time khi hiển thị
     const d = new Date(date);
-    const hours = String(d.getUTCHours()).padStart(2, '0');
-    const minutes = String(d.getUTCMinutes()).padStart(2, '0');
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    
+    const parts = formatter.formatToParts(d);
+    const hours = parts.find(p => p.type === 'hour')?.value || '00';
+    const minutes = parts.find(p => p.type === 'minute')?.value || '00';
+    
     return `${hours}:${minutes}`;
   }
 
