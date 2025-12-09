@@ -1969,15 +1969,18 @@ class AppointmentService {
 
         // ⭐ Kiểm tra: Chỉ cho phép check-in khi đã đến ngày của ca khám
         if (appointment.timeslotId && appointment.timeslotId.startTime) {
-          const appointmentDate = new Date(appointment.timeslotId.startTime);
-          const appointmentDay = new Date(appointmentDate);
-          appointmentDay.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
+          // Convert appointment date to Vietnam timezone (UTC+7)
+          const appointmentDateUTC = new Date(appointment.timeslotId.startTime);
+          const appointmentDateVN = new Date(appointmentDateUTC.getTime() + 7 * 60 * 60 * 1000);
+          appointmentDateVN.setUTCHours(0, 0, 0, 0);
 
-          const today = new Date();
-          today.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
+          // Convert current date to Vietnam timezone (UTC+7)
+          const nowUTC = new Date();
+          const todayVN = new Date(nowUTC.getTime() + 7 * 60 * 60 * 1000);
+          todayVN.setUTCHours(0, 0, 0, 0);
 
           // Nếu chưa đến ngày của ca khám, không cho phép check-in
-          if (today.getTime() < appointmentDay.getTime()) {
+          if (todayVN.getTime() < appointmentDateVN.getTime()) {
             throw new Error('Không thể check-in sớm. Chỉ có thể check-in khi đã đến ngày của ca khám.');
           }
         }
@@ -1996,15 +1999,18 @@ class AppointmentService {
 
         // ⭐ FIX: Kiểm tra: Chỉ cho phép chuyển sang InProgress khi đã đến ngày của ca khám (không cần đợi đến giờ)
         if (appointment.timeslotId && appointment.timeslotId.startTime) {
-          const appointmentDate = new Date(appointment.timeslotId.startTime);
-          const appointmentDay = new Date(appointmentDate);
-          appointmentDay.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
+          // Convert appointment date to Vietnam timezone (UTC+7)
+          const appointmentDateUTC = new Date(appointment.timeslotId.startTime);
+          const appointmentDateVN = new Date(appointmentDateUTC.getTime() + 7 * 60 * 60 * 1000);
+          appointmentDateVN.setUTCHours(0, 0, 0, 0);
 
-          const today = new Date();
-          today.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
+          // Convert current date to Vietnam timezone (UTC+7)
+          const nowUTC = new Date();
+          const todayVN = new Date(nowUTC.getTime() + 7 * 60 * 60 * 1000);
+          todayVN.setUTCHours(0, 0, 0, 0);
 
           // Nếu chưa đến ngày của ca khám, không cho phép chuyển sang InProgress
-          if (today.getTime() < appointmentDay.getTime()) {
+          if (todayVN.getTime() < appointmentDateVN.getTime()) {
             throw new Error('Không thể bắt đầu ca khám sớm. Chỉ có thể bắt đầu khi đã đến ngày của ca khám.');
           }
         }
