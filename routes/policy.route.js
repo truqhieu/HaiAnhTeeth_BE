@@ -8,6 +8,7 @@ router.get('/', policyController.getActivePolicies);
 
 // Protected routes - cần authentication (chỉ admin/manager)
 router.get('/all', verifyToken, policyController.getAllPolicies);
+router.get('/title', verifyToken, policyController.listTitle);
 router.post('/', verifyToken, policyController.createPolicy);
 router.put('/:id', verifyToken, policyController.updatePolicy);
 router.delete('/:id', verifyToken, policyController.deletePolicy);

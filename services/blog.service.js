@@ -33,7 +33,10 @@ class BlogService {
     if (!title || typeof title !== 'string' || !title.trim()) {
       throw new Error('Tiêu đề blog không được để trống');
     }
-    const cleanTitle = title.trim();
+    const cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+    if (cleanTitle.length === 0) {
+      throw new Error('Tiêu đề blog không được để trống');
+    }
     if (cleanTitle.length < 3 || cleanTitle.length > 200) {
       throw new Error('Tiêu đề blog phải từ 3 đến 200 ký tự');
     }
@@ -45,7 +48,10 @@ class BlogService {
     if (!summary || typeof summary !== 'string' || !summary.trim()) {
       throw new Error('Tóm tắt blog không được để trống');
     }
-    const cleanSummary = summary.trim();
+    const cleanSummary = summary.trim().replace(/\s{2,}/g, ' ');
+    if (cleanSummary.length === 0) {
+      throw new Error('Tóm tắt blog không được để trống');
+    }
     if (cleanSummary.length < 10) {
       throw new Error('Tóm tắt blog phải có ít nhất 10 ký tự');
     }
@@ -57,7 +63,10 @@ class BlogService {
     if (!content || typeof content !== 'string' || !content.trim()) {
       throw new Error('Nội dung blog không được để trống');
     }
-    const cleanContent = content.trim();
+    const cleanContent = content.trim().replace(/\s{2,}/g, ' ');
+    if (cleanContent.length === 0) {
+      throw new Error('Nội dung blog không được để trống');
+    }
     if (cleanContent.length < 10) {
       throw new Error('Nội dung blog phải có ít nhất 10 ký tự');
     }
@@ -329,7 +338,7 @@ class BlogService {
           throw new Error(`${FIELD_LABELS[field]} không hợp lệ`);
         }
   
-        const cleanValue = value.trim();
+        const cleanValue = value.trim().replace(/\s{2,}/g, ' ');
         if (!cleanValue) {
           throw new Error(`${FIELD_LABELS[field]} không được để trống`);
         }

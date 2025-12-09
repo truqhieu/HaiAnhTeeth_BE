@@ -15,7 +15,10 @@ class consultationInformationService {
                 throw new Error('Họ tên không được để trống');
             }
 
-            const cleanName = fullName.trim();
+            const cleanName = fullName.trim().replace(/\s{2,}/g, ' ');
+            if (cleanName.length === 0) {
+                throw new Error('Họ tên không được để trống');
+            }
 
             if (/[<>]/.test(cleanName)) {
                 throw new Error('Họ tên không được chứa ký tự < hoặc >');

@@ -19,7 +19,7 @@ class AdminService {
       throw new Error('Họ tên không được để trống');
     }
 
-    const cleanFullName = fullName.trim();
+    const cleanFullName = fullName.trim().replace(/\s{2,}/g, ' ');
 
     if (cleanFullName.length === 0) {
       throw new Error("Họ và tên không được để trống");
@@ -138,8 +138,8 @@ class AdminService {
       throw new Error('Số điện thoại phải bắt đầu bằng số 0');
     }
 
-    if (cleanPhone.length !== 10 || cleanPhone.length !== 11) {
-      throw new Error('Số điện thoại phải có đủ 10 hoặc 11 số');
+    if (cleanPhone.length !== 10) {
+      throw new Error('Số điện thoại phải có đủ 10 số');
     }
 
     // Validate address
@@ -147,7 +147,10 @@ class AdminService {
       throw new Error('Địa chỉ không được để trống');
     }
 
-    const cleanAddress = address.trim();
+    const cleanAddress = address.trim().replace(/\s{2,}/g, ' ');
+    if (cleanAddress.length === 0) {
+      throw new Error('Địa chỉ không được để trống');
+    }
 
     if (/[<>]/.test(cleanAddress)) {
       throw new Error('Địa chỉ không hợp lệ');
@@ -158,7 +161,7 @@ class AdminService {
     }
 
     // Tạo User account
-    const newAccount = new User({ fullName, email, passwordHash, dob: dobDate, address, role, phoneNumber, status: 'Active' });
+    const newAccount = new User({ fullName: cleanFullName, email, passwordHash, dob: dobDate, address: cleanAddress, role, phoneNumber, status: 'Active' });
     await newAccount.save();
 
     // Nếu role là Doctor, tạo record trong Doctor collection
@@ -328,7 +331,7 @@ class AdminService {
 
       // Validate fullName
       if (key === 'fullName') {
-        const cleanFullName = value.trim();
+        const cleanFullName = value.trim().replace(/\s{2,}/g, ' ');
         if (cleanFullName.length === 0) {
           throw new Error('Họ tên không được để trống');
         }
@@ -356,7 +359,7 @@ class AdminService {
 
       // Validate address
       if (key === 'address') {
-        const cleanAddress = value.trim();
+        const cleanAddress = value.trim().replace(/\s{2,}/g, ' ');
         if (cleanAddress.length === 0) {
           updates[key] = null;
         } else {
@@ -434,7 +437,7 @@ class AdminService {
         throw new Error('Mật khẩu không được để trống');
       }
 
-      const cleanPassword = password.trim();
+      const cleanPassword = password.trim().replace(/\s{2,}/g, ' ');
 
       if (!/^(?=.*[A-Z])(?=(?:.*\d){2,})(?=.*[!@#$%^&*()_+{}\[\]:;"'<>,.?/~`-]).+$/.test(cleanPassword)) {
         throw new Error('Mật khẩu phải chứa ít nhất 1 chữ hoa, 2 số và 1 kí tự đặc biệt');

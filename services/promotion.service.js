@@ -27,7 +27,10 @@ class PromotionService {
     if (typeof title !== 'string' || title.trim().length === 0) {
       throw new Error('Tiêu đề giảm giá không được để trống');
     }
-    const cleanTitle = title.trim();
+    const cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+    if (cleanTitle.length === 0) {
+      throw new Error('Tiêu đề giảm giá không được để trống');
+    }
     if (cleanTitle.length < 3 || cleanTitle.length > 200) {
       throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
     }
@@ -41,7 +44,10 @@ class PromotionService {
     if (typeof description !== 'string' || description.trim().length === 0) {
       throw new Error('Mô tả giảm giá không được để trống');
     }
-    const cleanDescription = description.trim();
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (cleanDescription.length === 0) {
+      throw new Error('Mô tả giảm giá không được để trống');
+    }
     if (cleanDescription.length < 10) {
       throw new Error('Mô tả phải có ít nhất 10 ký tự');
     }
@@ -352,7 +358,10 @@ class PromotionService {
       if (typeof title !== 'string' || title.trim().length === 0) {
         throw new Error('Tiêu đề không được để trống');
       }
-      cleanTitle = title.trim();
+      cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+      if (cleanTitle.length === 0) {
+        throw new Error('Tiêu đề không được để trống');
+      }
       if (cleanTitle.length < 3 || cleanTitle.length > 200) {
         throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
       }
@@ -369,7 +378,10 @@ class PromotionService {
       if (typeof description !== 'string' || description.trim().length === 0) {
         throw new Error('Mô tả không được để trống');
       }
-      cleanDescription = description.trim();
+      cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+      if (cleanDescription.length === 0) {
+        throw new Error('Mô tả không được để trống');
+      }
       if (cleanDescription.length < 10) {
         throw new Error('Mô tả phải có ít nhất 10 ký tự');
       }

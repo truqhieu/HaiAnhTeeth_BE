@@ -20,6 +20,7 @@ const availableSlotService = require('./availableSlot.service');
 const ScheduleHelper = require('../utils/scheduleHelper');
 const LeaveRequest = require('../models/leaveRequest.model');
 const mail = require('@sendgrid/mail');
+const DateHelper = require('../utils/dateHelper');
 
 const RESERVATION_HOLD_MS = 60 * 1000; // 1 minute temporary hold
 const PAST_TIME_ALLOWANCE_MS = 60 * 1000; // Allow 1 minute drift for "past" validation
@@ -2629,6 +2630,8 @@ class AppointmentService {
         // Tổng tiền
         const totalPrice = serviceList.reduce((sum, s) => sum + s.total, 0);
 
+        const dateVN = DateHelper.utcToVietnamTime(appointment.updatedAt)
+
 
         // Tạo bản ghi cho phiếu khám bệnh
         const newVisitTicket = new VisitTicket({
@@ -2639,7 +2642,7 @@ class AppointmentService {
           phoneNumber: appointment.patientUserId.phoneNumber,
           address: appointment.patientUserId.address,
           doctor: appointment.doctorUserId.fullName || '-',
-          date: appointment.updatedAt,
+          date: dateVN,
           service: serviceList,
           totalAmount: totalPrice,
           diagnosis: record.diagnosis,
@@ -2684,11 +2687,22 @@ class AppointmentService {
       }
 
       // === Tạo content toa thuốc ===
-      const prescriptionContent = visitTicketData.prescriptions?.length > 0
-        ? visitTicketData.prescriptions.map(p => [
-          { text: `- Thuốc : ${p.medicine} sử dụng ${p.dosage} ${p.duration}` },
-        ]).flat()
-        : [{ text: 'Không có toa thuốc', italics: true, color: '#888' }];
+      const prescriptionContent =
+        visitTicketData.prescriptions?.filter(p =>
+          p.medicine?.trim() || p.dosage?.trim() || p.duration?.trim()
+        ).length > 0
+          ? visitTicketData.prescriptions
+            .filter(p =>
+              p.medicine?.trim() || p.dosage?.trim() || p.duration?.trim()
+            )
+            .map(p => [
+              {
+                text: `- Thuốc: ${p.medicine || '—'} sử dụng ${p.dosage || '—'} ${p.duration || '—'}`
+              }
+            ])
+            .flat()
+          : [{ text: 'Không có toa thuốc', italics: true, color: '#888' }];
+
 
       const docDefinition = {
         pageSize: 'A4',

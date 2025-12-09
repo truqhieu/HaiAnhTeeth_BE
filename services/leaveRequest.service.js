@@ -50,7 +50,7 @@ async createLeaveRequest(userId, data) {
     throw new Error('Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu');
   }
 
-  const cleanReason = reason.trim();
+  const cleanReason = reason.trim().replace(/\s{2,}/g, ' ');
   if (cleanReason.length === 0) {
     throw new Error('Lý do nghỉ không thể để trống');
   }

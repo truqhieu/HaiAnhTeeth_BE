@@ -17,6 +17,13 @@ class PolicyService {
   }
 
   /**
+   * Lấy danh sách title của policies
+   */
+  async listTitle() {
+    return await Policy.find().select({ title: 1 });
+  }
+
+  /**
    * Tạo policy mới
    */
   async createPolicy(data) {

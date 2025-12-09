@@ -18,8 +18,15 @@ class ComplaintService {
       throw new Error('Mô tả phản ánh không được để trống');
     }
 
-    const cleanTitle = title.trim();
-    const cleanDescription = description.trim();
+    const cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+
+    if(cleanTitle.length === 0) {
+      throw new Error('Tiêu đề phản ánh không được để trống');
+    }
+    if(cleanDescription.length === 0) {
+      throw new Error('Mô tả phản ánh không được để trống');
+    }
 
     if (/[<>]/.test(cleanTitle)) {
       throw new Error('Tiêu đề phản ánh không hợp lệ.');

@@ -14,7 +14,10 @@ class ClinicService {
       throw new Error('Tên phòng khám không được để trống');
     }
 
-    const cleanName = name.trim();
+    const cleanName = name.trim().replace(/\s{2,}/g, ' ');
+    if (!cleanName) {
+      throw new Error('Tên phòng khám không được để trống');
+    }
 
     if (/[<>]/.test(cleanName)) {
       throw new Error('Tên phòng khám không được chứa ký tự < hoặc >');
@@ -35,7 +38,10 @@ class ClinicService {
       throw new Error('Mô tả phòng khám không được để trống');
     }
 
-    const cleanDescription = description.trim();
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (!cleanDescription) {
+      throw new Error('Mô tả phòng khám không được để trống');
+    }
 
     if (/[<>]/.test(cleanDescription)) {
       throw new Error('Mô tả phòng khám không được chứa ký tự < hoặc >');
@@ -164,7 +170,7 @@ class ClinicService {
       let value = data[key];
 
       if (key === 'name') {
-        const cleanName = value?.trim() || '';
+        const cleanName = value.trim().replace(/\s{2,}/g, ' ');
         if (cleanName.length === 0) {
           throw new Error('Tên phòng khám không được để trống');
         }
@@ -178,7 +184,7 @@ class ClinicService {
       }
 
       if (key === 'description') {
-        const cleanDescription = value?.trim() || '';
+        const cleanDescription = value.trim().replace(/\s{2,}/g, ' ');
         if (cleanDescription.length === 0) {
           throw new Error('Mô tả phòng khám không được để trống');
         }

@@ -12,7 +12,10 @@ class DeviceService {
       throw new Error('Tên thiết bị không được để trống');
     }
 
-    const cleanName = name.trim();
+    const cleanName = name.trim().replace(/\s{2,}/g, ' ');
+    if (cleanName.length === 0) {
+      throw new Error('Tên thiết bị không được để trống');
+    }
 
     if (/[<>]/.test(cleanName)) {
       throw new Error('Tên thiết bị không được chứa ký tự < hoặc >');
@@ -33,7 +36,10 @@ class DeviceService {
       throw new Error('Mô tả thiết bị không được để trống');
     }
 
-    const cleanDescription = description.trim();
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (cleanDescription.length === 0) {
+      throw new Error('Mô tả thiết bị không được để trống');
+    }
 
     if (/[<>]/.test(cleanDescription)) {
       throw new Error('Mô tả thiết bị không được chứa ký tự < hoặc >');
@@ -196,7 +202,11 @@ class DeviceService {
         throw new Error('Mô tả thiết bị không được để trống');
       }
 
-      const cleanDescription = description.trim();
+      const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+      if (cleanDescription.length === 0) {
+        throw new Error('Mô tả thiết bị không được để trống');
+      }
+
       if (/[<>]/.test(cleanDescription)) {
         throw new Error('Mô tả thiết bị không được chứa ký tự < hoặc >');
       }

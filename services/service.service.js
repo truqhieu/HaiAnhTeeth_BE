@@ -20,7 +20,10 @@ class ServiceService {
       throw new Error('Tên dịch vụ không được bỏ trống');
     }
 
-    const cleanServiceName = serviceName.trim();
+    const cleanServiceName = serviceName.trim().replace(/\s{2,}/g, ' ');
+    if (cleanServiceName.length === 0) {
+      throw new Error('Tên dịch vụ không được để trống');
+    }
     if (/[<>]/.test(cleanServiceName)) {
       throw new Error('Tên dịch vụ không được chứa ký tự < hoặc >');
     }
@@ -39,7 +42,10 @@ class ServiceService {
       throw new Error('Mô tả dịch vụ không được bỏ trống');
     }
 
-    const cleanDescription = description.trim();
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (cleanDescription.length === 0) {
+      throw new Error('Mô tả dịch vụ không được để trống');
+    }
     if (/[<>]/.test(cleanDescription)) {
       throw new Error('Mô tả dịch vụ không được chứa ký tự < hoặc >');
     }
@@ -425,8 +431,8 @@ class ServiceService {
 
     // Validate serviceName
     if (serviceName !== undefined) {
-      const cleanServiceName = serviceName.trim();
-      if (!cleanServiceName) {
+      const cleanServiceName = serviceName.trim().replace(/\s{2,}/g, ' ');
+      if (cleanServiceName.length === 0) {
         throw new Error('Tên dịch vụ không được bỏ trống');
       }
       if (/[<>]/.test(cleanServiceName)) {
@@ -449,8 +455,8 @@ class ServiceService {
 
     // Validate description
     if (description !== undefined) {
-      const cleanDescription = description.trim();
-      if (!cleanDescription) {
+      const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+      if (cleanDescription.length === 0) {
         throw new Error('Mô tả dịch vụ không được để trống');
       }
       if (/[<>]/.test(cleanDescription)) {

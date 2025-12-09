@@ -111,10 +111,30 @@ const deletePolicy = async (req, res) => {
   }
 };
 
+const listTitle = async (req, res) => {
+  try {
+    const policies = await policyService.listTitle();
+
+    res.status(200).json({
+      success: true,
+      message: `Tìm thấy ${policies.length} chính sách`,
+      data: policies
+    });
+  } catch (error) {
+    console.error('Lỗi lấy danh sách chính sách:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi server. Vui lòng thử lại sau',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   getActivePolicies,
   getAllPolicies,
   createPolicy,
   updatePolicy,
-  deletePolicy
+  deletePolicy,
+  listTitle
 };
