@@ -1079,31 +1079,36 @@ class AIBookingLangchainService {
         try {
           console.log(`🔧 [Tool] find_available_doctors_by_time called with: { time: ${time}, date: ${date} }`);
           
-          // ⭐ CHECK 1: Validate working hours first
           const [hour, minute] = time.split(':').map(Number);
           const requestedMinutes = hour * 60 + minute;
           
-          // Standard working hours: 08:00-12:00 (morning), 14:00-18:00 (afternoon)
-          const morningStart = 8 * 60; // 08:00
-          const morningEnd = 12 * 60;   // 12:00
-          const afternoonStart = 14 * 60; // 14:00
-          const afternoonEnd = 18 * 60;   // 18:00
+          // ⭐ CHECK 1: Reject past time (for today only)
+          // Get today's date in Vietnam timezone (YYYY-MM-DD format)
+          const todayStr = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Ho_Chi_Minh',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          }).format(new Date());
           
-          const isWithinWorkingHours = (requestedMinutes >= morningStart && requestedMinutes < morningEnd) ||
-                                        (requestedMinutes >= afternoonStart && requestedMinutes < afternoonEnd);
+          const isToday = date === todayStr;
           
-          if (!isWithinWorkingHours) {
-            console.log(`⏰ [Tool] Time ${time} is outside working hours`);
-            return JSON.stringify({
-              success: false,
-              found: false,
-              outsideWorkingHours: true,
-              message: `Khung giờ ${time} không khả dụng (ngoài giờ làm việc). Vui lòng chọn khung giờ khác.`,
-              workingHours: {
-                morning: '08:00-12:00',
-                afternoon: '14:00-18:00'
-              }
-            });
+          if (isToday) {
+            // Check if requested time has already passed
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMinute = now.getMinutes();
+            const currentMinutes = currentHour * 60 + currentMinute;
+            
+            if (requestedMinutes <= currentMinutes) {
+              console.log(`⏰ [Tool] Time ${time} has already passed (current time: ${currentHour}:${String(currentMinute).padStart(2, '0')})`);
+              return JSON.stringify({
+                success: false,
+                found: false,
+                isPastTime: true,
+                message: `Thời gian ${time} đã qua. Vui lòng chọn thời gian trong tương lai.`
+              });
+            }
           }
           
           // ⭐ CHECK 2: Get all active doctors from User model
@@ -1126,7 +1131,49 @@ class AIBookingLangchainService {
           const availableDoctors = [];
           
           for (const doctor of doctors) {
-            // Check if doctor has leave on this date using leaveRequestService
+            // ⭐ STEP 1: Check doctor's working hours from their profile
+            const doctorModel = await Doctor.findOne({ doctorUserId: doctor._id })
+              .select('workingHours')
+              .lean();
+            
+            if (!doctorModel || !doctorModel.workingHours) {
+              console.log(`⏭️ [Tool] Doctor ${doctor.fullName} has no working hours defined`);
+              continue; // Skip this doctor
+            }
+            
+            const { morningStart, morningEnd, afternoonStart, afternoonEnd } = doctorModel.workingHours;
+            
+            // Check if requested time is within doctor's working hours
+            let isWithinDoctorWorkingHours = false;
+            
+            if (morningStart && morningEnd) {
+              const [mStartH, mStartM] = morningStart.split(':').map(Number);
+              const [mEndH, mEndM] = morningEnd.split(':').map(Number);
+              const mStartMinutes = mStartH * 60 + mStartM;
+              const mEndMinutes = mEndH * 60 + mEndM;
+              
+              if (requestedMinutes >= mStartMinutes && requestedMinutes < mEndMinutes) {
+                isWithinDoctorWorkingHours = true;
+              }
+            }
+            
+            if (!isWithinDoctorWorkingHours && afternoonStart && afternoonEnd) {
+              const [aStartH, aStartM] = afternoonStart.split(':').map(Number);
+              const [aEndH, aEndM] = afternoonEnd.split(':').map(Number);
+              const aStartMinutes = aStartH * 60 + aStartM;
+              const aEndMinutes = aEndH * 60 + aEndM;
+              
+              if (requestedMinutes >= aStartMinutes && requestedMinutes < aEndMinutes) {
+                isWithinDoctorWorkingHours = true;
+              }
+            }
+            
+            if (!isWithinDoctorWorkingHours) {
+              console.log(`⏭️ [Tool] Doctor ${doctor.fullName} does not work at ${time}`);
+              continue; // Skip this doctor
+            }
+            
+            // ⭐ STEP 2: Check if doctor has leave on this date
             const hasLeave = await leaveRequestService.isDoctorOnLeave(doctor._id.toString(), date);
             
             if (hasLeave) {
@@ -1134,10 +1181,7 @@ class AIBookingLangchainService {
               continue; // Skip this doctor
             }
             
-            // Check if doctor has appointment at this time
-            const [hour, minute] = time.split(':').map(Number);
-            const requestedMinutes = hour * 60 + minute;
-            
+            // ⭐ STEP 3: Check if doctor has appointment at this time
             const appointments = await Appointment.find({
               doctorId: doctor._id,
               date: date,
@@ -1656,6 +1700,41 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
       console.log('🎯 [Pre-process] ONE-SHOT PROMPT detected with', entityCount, 'entities');
     }
     
+    // ⭐ FIX: Parse and update date in context (for "hôm nay" and "ngày mai")
+    // This must happen BEFORE time validation to ensure correct date is used
+    if (!context.date || hasDate) {
+      const todayStr = DateHelper.getTodayVN();
+      const tomorrowStr = DateHelper.getTomorrowVN();
+      const lowerInput = lowerPrompt;
+      
+      let parsedDate = null;
+      
+      // Check for "ngày mai" first (more specific)
+      if (lowerInput.includes('ngày mai') || (lowerInput.includes(' mai') && !lowerInput.includes('hôm nay'))) {
+        parsedDate = tomorrowStr;
+        console.log(`📅 [Pre-process] Detected "ngày mai" → ${parsedDate}`);
+      } 
+      // Then check for "hôm nay"
+      else if (lowerInput.includes('hôm nay')) {
+        parsedDate = todayStr;
+        console.log(`📅 [Pre-process] Detected "hôm nay" → ${parsedDate}`);
+      }
+      // Check for other date patterns (ngày kia, specific dates)
+      else if (lowerInput.includes('ngày kia')) {
+        const dayAfterTomorrow = DateHelper.getDayAfterTomorrowVN();
+        parsedDate = dayAfterTomorrow;
+        console.log(`📅 [Pre-process] Detected "ngày kia" → ${parsedDate}`);
+      }
+      
+      // Update context with parsed date
+      if (parsedDate && parsedDate !== context.date) {
+        console.log(`📝 [Pre-process] Updating context date: ${context.date} → ${parsedDate}`);
+        this.updateConversationContext(patientUserId, { date: parsedDate });
+        results.dateDetected = true;
+        results.dateValue = parsedDate;
+      }
+    }
+    
     // ⭐ NEW: Detect if user is ASKING about doctor list (not selecting a specific doctor)
     // Patterns: "có những bác sĩ nào", "danh sách bác sĩ", "hiện có bác sĩ nào", "bác sĩ nào đang làm"
     const isDoctorListQuery = /(có\s+những\s+bác\s*sĩ\s+nào|danh\s*sách\s+bác\s*sĩ|hiện\s+có\s+.*bác\s*sĩ|bác\s*sĩ\s+nào\s+(đang|hiện))/iu.test(userPrompt);
@@ -1700,8 +1779,9 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
             // Detect date from prompt
             const todayStr = DateHelper.getTodayVN();
             const tomorrowStr = DateHelper.getTomorrowVN();
-            const parsedDate = lowerPrompt.includes('ngày mai') || lowerPrompt.includes('mai') ? tomorrowStr : 
-                             lowerPrompt.includes('hôm nay') || lowerPrompt.includes('nay') ? todayStr : context.date;
+            // ⭐ FIX: Check for "ngày mai" first, then "hôm nay" to avoid substring collision
+            const parsedDate = (lowerPrompt.includes('ngày mai') || (lowerPrompt.includes(' mai') && !lowerPrompt.includes('hôm nay'))) ? tomorrowStr : 
+                             lowerPrompt.includes('hôm nay') ? todayStr : context.date;
             
             if (parsedDate) {
               try {
@@ -1877,15 +1957,14 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           const todayStr = DateHelper.getTodayVN();
           const tomorrowStr = DateHelper.getTomorrowVN();
           
-          // ⭐ IMPORTANT: Check for "ngày mai" BEFORE checking for "nay" to avoid false positive
-          const isTomorrow = userPrompt.toLowerCase().includes('ngày mai') || 
-                             userPrompt.toLowerCase().includes(' mai') ||
+          // ⭐ FIX: Check for "ngày mai" and "hôm nay" explicitly to avoid substring collision
+          const lowerInput = userPrompt.toLowerCase();
+          const isTomorrow = (lowerInput.includes('ngày mai') || (lowerInput.includes(' mai') && !lowerInput.includes('hôm nay'))) ||
                              (context.date === tomorrowStr);
           
           const isToday = !isTomorrow && (
             (context.date === todayStr) || 
-            userPrompt.toLowerCase().includes('hôm nay') || 
-            (userPrompt.toLowerCase().includes(' nay') && !userPrompt.toLowerCase().includes('ngày mai'))
+            lowerInput.includes('hôm nay')
           );
           
           if (isToday) {
@@ -2339,6 +2418,115 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           ],
           needsMoreInfo: true
         };
+      }
+      
+      // ⭐ NEW: Check if user provides TIME + DATE → find doctors available at that time
+      // Example: "tôi muốn đặt lịch vào 2h sáng mai" → check if any doctor works at 02:00
+      if (context.date && context.time && !context.serviceId && !context.doctorId) {
+        console.log(`🔍 [Early Return] User provided time ${context.time} and date ${context.date}, checking doctor availability`);
+        
+        try {
+          // Call find_available_doctors_by_time tool
+          const doctorsResult = await tools[6].func({
+            date: context.date,
+            time: context.time
+          });
+          
+          const parsed = JSON.parse(doctorsResult);
+          
+          if (parsed.success && parsed.doctors && parsed.doctors.length > 0) {
+            // Has doctors available → show doctor list
+            let response = `Vào ${context.time} ngày ${context.date}, có ${parsed.doctors.length} bác sĩ rảnh:\n\n`;
+            
+            parsed.doctors.forEach((doctor, idx) => {
+              response += `${idx + 1}. Bác sĩ ${doctor.name}\n`;
+            });
+            
+            response += '\nBạn muốn chọn bác sĩ nào? Hoặc bạn có thể cho tôi biết dịch vụ bạn muốn đặt.';
+            
+            return {
+              success: true,
+              response: response,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: response },
+              ],
+              needsMoreInfo: true
+            };
+          } else if (parsed.isPastTime) {
+            // ⭐ NEW: Handle past time error specifically
+            const pastTimeResponse = parsed.message || `Thời gian ${context.time} đã qua. Vui lòng chọn thời gian trong tương lai.`;
+            
+            // Clear invalid time from context
+            this.updateConversationContext(patientUserId, { time: null });
+            
+            return {
+              success: true,
+              response: pastTimeResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: pastTimeResponse },
+              ],
+              needsMoreInfo: true
+            };
+          } else {
+            // NO doctors available at this time (but time is valid)
+            const errorResponse = `Rất tiếc, không có bác sĩ nào rảnh vào ${context.time} ngày ${context.date}. Bạn có thể chọn thời gian khác không?`;
+            
+            // Clear invalid time from context
+            this.updateConversationContext(patientUserId, { time: null });
+            
+            return {
+              success: true,
+              response: errorResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: errorResponse },
+              ],
+              needsMoreInfo: true
+            };
+          }
+        } catch (error) {
+          console.error('❌ [Early Return] Error finding available doctors:', error);
+        }
+      }
+      
+      // ⭐ NEW: Auto-show service list if user only provides DATE (no time, service, doctor)
+      // Example: "tôi muốn đặt lịch vào ngày mai" → show service list immediately
+      if (context.date && !context.time && !context.serviceId && !context.doctorId && !preProcessedData.serviceCalled && !preProcessedData.doctorCalled) {
+        console.log('📋 [Early Return] User provided date only (no time), showing service list proactively');
+        
+        try {
+          // Call get_services to get full list
+          const servicesResult = await tools[0].func({});
+          const servicesParsed = JSON.parse(servicesResult);
+          
+          if (servicesParsed.success && servicesParsed.services && servicesParsed.services.length > 0) {
+            let serviceListResponse = `Bạn muốn đặt lịch vào ngày ${context.date}. Dưới đây là danh sách dịch vụ:\n\n`;
+            
+            servicesParsed.services.forEach((service, idx) => {
+              serviceListResponse += `${idx + 1}. ${service.name} (${service.durationMinutes} phút)\n`;
+            });
+            
+            serviceListResponse += '\nBạn muốn chọn dịch vụ nào?';
+            
+            return {
+              success: true,
+              response: serviceListResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: serviceListResponse },
+              ],
+              needsMoreInfo: true
+            };
+          }
+        } catch (error) {
+          console.error('❌ [Early Return] Error getting services:', error);
+        }
       }
       
       // Create prompt
@@ -3082,8 +3270,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           // Doctor found, now need service list
           const todayStr = DateHelper.getTodayVN();
           const tomorrowStr = DateHelper.getTomorrowVN();
-          const parsedDate = userPrompt.toLowerCase().includes('ngày mai') ? tomorrowStr : 
-                           userPrompt.toLowerCase().includes('hôm nay') ? todayStr : updatedContext.date;
+          // ⭐ FIX: Check for "ngày mai" and "hôm nay" explicitly to avoid substring collision
+          const lowerInput = userPrompt.toLowerCase();
+          const parsedDate = (lowerInput.includes('ngày mai') || (lowerInput.includes(' mai') && !lowerInput.includes('hôm nay'))) ? tomorrowStr : 
+                           lowerInput.includes('hôm nay') ? todayStr : updatedContext.date;
           
           // ⭐ NEW: Check if doctor is on leave immediately
           if (updatedContext.doctorId && parsedDate) {
@@ -3452,13 +3642,18 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             
             if (slots.success) {
               // ⭐ FIX: Check if selected time is within available gaps (not single start/end)
-              const selectedTime = updatedContext.time; // e.g., "10:00"
+              const selectedTime = updatedContext.time; // e.g., \"10:00\"
               const [h, m] = selectedTime.split(':').map(Number);
               const selectedTimeMinutes = h * 60 + m;
+              
+              // ⭐ FIX: Calculate end time including service duration
+              const serviceDuration = slots.durationMinutes || 30;
+              const selectedEndTimeMinutes = selectedTimeMinutes + serviceDuration;
               
               let isValidTime = false;
               
               console.log('🔍 [Fallback] Validating time against slots:', JSON.stringify(slots, null, 2));
+              console.log(`🔍 [Fallback] Selected: ${selectedTime} (${selectedTimeMinutes} min), Duration: ${serviceDuration} min, End: ${selectedEndTimeMinutes} min`);
               
               // ⭐ NEW: Check against availableGaps in morning shift
               if (slots.morning && slots.morning.slots && Array.isArray(slots.morning.slots)) {
@@ -3480,10 +3675,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                   const endMin = endH * 60 + endM;
                   
                   console.log(`  🔍 Checking morning slot: ${startH}:${String(startM).padStart(2, '0')}-${endH}:${String(endM).padStart(2, '0')} (${startMin}-${endMin} min)`);
-                  
-                  if (selectedTimeMinutes >= startMin && selectedTimeMinutes < endMin) {
+                  // ⭐ FIX: Check if ENTIRE appointment (start + duration) fits in slot
+                  if (selectedTimeMinutes >= startMin && selectedEndTimeMinutes <= endMin) {
                     isValidTime = true;
-                    console.log(`  ✅ Time ${selectedTime} is valid in morning slot`);
+                    console.log(`  ✅ Time ${selectedTime} is valid in morning slot (${selectedTimeMinutes}-${selectedEndTimeMinutes} fits in ${startMin}-${endMin})`);
                     break;
                   }
                 }
@@ -3510,9 +3705,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                   
                   console.log(`  🔍 Checking afternoon slot: ${startH}:${String(startM).padStart(2, '0')}-${endH}:${String(endM).padStart(2, '0')} (${startMin}-${endMin} min)`);
                   
-                  if (selectedTimeMinutes >= startMin && selectedTimeMinutes < endMin) {
+                  // ⭐ FIX: Check if ENTIRE appointment (start + duration) fits in slot
+                  if (selectedTimeMinutes >= startMin && selectedEndTimeMinutes <= endMin) {
                     isValidTime = true;
-                    console.log(`  ✅ Time ${selectedTime} is valid in afternoon slot`);
+                    console.log(`  ✅ Time ${selectedTime} is valid in afternoon slot (${selectedTimeMinutes}-${selectedEndTimeMinutes} fits in ${startMin}-${endMin})`);
                     break;
                   }
                 }
