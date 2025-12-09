@@ -2554,6 +2554,117 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+    // ==========================================================================
+    // CASE 45: Query về dịch vụ cần thanh toán trước
+    // ==========================================================================
+    logTest(45, 'Query "Dịch vụ nào cần thanh toán trước" - Auto display filtered list');
+    
+    logStep(1, 'User: "Dịch vụ nào cần thanh toán trước?"');
+    result = await sendMessage('Dịch vụ nào cần thanh toán trước?');
+    
+    const responseText45 = result.message || result.response || '';
+    
+    // Kiểm tra 1: AI KHÔNG hỏi xác nhận "Bạn có muốn xem không?"
+    const doesNotAskConfirmation45 = !responseText45.includes('có muốn xem') && 
+                                      !responseText45.includes('Bạn có muốn') &&
+                                      !responseText45.includes('có thể cung cấp');
+    
+    // Kiểm tra 2: AI hiển thị danh sách dịch vụ (có đánh số 1., 2., ...)
+    const showsServiceList45 = responseText45.includes('1.') && 
+                                (responseText45.includes('dịch vụ') || responseText45.includes('Dịch vụ'));
+    
+    // Kiểm tra 3: AI nhắc đến "thanh toán trước" hoặc "prepaid"
+    const mentionsPrepaid45 = responseText45.toLowerCase().includes('thanh toán trước') ||
+                              responseText45.toLowerCase().includes('trả tiền trước') ||
+                              responseText45.toLowerCase().includes('prepaid');
+    
+    // Kiểm tra 4: Danh sách hiển thị có giá và thời lượng
+    const showsPriceAndDuration45 = /\d+đ/.test(responseText45) && 
+                                     /\d+\s*phút/.test(responseText45);
+    
+    // Kiểm tra 5: Verify từ database - chỉ có các dịch vụ isPrepaid=true
+    const prepaidServices = await Service.find({ 
+      status: 'Active', 
+      isPrepaid: true 
+    }).lean();
+    
+    const prepaidServiceCount = prepaidServices.length;
+    
+    logResult(doesNotAskConfirmation45, doesNotAskConfirmation45 ? 
+      '✅ Không hỏi xác nhận - Tự động hiển thị' : 
+      '❌ Vẫn hỏi "Bạn có muốn xem không?"');
+    
+    logResult(showsServiceList45, showsServiceList45 ? 
+      '✅ Hiển thị danh sách dịch vụ (có đánh số)' : 
+      '❌ Không hiển thị danh sách dịch vụ');
+    
+    logResult(mentionsPrepaid45, mentionsPrepaid45 ? 
+      '✅ Nhắc đến "thanh toán trước"' : 
+      '❌ Không nhắc "thanh toán trước"');
+    
+    logResult(showsPriceAndDuration45, showsPriceAndDuration45 ? 
+      '✅ Hiển thị giá và thời lượng' : 
+      '❌ Thiếu giá hoặc thời lượng');
+    
+    log(`  📊 Database: ${prepaidServiceCount} dịch vụ có isPrepaid=true`, colors.blue);
+    
+    // Kiểm tra chi tiết: Verify chỉ hiển thị dịch vụ prepaid
+    let onlyShowsPrepaidServices = true;
+    for (const service of prepaidServices) {
+      if (!responseText45.includes(service.serviceName)) {
+        onlyShowsPrepaidServices = false;
+        log(`  ⚠️ Thiếu dịch vụ prepaid: ${service.serviceName}`, colors.yellow);
+      }
+    }
+    
+    // Kiểm tra không hiển thị dịch vụ NON-prepaid
+    const nonPrepaidServices = await Service.find({ 
+      status: 'Active', 
+      isPrepaid: { $ne: true } 
+    }).limit(5).lean();
+    
+    let doesNotShowNonPrepaid = true;
+    for (const service of nonPrepaidServices) {
+      if (responseText45.includes(service.serviceName)) {
+        doesNotShowNonPrepaid = false;
+        log(`  ⚠️ Hiển thị dịch vụ NON-prepaid: ${service.serviceName}`, colors.yellow);
+      }
+    }
+    
+    logResult(onlyShowsPrepaidServices, onlyShowsPrepaidServices ? 
+      `✅ Hiển thị đầy đủ ${prepaidServiceCount} dịch vụ prepaid` : 
+      '❌ Thiếu một số dịch vụ prepaid');
+    
+    logResult(doesNotShowNonPrepaid, doesNotShowNonPrepaid ? 
+      '✅ KHÔNG hiển thị dịch vụ non-prepaid' : 
+      '❌ Có hiển thị dịch vụ non-prepaid (SAI!)');
+    
+    const testPassed45 = doesNotAskConfirmation45 && 
+                          showsServiceList45 && 
+                          mentionsPrepaid45 && 
+                          showsPriceAndDuration45 &&
+                          onlyShowsPrepaidServices &&
+                          doesNotShowNonPrepaid;
+    
+    if (testPassed45) {
+      log('  📋 Flow đúng:', colors.cyan);
+      log('    1. User hỏi: "Dịch vụ nào cần thanh toán trước?"', colors.yellow);
+      log('    2. AI tự động gọi get_services()', colors.yellow);
+      log('    3. AI filter CHỈ isPrepaid=true', colors.yellow);
+      log(`    4. AI hiển thị ngay ${prepaidServiceCount} dịch vụ prepaid`, colors.yellow);
+      log('    5. KHÔNG hỏi xác nhận', colors.yellow);
+    } else {
+      log('  ⚠️ Response preview:', colors.red);
+      log(`    ${responseText45.substring(0, 300)}...`, colors.yellow);
+    }
+    
+    recordTestResult(45, 'Query dịch vụ cần thanh toán trước', testPassed45,
+      testPassed45 ? 
+        `Auto-display ${prepaidServiceCount} prepaid services without asking confirmation` : 
+        `Failed: noAsk=${doesNotAskConfirmation45}, showsList=${showsServiceList45}, mentions=${mentionsPrepaid45}, price=${showsPriceAndDuration45}, onlyPrepaid=${onlyShowsPrepaidServices}, noNonPrepaid=${doesNotShowNonPrepaid}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);
     console.log('='.repeat(80));

@@ -3998,4 +3998,3 @@ async createAppointmentFromAI(userPrompt, patientUserId, appointmentFor = 'self'
 // Export both the class and a singleton instance
 module.exports = new AIBookingLangchainService();
 module.exports.AIBookingLangchainService = AIBookingLangchainService;
-

@@ -1971,10 +1971,10 @@ class AppointmentService {
         if (appointment.timeslotId && appointment.timeslotId.startTime) {
           const appointmentDate = new Date(appointment.timeslotId.startTime);
           const appointmentDay = new Date(appointmentDate);
-          appointmentDay.setHours(0, 0, 0, 0);
+          appointmentDay.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
 
           const today = new Date();
-          today.setHours(0, 0, 0, 0);
+          today.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
 
           // Nếu chưa đến ngày của ca khám, không cho phép check-in
           if (today.getTime() < appointmentDay.getTime()) {
@@ -1998,10 +1998,10 @@ class AppointmentService {
         if (appointment.timeslotId && appointment.timeslotId.startTime) {
           const appointmentDate = new Date(appointment.timeslotId.startTime);
           const appointmentDay = new Date(appointmentDate);
-          appointmentDay.setHours(0, 0, 0, 0);
+          appointmentDay.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
 
           const today = new Date();
-          today.setHours(0, 0, 0, 0);
+          today.setUTCHours(0, 0, 0, 0); // ⭐ FIX: Use UTC to avoid timezone issues
 
           // Nếu chưa đến ngày của ca khám, không cho phép chuyển sang InProgress
           if (today.getTime() < appointmentDay.getTime()) {
