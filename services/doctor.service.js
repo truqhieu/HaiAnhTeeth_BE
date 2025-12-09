@@ -93,10 +93,10 @@ class DoctorService {
       console.log(`📅 Doctor ${doctorUserId} - Lấy lịch từ ${dateRangeStart.toISOString().split('T')[0]} đến ${dateRangeEnd.toISOString().split('T')[0]} (2 tuần mặc định)`);
     }
 
-    // Lấy TẤT CẢ appointments đã duyệt của doctor
+    // Lấy TẤT CẢ appointments đã duyệt của doctor (bao gồm cả No-Show)
     const allAppointments = await Appointment.find({
       doctorUserId: doctorUserId,
-      status: { $in: ['Approved', 'CheckedIn', 'InProgress', 'Completed', 'Finalized'] }
+      status: { $in: ['Approved', 'CheckedIn', 'InProgress', 'Completed', 'Finalized', 'No-Show'] }
     })
       .populate({
         path: 'patientUserId',
