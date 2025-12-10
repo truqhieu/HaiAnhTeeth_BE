@@ -2055,8 +2055,8 @@ class AppointmentService {
       }
 
       if (newStatus === 'Completed') {
-        if (!['CheckedIn', 'InProgress'].includes(currentStatus)) {
-          throw new Error(`Không thể hoàn thành. Ca khám phải ở trạng thái "CheckedIn" hoặc "InProgress" (hiện tại: ${currentStatus})`);
+        if (!['Approved', 'CheckedIn', 'InProgress'].includes(currentStatus)) {
+          throw new Error(`Không thể hoàn thành. Ca khám phải ở trạng thái "Approved", "CheckedIn" hoặc "InProgress" (hiện tại: ${currentStatus})`);
         }
       }
 
