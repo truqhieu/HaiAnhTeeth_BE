@@ -167,19 +167,14 @@ class MedicalRecordService {
       const mapped = record.additionalServiceIds
         .filter(s => s && s._id)
         .map((s) => ({ _id: s._id.toString(), serviceName: s.serviceName || '', price: s.price || 0 }));
-      // Tính khuyến mãi cho các dịch vụ đã chọn (nếu có)
-      const enriched = await calculateServicesPrices(mapped.map(m => ({ _id: m._id, price: m.price })));
-      // Merge lại để giữ serviceName
-      additionalServices = mapped.map(m => {
-        const promo = enriched.find(e => e._id?.toString?.() === m._id);
-        return {
-          _id: m._id,
-          serviceName: m.serviceName,
-          price: m.price,
-          finalPrice: promo?.finalPrice ?? m.price,
-          discountAmount: promo?.discountAmount ?? 0,
-        };
-      });
+      // ⭐ BỎ LOGIC TÍNH KHUYẾN MÃI - Chỉ hiển thị giá gốc
+      additionalServices = mapped.map(m => ({
+        _id: m._id,
+        serviceName: m.serviceName,
+        price: m.price,
+        finalPrice: m.price, // Giá gốc = giá cuối cùng (không giảm giá)
+        discountAmount: 0, // Không có giảm giá
+      }));
     }
     
     console.log('🔍 [getOrCreateMedicalRecord] Appointment serviceId:', appointment.serviceId);
@@ -335,22 +330,19 @@ class MedicalRecordService {
       .sort({ serviceName: 1 })
       .lean();
 
-    // Tính giá sau khuyến mãi (nếu có), đồng bộ cách hiển thị như ở phần đặt lịch
-    const servicesWithPromotion = await calculateServicesPrices(services);
-
-    // Chuẩn hóa response giữ nguyên các trường cũ và thêm thông tin giảm giá
-    return servicesWithPromotion.map(s => ({
+    // ⭐ BỎ LOGIC TÍNH KHUYẾN MÃI - Chỉ trả về giá gốc
+    return services.map(s => ({
       _id: s._id,
       serviceName: s.serviceName,
       price: s.price,                  // giá gốc
       category: s.category,
       isPrepaid: s.isPrepaid,
       durationMinutes: s.durationMinutes,
-      // Thêm metadata khuyến mãi
-      finalPrice: s.finalPrice,        // giá sau giảm
-      discountAmount: s.discountAmount || 0,
-      hasPromotion: !!s.hasPromotion,
-      promotionInfo: s.promotionInfo || null,
+      // Không có khuyến mãi
+      finalPrice: s.price,             // giá gốc = giá cuối cùng
+      discountAmount: 0,
+      hasPromotion: false,
+      promotionInfo: null,
     }));
   }
 

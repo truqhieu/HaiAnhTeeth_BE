@@ -194,7 +194,9 @@ class DoctorService {
         appointmentId: appointment._id,
         serviceName: appointment.serviceId?.serviceName || 'Chưa có thông tin',
         // ⭐ Hiển thị tất cả services nếu có additionalServiceIds (cho follow-up với nhiều services)
-        additionalServiceNames: appointment.additionalServiceIds?.map(s => s?.serviceName || '').filter(Boolean) || [],
+        additionalServiceNames: appointment.additionalServiceIds && Array.isArray(appointment.additionalServiceIds) && appointment.type === 'FollowUp'
+          ? appointment.additionalServiceIds.map(s => s?.serviceName || '').filter(Boolean)
+          : [],
         patientName: patient?.fullName || 'Chưa có thông tin',
         appointmentDate: timeslot?.startTime ? new Date(timeslot.startTime).toISOString().split('T')[0] : 'Chưa có thông tin',
         startTime: timeslot?.startTime ? new Date(timeslot.startTime).toLocaleTimeString('vi-VN', {

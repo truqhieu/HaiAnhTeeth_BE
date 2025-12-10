@@ -1609,6 +1609,7 @@ class AppointmentService {
         .populate('doctorUserId', 'fullName email')
         .populate('replacedDoctorUserId', 'fullName email')
         .populate('serviceId', 'serviceName price')
+        .populate('additionalServiceIds', 'serviceName price') // ⭐ Populate additional services for follow-up
         .populate('timeslotId', 'startTime endTime')
         .sort({ createdAt: -1 });
 
@@ -1622,6 +1623,7 @@ class AppointmentService {
         .populate('doctorUserId', '_id fullName email') // ⭐ Thêm _id để frontend có thể extract
         .populate('replacedDoctorUserId', '_id fullName email') // ⭐ Thêm _id để frontend có thể extract
         .populate('serviceId', 'serviceName price')
+        .populate('additionalServiceIds', 'serviceName price') // ⭐ Populate additional services for follow-up
         .populate('timeslotId', 'startTime endTime')
         .sort({ createdAt: -1 })
         .lean();
@@ -1695,6 +1697,12 @@ class AppointmentService {
             apt.doctorStatus = globalStatus || null;
           }
         }
+
+        // ⭐ Thêm additionalServiceNames cho ca tái khám (giống logic ở getUserAppointments, doctor, nurse)
+        apt.additionalServiceNames = apt.additionalServiceIds && Array.isArray(apt.additionalServiceIds) && apt.type === 'FollowUp'
+          ? apt.additionalServiceIds.map(s => s?.serviceName || '').filter(Boolean)
+          : [];
+
         return apt;
       });
 
@@ -2112,6 +2120,7 @@ class AppointmentService {
 
   /**
    * Hủy appointment
+   * - Kiểm tra thời gian hủy: Nếu hủy trước 1 giờ (test) / 24 giờ (production) thì được hoàn tiền
    * - Nếu là Consultation (tư vấn online): trả về requiresConfirmation=true + policies
    * - Nếu là Examination (khám trực tiếp): hủy trực tiếp
    */
@@ -2123,7 +2132,8 @@ class AppointmentService {
 
       const appointment = await Appointment.findById(appointmentId)
         .populate('serviceId', 'serviceName price')
-        .populate('paymentId', 'status amount');
+        .populate('paymentId', 'status amount')
+        .populate('timeslotId', 'startTime endTime'); // ⭐ Thêm populate timeslot để lấy thời gian ca khám
         
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
@@ -2135,42 +2145,92 @@ class AppointmentService {
         throw new Error('Lịch hẹn này không thể hủy được');
       }
 
+      // ⭐ LOGIC MỚI: Tính thời gian còn lại đến ca khám
+      let hoursUntilAppointment = null;
+      let isEligibleForRefund = false;
+      const CANCELLATION_THRESHOLD_HOURS = 1; // ⭐ 1 giờ cho test (production: 24 giờ)
+      
+      console.log('🔍 DEBUG: Appointment type:', appointment.type);
+      console.log('🔍 DEBUG: Appointment mode:', appointment.mode);
+      console.log('🔍 DEBUG: Timeslot exists:', !!appointment.timeslotId);
+      console.log('🔍 DEBUG: Timeslot startTime:', appointment.timeslotId?.startTime);
+      
+      if (appointment.timeslotId && appointment.timeslotId.startTime) {
+        const now = new Date();
+        const appointmentTime = new Date(appointment.timeslotId.startTime);
+        const timeDiffMs = appointmentTime.getTime() - now.getTime();
+        hoursUntilAppointment = timeDiffMs / (1000 * 60 * 60); // Convert to hours
+        
+        console.log('🔍 DEBUG: Current time (now):', now.toISOString());
+        console.log('🔍 DEBUG: Appointment time:', appointmentTime.toISOString());
+        console.log('🔍 DEBUG: Time diff (ms):', timeDiffMs);
+        console.log('🔍 DEBUG: Hours until appointment:', hoursUntilAppointment.toFixed(2));
+        
+        // Nếu hủy trước 1 giờ (test) thì được hoàn tiền
+        isEligibleForRefund = hoursUntilAppointment > CANCELLATION_THRESHOLD_HOURS;
+        
+        console.log(`⏰ Thời gian còn lại đến ca khám: ${hoursUntilAppointment.toFixed(2)} giờ`);
+        console.log(`💰 Đủ điều kiện hoàn tiền: ${isEligibleForRefund ? 'CÓ' : 'KHÔNG'} (threshold: ${CANCELLATION_THRESHOLD_HOURS}h)`);
+      }
+
       // ⭐ Kiểm tra type: Consultation cần confirmation, Examination hủy trực tiếp
       if (appointment.type === 'Consultation' && appointment.mode === 'Online') {
         // ⭐ Trả về requiresConfirmation=true + policies để frontend hiển thị modal
         console.log('📋 Consultation appointment - yêu cầu xác nhận hủy với policies');
         
-        // ⭐ Lấy policies từ database với title "Chính sách không hoàn tiền"
+        // ⭐ CHỈ lấy policy khi KHÔNG đủ điều kiện hoàn tiền (vi phạm chính sách)
         const Policy = require('../models/policy.model');
         let policies = [];
         
-        try {
-          const dbPolicies = await Policy.getPoliciesByType('Chính sách không hoàn tiền');
-          policies = dbPolicies.map(policy => ({
-            _id: policy._id.toString(),
-            title: policy.title,
-            description: policy.description,
-            active: policy.active,
-            status: policy.status,
-            createdAt: policy.createdAt,
-            updatedAt: policy.updatedAt
-          }));
-          console.log(`✅ Đã lấy ${policies.length} policies từ database`);
-        } catch (policyError) {
-          console.error('⚠️ Lỗi lấy policies từ database:', policyError);
-          // Fallback: sử dụng policy mặc định nếu không lấy được từ DB
-          policies.push({
-            _id: 'fallback',
-            title: 'Lưu ý',
-            description: 'Sau khi hủy, bạn có thể đặt lịch tư vấn mới bất kỳ lúc nào.',
-            active: true,
-            status: 'Active',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          });
+        if (!isEligibleForRefund) {
+          // ⭐ Chỉ hiển thị policy khi vi phạm (hủy trong vòng 1h)
+          try {
+            const policyType = 'Chính sách không hoàn tiền';
+            const dbPolicies = await Policy.getPoliciesByType(policyType);
+            policies = dbPolicies.map(policy => ({
+              _id: policy._id.toString(),
+              title: policy.title,
+              description: policy.description,
+              active: policy.active,
+              status: policy.status,
+              createdAt: policy.createdAt,
+              updatedAt: policy.updatedAt
+            }));
+            console.log(`✅ Đã lấy ${policies.length} policies từ database (${policyType})`);
+            
+            // ⭐ Nếu không có policy trong DB, thêm fallback policy
+            if (policies.length === 0) {
+              console.log('⚠️ Không tìm thấy policy trong DB, sử dụng fallback');
+              policies.push({
+                _id: 'fallback',
+                title: 'Chính sách không hoàn tiền',
+                description: `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
+                active: true,
+                status: 'Active',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+            }
+          } catch (policyError) {
+            console.error('⚠️ Lỗi lấy policies từ database:', policyError);
+            // Fallback: sử dụng policy mặc định
+            policies.push({
+              _id: 'fallback',
+              title: 'Chính sách không hoàn tiền',
+                description: `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
+                active: true,
+                status: 'Active',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            });
+          }
+        } else {
+          // ⭐ Nếu đủ điều kiện hoàn tiền (> 1h): KHÔNG hiển thị policy, chỉ hiển thị form bankInfo
+          console.log('✅ Đủ điều kiện hoàn tiền - không cần hiển thị policy');
         }
 
-        return {
+        
+        const responseData = {
           success: true,
           requiresConfirmation: true,
           data: {
@@ -2180,9 +2240,21 @@ class AppointmentService {
             serviceName: appointment.serviceId?.serviceName,
             paymentStatus: appointment.paymentId?.status,
             paymentAmount: appointment.paymentId?.amount,
+            hoursUntilAppointment: hoursUntilAppointment ? parseFloat(hoursUntilAppointment.toFixed(2)) : null,
+            isEligibleForRefund, // ⭐ Thêm flag để frontend biết có được hoàn tiền không
+            cancellationThresholdHours: CANCELLATION_THRESHOLD_HOURS, // ⭐ Thêm threshold để frontend hiển thị
+            // ⭐ Thêm message hướng dẫn cho frontend
+            refundMessage: isEligibleForRefund 
+              ? `Bạn đang hủy lịch trước ${CANCELLATION_THRESHOLD_HOURS} giờ, do đó sẽ được hoàn tiền. Vui lòng cung cấp thông tin tài khoản ngân hàng để nhận hoàn tiền.`
+              : `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
+            requiresBankInfo: isEligibleForRefund, // ⭐ Flag để frontend biết có cần hiển thị form nhập bankInfo không
             policies
           }
         };
+        
+        console.log('📤 [cancelAppointment] Returning data to frontend:', JSON.stringify(responseData.data, null, 2));
+        
+        return responseData;
       }
 
       // ⭐ Examination hoặc FollowUp: Hủy trực tiếp (không cần confirmation)
@@ -2194,8 +2266,8 @@ class AppointmentService {
       appointment.cancelledAt = new Date();
       appointment.updatedAt = new Date();
 
-      // Lưu thông tin ngân hàng nếu có
-      if (bankInfo) {
+      // Lưu thông tin ngân hàng nếu có (và đủ điều kiện hoàn tiền)
+      if (bankInfo && isEligibleForRefund) {
         appointment.bankInfo = {
           accountHolderName: bankInfo.accountHolderName || null,
           accountNumber: bankInfo.accountNumber || null,
@@ -2240,17 +2312,158 @@ class AppointmentService {
       return {
         success: true,
         requiresConfirmation: false,
-        message: 'Hủy lịch hẹn thành công',
+        message: isEligibleForRefund 
+          ? `Hủy lịch hẹn thành công. Bạn sẽ được hoàn tiền vì đã hủy trước ${CANCELLATION_THRESHOLD_HOURS} giờ.`
+          : `Hủy lịch hẹn thành công. Không được hoàn tiền vì hủy trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám.`,
         data: {
           appointmentId: appointment._id,
           status: appointment.status,
           cancelledAt: appointment.cancelledAt,
-          cancelReason: appointment.cancelReason
+          cancelReason: appointment.cancelReason,
+          hoursUntilAppointment: hoursUntilAppointment ? parseFloat(hoursUntilAppointment.toFixed(2)) : null,
+          isEligibleForRefund, // ⭐ Thêm flag để frontend biết có được hoàn tiền không
+          cancellationThresholdHours: CANCELLATION_THRESHOLD_HOURS
         }
       };
 
     } catch (error) {
       console.error('❌ Lỗi hủy appointment:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Xác nhận hủy appointment (sau khi user đã xem policies)
+   * - Nếu confirmed = true: Thực hiện hủy
+   * - Nếu confirmed = false: Không làm gì
+   */
+  async confirmCancelAppointment({ appointmentId, userId, confirmed, cancelReason, bankInfo = null }) {
+    try {
+      console.log(`🔄 Xác nhận hủy appointment ${appointmentId}: ${confirmed ? 'CÓ' : 'KHÔNG'}`);
+
+      if (!confirmed) {
+        return {
+          success: true,
+          message: 'Đã hủy thao tác hủy lịch hẹn',
+          data: null
+        };
+      }
+
+      // ⭐ Nếu confirmed = true, gọi lại cancelAppointment để thực hiện hủy
+      // Lần này sẽ hủy trực tiếp vì đã qua bước confirmation
+      const appointment = await Appointment.findById(appointmentId)
+        .populate('serviceId', 'serviceName price')
+        .populate('paymentId', 'status amount')
+        .populate('timeslotId', 'startTime endTime');
+        
+      if (!appointment) {
+        throw new Error('Không tìm thấy lịch hẹn');
+      }
+
+      // Kiểm tra trạng thái có thể hủy được không
+      const cancellableStatuses = ['Pending', 'Approved', 'PendingPayment'];
+      if (!cancellableStatuses.includes(appointment.status)) {
+        throw new Error('Lịch hẹn này không thể hủy được');
+      }
+
+      // ⭐ Tính lại thời gian để xác định có được hoàn tiền không
+      let hoursUntilAppointment = null;
+      let isEligibleForRefund = false;
+      const CANCELLATION_THRESHOLD_HOURS = 1; // ⭐ 1 giờ cho test (production: 24 giờ)
+      
+      if (appointment.timeslotId && appointment.timeslotId.startTime) {
+        const now = new Date();
+        const appointmentTime = new Date(appointment.timeslotId.startTime);
+        const timeDiffMs = appointmentTime.getTime() - now.getTime();
+        hoursUntilAppointment = timeDiffMs / (1000 * 60 * 60);
+        isEligibleForRefund = hoursUntilAppointment > CANCELLATION_THRESHOLD_HOURS;
+        
+        console.log(`⏰ Thời gian còn lại: ${hoursUntilAppointment.toFixed(2)} giờ`);
+        console.log(`💰 Đủ điều kiện hoàn tiền: ${isEligibleForRefund ? 'CÓ' : 'KHÔNG'}`);
+      }
+
+      // ⭐ VALIDATION: Nếu đủ điều kiện hoàn tiền, YÊU CẦU phải có bankInfo
+      if (isEligibleForRefund && !bankInfo) {
+        throw new Error('Vui lòng cung cấp thông tin tài khoản ngân hàng để nhận hoàn tiền');
+      }
+
+      // ⭐ VALIDATION: Nếu có bankInfo và đủ điều kiện, kiểm tra các trường bắt buộc
+      if (isEligibleForRefund && bankInfo) {
+        if (!bankInfo.accountHolderName || !bankInfo.accountNumber || !bankInfo.bankName) {
+          throw new Error('Vui lòng điền đầy đủ thông tin tài khoản ngân hàng (Tên chủ tài khoản, Số tài khoản, Ngân hàng)');
+        }
+      }
+
+      // Cập nhật thông tin hủy
+      appointment.status = 'Cancelled';
+      appointment.cancelReason = cancelReason || 'Người dùng hủy lịch hẹn';
+      appointment.cancelledAt = new Date();
+      appointment.updatedAt = new Date();
+
+      // Lưu thông tin ngân hàng nếu có (và đủ điều kiện hoàn tiền)
+      if (bankInfo && isEligibleForRefund) {
+        appointment.bankInfo = {
+          accountHolderName: bankInfo.accountHolderName || null,
+          accountNumber: bankInfo.accountNumber || null,
+          bankName: bankInfo.bankName || null
+        };
+        console.log(`💳 Đã lưu thông tin ngân hàng để hoàn tiền`);
+      } else if (bankInfo && !isEligibleForRefund) {
+        console.log(`⚠️ Không lưu thông tin ngân hàng vì không đủ điều kiện hoàn tiền`);
+      }
+
+      await appointment.save();
+
+      // Cập nhật payment status nếu có
+      if (appointment.paymentId) {
+        try {
+          const Payment = require('../models/payment.model');
+          const payment = await Payment.findById(appointment.paymentId);
+          if (payment && payment.status === 'Pending') {
+            payment.status = 'Cancelled';
+            await payment.save();
+            console.log(`✅ Payment ${payment._id} đã được cập nhật thành Cancelled`);
+          }
+        } catch (e) {
+          console.error('⚠️ Không thể cập nhật payment status:', e);
+        }
+      }
+
+      // Release timeslot
+      if (appointment.timeslotId) {
+        try {
+          const timeslot = await Timeslot.findById(appointment.timeslotId);
+          if (timeslot) {
+            timeslot.status = 'Available';
+            timeslot.appointmentId = null;
+            await timeslot.save();
+            console.log(`🔓 Timeslot ${timeslot._id} released back to Available`);
+          }
+        } catch (e) {
+          console.error('⚠️ Không thể cập nhật timeslot:', e);
+        }
+      }
+
+      console.log(`✅ Đã xác nhận hủy appointment thành công: ${appointmentId}`);
+
+      return {
+        success: true,
+        message: isEligibleForRefund 
+          ? `Hủy lịch hẹn thành công. Bạn sẽ được hoàn tiền vì đã hủy trước ${CANCELLATION_THRESHOLD_HOURS} giờ.`
+          : `Hủy lịch hẹn thành công. Không được hoàn tiền vì hủy trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám.`,
+        data: {
+          appointmentId: appointment._id,
+          status: appointment.status,
+          cancelledAt: appointment.cancelledAt,
+          cancelReason: appointment.cancelReason,
+          hoursUntilAppointment: hoursUntilAppointment ? parseFloat(hoursUntilAppointment.toFixed(2)) : null,
+          isEligibleForRefund,
+          cancellationThresholdHours: CANCELLATION_THRESHOLD_HOURS
+        }
+      };
+
+    } catch (error) {
+      console.error('❌ Lỗi xác nhận hủy appointment:', error);
       throw error;
     }
   }
@@ -2262,6 +2475,7 @@ class AppointmentService {
         .populate('serviceId', 'serviceName price')
         .populate('doctorUserId', 'fullName email phoneNumber')
         .populate('patientUserId', 'fullName email phoneNumber')
+        .populate('customerId', 'fullName email phoneNumber') // ⭐ THÊM: Populate customerId để lấy phone number khi đặt cho người khác
         .populate('timeslotId', 'startTime endTime')
         .populate('paymentId', 'amount method status')
         .lean();
@@ -2283,6 +2497,7 @@ class AppointmentService {
         cancelledAt: appointment.cancelledAt,
         cancelReason: appointment.cancelReason,
         bankInfo: appointment.bankInfo,
+        appointmentFor: appointment.appointmentFor, // ⭐ THÊM: Để frontend biết appointment này đặt cho ai
         service: {
           _id: appointment.serviceId?._id,
           serviceName: appointment.serviceId?.serviceName,
@@ -2300,6 +2515,12 @@ class AppointmentService {
           email: appointment.patientUserId?.email,
           phoneNumber: appointment.patientUserId?.phoneNumber
         },
+        customer: appointment.customerId ? { // ⭐ THÊM: Thông tin customer (khi đặt cho người khác)
+          _id: appointment.customerId._id,
+          fullName: appointment.customerId.fullName,
+          email: appointment.customerId.email,
+          phoneNumber: appointment.customerId.phoneNumber
+        } : null,
         timeslot: {
           _id: appointment.timeslotId?._id,
           startTime: appointment.timeslotId?.startTime,
@@ -2324,13 +2545,13 @@ class AppointmentService {
       console.log(`🔍 Lấy chi tiết lịch hẹn: ${appointmentId}`);
 
       const appointment = await Appointment.findById(appointmentId)
-        .populate('patientUserId', 'fullName email phone')
+        .populate('patientUserId', 'fullName email phoneNumber') // ⭐ FIX: 'phone' → 'phoneNumber'
         .populate('customerId', 'fullName email phoneNumber')
-        .populate('doctorUserId', 'fullName email phone')
+        .populate('doctorUserId', 'fullName email phoneNumber') // ⭐ FIX: 'phone' → 'phoneNumber'
         .populate('serviceId', 'serviceName price durationMinutes category')
         .populate('timeslotId', 'startTime endTime')
         .populate('paymentId', 'amount method status expiresAt QRurl')
-        .populate('bankInfo', 'accountHolderName accountNumber bankName')
+        .populate('additionalServiceIds', 'serviceName price durationMinutes') // ⭐ THÊM: Populate additional services cho ca tái khám
         .lean();
 
       if (!appointment) {
@@ -2343,9 +2564,11 @@ class AppointmentService {
         status: appointment.status,
         type: appointment.type,
         mode: appointment.mode,
+        appointmentFor: appointment.appointmentFor, // ⭐ THÊM: appointmentFor
         startTime: appointment.startTime,
         endTime: appointment.endTime,
         notes: appointment.notes,
+        noTreatment: appointment.noTreatment, // ⭐ THÊM: noTreatment field
         createdAt: appointment.createdAt,
         updatedAt: appointment.updatedAt,
         checkedInAt: appointment.checkedInAt,
@@ -2355,17 +2578,17 @@ class AppointmentService {
         patient: appointment.patientUserId ? {
           fullName: appointment.patientUserId.fullName,
           email: appointment.patientUserId.email,
-          phone: appointment.patientUserId.phone
+          phoneNumber: appointment.patientUserId.phoneNumber // ⭐ FIX: 'phone' → 'phoneNumber'
         } : null,
         customer: appointment.customerId ? {
           fullName: appointment.customerId.fullName,
           email: appointment.customerId.email,
-          phone: appointment.customerId.phoneNumber
+          phoneNumber: appointment.customerId.phoneNumber // ⭐ FIX: 'phone' → 'phoneNumber'
         } : null,
         doctor: appointment.doctorUserId ? {
           fullName: appointment.doctorUserId.fullName,
           email: appointment.doctorUserId.email,
-          phone: appointment.doctorUserId.phone
+          phoneNumber: appointment.doctorUserId.phoneNumber // ⭐ FIX: 'phone' → 'phoneNumber'
         } : null,
         service: appointment.serviceId ? {
           serviceName: appointment.serviceId.serviceName,
@@ -2373,6 +2596,7 @@ class AppointmentService {
           durationMinutes: appointment.serviceId.durationMinutes,
           category: appointment.serviceId.category
         } : null,
+        additionalServiceIds: appointment.additionalServiceIds || [], // ⭐ THÊM: Additional services
         timeslot: appointment.timeslotId ? {
           startTime: appointment.timeslotId.startTime,
           endTime: appointment.timeslotId.endTime
@@ -4658,6 +4882,45 @@ class AppointmentService {
       pdfDoc.end();
     } catch (error) {
       console.error('❌ Lỗi PDF báo cáo dịch vụ:', error);
+      throw error;
+    }
+  }
+
+  // Đánh dấu đã hoàn tiền
+  async markAsRefunded(appointmentId) {
+    try {
+      console.log(`🔍 Đánh dấu đã hoàn tiền: ${appointmentId}`);
+
+      const appointment = await Appointment.findById(appointmentId);
+
+      if (!appointment) {
+        throw new Error('Không tìm thấy lịch hẹn');
+      }
+
+      // Kiểm tra trạng thái
+      if (appointment.status !== 'Cancelled') {
+        throw new Error('Chỉ có thể đánh dấu hoàn tiền cho lịch hẹn đã hủy');
+      }
+
+      // ⭐ Không bắt buộc phải có thông tin ngân hàng
+      // Staff có thể liên hệ qua số điện thoại để hoàn tiền
+
+      // Cập nhật trạng thái
+      appointment.status = 'Refunded';
+      appointment.updatedAt = new Date();
+
+      await appointment.save();
+
+      console.log(`✅ Đã đánh dấu hoàn tiền: ${appointmentId}`);
+
+      return {
+        success: true,
+        message: 'Đã đánh dấu hoàn tiền thành công',
+        data: appointment
+      };
+
+    } catch (error) {
+      console.error(`❌ Lỗi đánh dấu hoàn tiền ${appointmentId}:`, error);
       throw error;
     }
   }
