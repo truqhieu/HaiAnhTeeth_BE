@@ -164,6 +164,12 @@ class ServiceService {
     // ⭐ Tính promotion cho mỗi service
     const servicesWithPromotion = await calculateServicesPrices(services);
 
+    // ⭐ Thêm trường mode dựa trên category
+    const servicesWithMode = servicesWithPromotion.map(service => ({
+      ...service,
+      mode: service.category === 'Consultation' ? 'Online' : 'Offline'
+    }));
+
     const totalPages = Math.max(1, Math.ceil(total / limitNum));
 
     return {
@@ -171,7 +177,7 @@ class ServiceService {
       totalPages,
       page: pageNum,
       limit: limitNum,
-      data: servicesWithPromotion,
+      data: servicesWithMode,
     };
   }
 
