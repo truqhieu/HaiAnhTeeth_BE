@@ -342,7 +342,8 @@ class PromotionService {
       applyToAll,
       startDate,
       endDate,
-      serviceIds
+      serviceIds,
+      status,
     } = data;
 
     const promotion = await Promotion.findById(id);
@@ -350,18 +351,20 @@ class PromotionService {
       throw new Error('Không tìm thấy ưu đãi');
     }
 
+    // Không cho sửa ưu đãi đã hết hạn
+    if (promotion.status === 'Expired') {
+      throw new Error('Không thể cập nhật ưu đãi đã hết hạn');
+    }
+
     // =========================
     // 1. Validate title
     // =========================
     let cleanTitle = promotion.title;
     if (title !== undefined) {
-      if (typeof title !== 'string' || title.trim().length === 0) {
+      if (typeof title !== 'string' || !title.trim()) {
         throw new Error('Tiêu đề không được để trống');
       }
       cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
-      if (cleanTitle.length === 0) {
-        throw new Error('Tiêu đề không được để trống');
-      }
       if (cleanTitle.length < 3 || cleanTitle.length > 200) {
         throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
       }
@@ -375,13 +378,10 @@ class PromotionService {
     // =========================
     let cleanDescription = promotion.description;
     if (description !== undefined) {
-      if (typeof description !== 'string' || description.trim().length === 0) {
+      if (typeof description !== 'string' || !description.trim()) {
         throw new Error('Mô tả không được để trống');
       }
       cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
-      if (cleanDescription.length === 0) {
-        throw new Error('Mô tả không được để trống');
-      }
       if (cleanDescription.length < 10) {
         throw new Error('Mô tả phải có ít nhất 10 ký tự');
       }
@@ -391,20 +391,20 @@ class PromotionService {
     }
 
     // =========================
-    // 3. Validate discount type & value
+    // 3. Validate discount
     // =========================
     let finalDiscountType = promotion.discountType;
     let finalDiscountValue = promotion.discountValue;
 
     if (discountType !== undefined) {
-      if (typeof discountType !== 'string' || discountType.trim().length === 0) {
+      if (typeof discountType !== 'string' || !discountType.trim()) {
         throw new Error('Thể loại giảm giá không được để trống');
       }
-      const trimmedType = discountType.trim();
-      if (!['Percent', 'Fix'].includes(trimmedType)) {
+      const type = discountType.trim();
+      if (!['Percent', 'Fix'].includes(type)) {
         throw new Error('Thể loại giảm giá chỉ được là Percent hoặc Fix');
       }
-      finalDiscountType = trimmedType;
+      finalDiscountType = type;
     }
 
     if (discountValue !== undefined) {
@@ -421,7 +421,7 @@ class PromotionService {
     }
 
     // =========================
-    // 4. Validate applyToAll & services
+    // 4. ApplyToAll + serviceIds
     // =========================
     let isApplyToAll = promotion.applyToAll;
     if (applyToAll !== undefined) {
@@ -438,65 +438,110 @@ class PromotionService {
     }
 
     // =========================
-    // 5. Parse & normalize dates (DateHelper chuẩn VN)
+    // 5. Parse & validate date
     // =========================
     let finalStartDate = promotion.startDate;
     let finalEndDate = promotion.endDate;
 
     if (startDate !== undefined || endDate !== undefined) {
-      let newStartUtc;
-      let newEndUtc;
+      let newStart = promotion.startDate;
+      let newEnd = promotion.endDate;
 
       try {
-        newStartUtc = startDate
-          ? DateHelper.parseVNDateOnlyStart(startDate)
-          : promotion.startDate;
-
-        newEndUtc = endDate
-          ? DateHelper.parseVNDateOnlyEnd(endDate)
-          : promotion.endDate;
+        if (startDate !== undefined) {
+          newStart = DateHelper.parseVNDateOnlyStart(startDate);
+        }
+        if (endDate !== undefined) {
+          newEnd = DateHelper.parseVNDateOnlyEnd(endDate);
+        }
       } catch (e) {
         console.error('❌ Lỗi parse ngày update promotion:', e.message);
         throw new Error('Ngày khuyến mãi không hợp lệ');
       }
 
-      if (isNaN(newStartUtc.getTime())) {
+      if (isNaN(newStart.getTime())) {
         throw new Error('Ngày bắt đầu không hợp lệ');
       }
-
-      if (isNaN(newEndUtc.getTime())) {
+      if (isNaN(newEnd.getTime())) {
         throw new Error('Ngày kết thúc không hợp lệ');
       }
-
-      const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
-
-      if (newStartUtc < todayVNStartUtc) {
-        throw new Error('Ngày bắt đầu không được sửa về trước hôm nay');
-      }
-
-      // ✅ Cho phép 1 ngày (end == start)
-      if (newEndUtc < newStartUtc) {
+      if (newEnd < newStart) {
         throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
       }
 
-      finalStartDate = newStartUtc;
-      finalEndDate = newEndUtc;
+      const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
+      if (startDate !== undefined && newStart < todayVNStartUtc) {
+        throw new Error('Ngày bắt đầu không được sửa về trước hôm nay');
+      }
+
+      finalStartDate = newStart;
+      finalEndDate = newEnd;
     }
 
     // =========================
-    // 6. Tính lại status realtime
+    // 6. Tính autoStatus theo ngày
     // =========================
     const now = new Date();
-    let newStatus = 'Upcoming';
+    let autoStatus = 'Upcoming';
 
     if (finalStartDate <= now && now < finalEndDate) {
-      newStatus = 'Active';
+      autoStatus = 'Active';
     } else if (now >= finalEndDate) {
-      newStatus = 'Expired';
+      autoStatus = 'Expired';
     }
 
     // =========================
-    // 7. Cập nhật promotion
+    // 7. XỬ LÝ STATUS
+    //    RULE: Cho phép toggle Active <-> Inactive
+    //    - Không cho sửa nếu đã Expired (đã chặn ở trên)
+    //    - Chỉ cho đổi khi ưu đãi đang Active hoặc Inactive
+    //    - Muốn bật lại Active thì ngày hiện tại phải nằm trong khoảng áp dụng (autoStatus === 'Active')
+    // =========================
+    let finalStatus;
+
+    if (status !== undefined) {
+      // Chỉ cho phép client gửi Active / Inactive
+      if (!['Active', 'Inactive'].includes(status)) {
+        throw new Error('Chỉ được cập nhật trạng thái thành Active hoặc Inactive');
+      }
+
+      const isCurrentlyActive = promotion.status === 'Active';
+      const isCurrentlyInactive = promotion.status === 'Inactive';
+
+      // Upcoming thì không cho đổi thủ công
+      if (!isCurrentlyActive && !isCurrentlyInactive) {
+        throw new Error('Chỉ có thể thay đổi trạng thái khi ưu đãi đang ở trạng thái Active hoặc Inactive');
+      }
+
+      // ===== Trường hợp muốn tắt ưu đãi: chuyển sang Inactive =====
+      if (status === 'Inactive') {
+        // Đang Active hoặc Inactive đều có thể set về Inactive
+        finalStatus = 'Inactive';
+      }
+
+      // ===== Trường hợp muốn bật ưu đãi: chuyển sang Active =====
+      if (status === 'Active') {
+        // Chỉ cho bật Active nếu ngày hiện tại nằm trong khoảng áp dụng
+        if (autoStatus !== 'Active') {
+          throw new Error('Chỉ có thể chuyển sang Active khi ngày hiện tại nằm trong khoảng áp dụng ưu đãi');
+        }
+        finalStatus = 'Active';
+      }
+
+    } else {
+      // client không gửi status:
+      //  - nếu đang Inactive thì giữ nguyên Inactive
+      //  - còn lại dùng autoStatus theo ngày
+      if (promotion.status === 'Inactive') {
+        finalStatus = 'Inactive';
+      } else {
+        finalStatus = autoStatus;
+      }
+    }
+
+
+    // =========================
+    // 8. Update DB
     // =========================
     promotion.title = cleanTitle;
     promotion.description = cleanDescription;
@@ -505,20 +550,20 @@ class PromotionService {
     promotion.applyToAll = isApplyToAll;
     promotion.startDate = finalStartDate;
     promotion.endDate = finalEndDate;
-    promotion.status = newStatus;
+    promotion.status = finalStatus;
 
     await promotion.save();
 
     // =========================
-    // 8. Cập nhật liên kết dịch vụ
+    // 9. Update service links
     // =========================
     if (!isApplyToAll && serviceIds !== undefined) {
       await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
 
       if (serviceIds.length > 0) {
-        const links = serviceIds.map(id => ({
+        const links = serviceIds.map(sid => ({
           promotionId: promotion._id,
-          serviceId: id
+          serviceId: sid
         }));
         await PromotionServiceModel.insertMany(links);
       }
@@ -526,9 +571,12 @@ class PromotionService {
 
     return {
       ...promotion.toObject(),
-      status: newStatus
+      status: finalStatus,
     };
   }
+
+
+
 
 
   /**

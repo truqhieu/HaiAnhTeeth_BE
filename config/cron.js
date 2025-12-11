@@ -15,7 +15,7 @@ function getTodayVN() {
 
 
 // ===== ✅ CRON PROMOTION - EXPIRED THEO NGÀY VN =====
-cron.schedule('* * * * *', async () => {
+cron.schedule('*/5 * * * * *', async () => {
     try {
         const todayVN = getTodayVN();
         console.log('⏰ [CRON PROMO] todayVN =', todayVN);
@@ -35,9 +35,10 @@ cron.schedule('* * * * *', async () => {
         );
 
         // 2️⃣ ACTIVE
+        // Không tự bật lại Inactive
         const active = await Promotion.updateMany(
             {
-                status: { $ne: 'Active' },
+                status: { $nin: ['Active', 'Inactive'] },
                 $expr: {
                     $and: [
                         {
@@ -59,9 +60,10 @@ cron.schedule('* * * * *', async () => {
         );
 
         // 3️⃣ UPCOMING
+        // ❗ Không đụng vào Inactive nữa
         const upcoming = await Promotion.updateMany(
             {
-                status: { $ne: 'Upcoming' },
+                status: { $nin: ['Upcoming', 'Inactive', 'Expired'] },
                 $expr: {
                     $gt: [
                         { $dateToString: { format: "%Y-%m-%d", date: "$startDate" } },

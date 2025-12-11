@@ -2134,7 +2134,7 @@ class AppointmentService {
         .populate('serviceId', 'serviceName price')
         .populate('paymentId', 'status amount')
         .populate('timeslotId', 'startTime endTime'); // ⭐ Thêm populate timeslot để lấy thời gian ca khám
-        
+
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
       }
@@ -2149,26 +2149,26 @@ class AppointmentService {
       let hoursUntilAppointment = null;
       let isEligibleForRefund = false;
       const CANCELLATION_THRESHOLD_HOURS = 1; // ⭐ 1 giờ cho test (production: 24 giờ)
-      
+
       console.log('🔍 DEBUG: Appointment type:', appointment.type);
       console.log('🔍 DEBUG: Appointment mode:', appointment.mode);
       console.log('🔍 DEBUG: Timeslot exists:', !!appointment.timeslotId);
       console.log('🔍 DEBUG: Timeslot startTime:', appointment.timeslotId?.startTime);
-      
+
       if (appointment.timeslotId && appointment.timeslotId.startTime) {
         const now = new Date();
         const appointmentTime = new Date(appointment.timeslotId.startTime);
         const timeDiffMs = appointmentTime.getTime() - now.getTime();
         hoursUntilAppointment = timeDiffMs / (1000 * 60 * 60); // Convert to hours
-        
+
         console.log('🔍 DEBUG: Current time (now):', now.toISOString());
         console.log('🔍 DEBUG: Appointment time:', appointmentTime.toISOString());
         console.log('🔍 DEBUG: Time diff (ms):', timeDiffMs);
         console.log('🔍 DEBUG: Hours until appointment:', hoursUntilAppointment.toFixed(2));
-        
+
         // Nếu hủy trước 1 giờ (test) thì được hoàn tiền
         isEligibleForRefund = hoursUntilAppointment > CANCELLATION_THRESHOLD_HOURS;
-        
+
         console.log(`⏰ Thời gian còn lại đến ca khám: ${hoursUntilAppointment.toFixed(2)} giờ`);
         console.log(`💰 Đủ điều kiện hoàn tiền: ${isEligibleForRefund ? 'CÓ' : 'KHÔNG'} (threshold: ${CANCELLATION_THRESHOLD_HOURS}h)`);
       }
@@ -2177,11 +2177,11 @@ class AppointmentService {
       if (appointment.type === 'Consultation' && appointment.mode === 'Online') {
         // ⭐ Trả về requiresConfirmation=true + policies để frontend hiển thị modal
         console.log('📋 Consultation appointment - yêu cầu xác nhận hủy với policies');
-        
+
         // ⭐ CHỈ lấy policy khi KHÔNG đủ điều kiện hoàn tiền (vi phạm chính sách)
         const Policy = require('../models/policy.model');
         let policies = [];
-        
+
         if (!isEligibleForRefund) {
           // ⭐ Chỉ hiển thị policy khi vi phạm (hủy trong vòng 1h)
           try {
@@ -2197,7 +2197,7 @@ class AppointmentService {
               updatedAt: policy.updatedAt
             }));
             console.log(`✅ Đã lấy ${policies.length} policies từ database (${policyType})`);
-            
+
             // ⭐ Nếu không có policy trong DB, thêm fallback policy
             if (policies.length === 0) {
               console.log('⚠️ Không tìm thấy policy trong DB, sử dụng fallback');
@@ -2217,11 +2217,11 @@ class AppointmentService {
             policies.push({
               _id: 'fallback',
               title: 'Chính sách không hoàn tiền',
-                description: `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
-                active: true,
-                status: 'Active',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
+              description: `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
+              active: true,
+              status: 'Active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
             });
           }
         } else {
@@ -2229,7 +2229,7 @@ class AppointmentService {
           console.log('✅ Đủ điều kiện hoàn tiền - không cần hiển thị policy');
         }
 
-        
+
         const responseData = {
           success: true,
           requiresConfirmation: true,
@@ -2244,22 +2244,22 @@ class AppointmentService {
             isEligibleForRefund, // ⭐ Thêm flag để frontend biết có được hoàn tiền không
             cancellationThresholdHours: CANCELLATION_THRESHOLD_HOURS, // ⭐ Thêm threshold để frontend hiển thị
             // ⭐ Thêm message hướng dẫn cho frontend
-            refundMessage: isEligibleForRefund 
+            refundMessage: isEligibleForRefund
               ? `Bạn đang hủy lịch trước ${CANCELLATION_THRESHOLD_HOURS} giờ, do đó sẽ được hoàn tiền. Vui lòng cung cấp thông tin tài khoản ngân hàng để nhận hoàn tiền.`
               : `Bạn đang hủy lịch trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám, do đó không được hoàn tiền.`,
             requiresBankInfo: isEligibleForRefund, // ⭐ Flag để frontend biết có cần hiển thị form nhập bankInfo không
             policies
           }
         };
-        
+
         console.log('📤 [cancelAppointment] Returning data to frontend:', JSON.stringify(responseData.data, null, 2));
-        
+
         return responseData;
       }
 
       // ⭐ Examination hoặc FollowUp: Hủy trực tiếp (không cần confirmation)
       console.log('🏥 Examination/FollowUp appointment - hủy trực tiếp');
-      
+
       // Cập nhật thông tin hủy
       appointment.status = 'Cancelled';
       appointment.cancelReason = cancelReason || 'Người dùng hủy lịch hẹn';
@@ -2312,7 +2312,7 @@ class AppointmentService {
       return {
         success: true,
         requiresConfirmation: false,
-        message: isEligibleForRefund 
+        message: isEligibleForRefund
           ? `Hủy lịch hẹn thành công. Bạn sẽ được hoàn tiền vì đã hủy trước ${CANCELLATION_THRESHOLD_HOURS} giờ.`
           : `Hủy lịch hẹn thành công. Không được hoàn tiền vì hủy trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám.`,
         data: {
@@ -2355,7 +2355,7 @@ class AppointmentService {
         .populate('serviceId', 'serviceName price')
         .populate('paymentId', 'status amount')
         .populate('timeslotId', 'startTime endTime');
-        
+
       if (!appointment) {
         throw new Error('Không tìm thấy lịch hẹn');
       }
@@ -2370,14 +2370,14 @@ class AppointmentService {
       let hoursUntilAppointment = null;
       let isEligibleForRefund = false;
       const CANCELLATION_THRESHOLD_HOURS = 1; // ⭐ 1 giờ cho test (production: 24 giờ)
-      
+
       if (appointment.timeslotId && appointment.timeslotId.startTime) {
         const now = new Date();
         const appointmentTime = new Date(appointment.timeslotId.startTime);
         const timeDiffMs = appointmentTime.getTime() - now.getTime();
         hoursUntilAppointment = timeDiffMs / (1000 * 60 * 60);
         isEligibleForRefund = hoursUntilAppointment > CANCELLATION_THRESHOLD_HOURS;
-        
+
         console.log(`⏰ Thời gian còn lại: ${hoursUntilAppointment.toFixed(2)} giờ`);
         console.log(`💰 Đủ điều kiện hoàn tiền: ${isEligibleForRefund ? 'CÓ' : 'KHÔNG'}`);
       }
@@ -2448,7 +2448,7 @@ class AppointmentService {
 
       return {
         success: true,
-        message: isEligibleForRefund 
+        message: isEligibleForRefund
           ? `Hủy lịch hẹn thành công. Bạn sẽ được hoàn tiền vì đã hủy trước ${CANCELLATION_THRESHOLD_HOURS} giờ.`
           : `Hủy lịch hẹn thành công. Không được hoàn tiền vì hủy trong vòng ${CANCELLATION_THRESHOLD_HOURS} giờ trước ca khám.`,
         data: {
@@ -3678,12 +3678,15 @@ class AppointmentService {
 
 
   // ⭐ Cập nhật createFollowUpAppointment với fix đầy đủ
-  async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
+  async createFollowUpAppointment({ originalAppointmentId, followUpDate, followUpEndDate, followUpNote = '', actingDoctorId, serviceId = null, serviceIds = null }) {
     if (!originalAppointmentId) {
       throw new Error('Thiếu thông tin ca khám gốc để tạo tái khám');
     }
     if (!followUpDate) {
       throw new Error('Vui lòng chọn thời gian tái khám');
+    }
+    if (!followUpEndDate) {
+      throw new Error('Vui lòng chọn thời gian kết thúc tái khám');
     }
 
 
@@ -3700,9 +3703,27 @@ class AppointmentService {
       throw new Error('Thời gian tái khám không hợp lệ');
     }
 
+    // ⭐ Parse followUpEndDate từ FE
+    let endTime;
+    if (followUpEndDate instanceof Date) {
+      endTime = new Date(followUpEndDate.getTime());
+    } else {
+      endTime = new Date(followUpEndDate);
+    }
+
+    if (Number.isNaN(endTime.getTime())) {
+      throw new Error('Thời gian kết thúc tái khám không hợp lệ');
+    }
+
+    if (endTime.getTime() <= startTime.getTime()) {
+      throw new Error('Thời gian kết thúc phải sau thời gian bắt đầu');
+    }
+
 
     console.log('🔍 [createFollowUpAppointment] followUpDate input:', followUpDate, typeof followUpDate);
+    console.log('🔍 [createFollowUpAppointment] followUpEndDate input:', followUpEndDate, typeof followUpEndDate);
     console.log('🔍 [createFollowUpAppointment] parsed startTime:', startTime.toISOString());
+    console.log('🔍 [createFollowUpAppointment] parsed endTime:', endTime.toISOString());
     console.log('🔍 [createFollowUpAppointment] startTime UTC:', {
       year: startTime.getUTCFullYear(),
       month: startTime.getUTCMonth() + 1,
@@ -3757,21 +3778,18 @@ class AppointmentService {
     const finalServiceId = finalServiceIds[0];
 
 
-    // ⭐ FIX: Tính tổng duration của tất cả services
-    let totalDurationMinutes = 0;
-
-    // Validate và tính tổng thời gian
+    // ⭐ Không cần tính duration nữa vì đã có endTime từ FE
+    // Chỉ cần validate services tồn tại
     for (const sId of finalServiceIds) {
       const s = await Service.findById(sId);
       if (!s) {
         throw new Error(`Dịch vụ (ID: ${sId}) không tồn tại`);
       }
-      totalDurationMinutes += (s.durationMinutes || 30);
     }
 
     const service = await Service.findById(finalServiceId); // Keep primary service for reference
-    const durationMinutes = totalDurationMinutes;
-    const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
+
+    // ⭐ endTime đã được parse từ followUpEndDate ở trên, không cần tính toán
     // ⭐⭐⭐ CHECK TRÙNG LỊCH BỆNH NHÂN (BẮT BUỘC PHẢI CÓ TRONG TÁI KHÁM!!!)
     if (patientUserId) {
       const patientConflict = await Timeslot.findOne({
@@ -3825,8 +3843,9 @@ class AppointmentService {
     }
 
 
-    console.log('🔍 [createFollowUpAppointment] calculated endTime:', endTime.toISOString());
-    console.log('🔍 [createFollowUpAppointment] durationMinutes:', durationMinutes);
+
+    console.log('🔍 [createFollowUpAppointment] Using endTime from FE:', endTime.toISOString());
+
 
 
     // ⭐ FIX: Tính dateStr từ startTime theo format YYYY-MM-DD

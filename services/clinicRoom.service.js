@@ -60,10 +60,42 @@ class ClinicService {
   async createClinicRoom(data) {
     const { name, description } = data;
 
-    if (name) this._validateName(name);
-    if (description) this._validateDescription(description);
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      throw new Error('Tên phòng khám không được để trống');
+    }
 
-    const createRoom = new Clinicroom({ name, description });
+    const cleanName = name.trim().replace(/\s{2,}/g, ' ');
+    if (!cleanName) {
+      throw new Error('Tên phòng khám không được để trống');
+    }
+
+    if (/[<>]/.test(cleanName)) {
+      throw new Error('Tên phòng khám không được chứa ký tự < hoặc >');
+    }
+
+    if (cleanName.length < 2) {
+      throw new Error('Độ dài tên phòng khám không hợp lệ (tối thiểu 2 ký tự)');
+    }
+
+    if (typeof description !== 'string' || description.trim().length === 0) {
+      throw new Error('Mô tả phòng khám không được để trống');
+    }
+
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (!cleanDescription) {
+      throw new Error('Mô tả phòng khám không được để trống');
+    }
+
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả phòng khám không được chứa ký tự < hoặc >');
+    }
+
+    if (cleanDescription.length < 4) {
+      throw new Error('Độ dài mô tả phòng khám không hợp lệ (tối thiểu 4 ký tự)');
+    }
+
+
+    const createRoom = new Clinicroom({ name: cleanName, description: cleanDescription });
     await createRoom.save();
     return createRoom;
   }
@@ -224,9 +256,9 @@ class ClinicService {
    */
   async deleteClinicRoom(id) {
     const room = await Clinicroom.findByIdAndDelete(id).populate('assignedDoctorId');
-    if(!room) throw new Error('Không tìm thấy phòng khám')
+    if (!room) throw new Error('Không tìm thấy phòng khám')
 
-    if(room.assignedDoctorId !== null) throw new Error('Có bác sĩ đang được gán với phòng khám này')
+    if (room.assignedDoctorId !== null) throw new Error('Có bác sĩ đang được gán với phòng khám này')
     return true;
   }
 
