@@ -343,7 +343,7 @@ class PromotionService {
       startDate,
       endDate,
       serviceIds,
-      status,
+      status, // chỉ cho phép 'Active' | 'Inactive'
     } = data;
 
     const promotion = await Promotion.findById(id);
@@ -479,28 +479,84 @@ class PromotionService {
     }
 
     // =========================
-    // 6. Tính autoStatus theo ngày
+    // 6. CHECK CONFLICT với các promotion khác
+    //     - Nếu gia hạn hoặc đổi dịch vụ, mà bị trùng
+    //       với promo khác đang Active/Upcoming => báo lỗi
     // =========================
-    const now = new Date();
-    let autoStatus = 'Upcoming';
+    let finalServiceIds = [];
 
-    if (finalStartDate <= now && now < finalEndDate) {
-      autoStatus = 'Active';
-    } else if (now >= finalEndDate) {
-      autoStatus = 'Expired';
+    if (isApplyToAll) {
+      // giống createPromotion: áp dụng cho toàn bộ dịch vụ
+      finalServiceIds = await Service.find().distinct('_id');
+    } else {
+      if (serviceIds !== undefined) {
+        finalServiceIds = serviceIds;
+      } else {
+        // lấy list dịch vụ hiện tại của promotion
+        finalServiceIds = await PromotionServiceModel.find({
+          promotionId: promotion._id
+        }).distinct('serviceId');
+      }
+    }
+
+    if (finalServiceIds.length > 0) {
+      const conflictingPromotions = await PromotionServiceModel.aggregate([
+        {
+          $match: {
+            serviceId: { $in: finalServiceIds },
+            promotionId: { $ne: promotion._id } // loại trừ chính nó
+          }
+        },
+        {
+          $lookup: {
+            from: 'promotions',
+            localField: 'promotionId',
+            foreignField: '_id',
+            as: 'promotion'
+          }
+        },
+        { $unwind: '$promotion' },
+        {
+          $match: {
+            'promotion.status': { $in: ['Active', 'Upcoming'] },
+            'promotion.startDate': { $lte: finalEndDate },
+            'promotion.endDate': { $gte: finalStartDate }
+          }
+        }
+      ]);
+
+      if (conflictingPromotions.length > 0) {
+        const conflictedServiceIds = conflictingPromotions.map(c => c.serviceId);
+        const err = new Error('Một số dịch vụ đã có khuyến mãi trùng thời gian');
+        err.conflictedServiceIds = conflictedServiceIds;
+        throw err;
+      }
     }
 
     // =========================
-    // 7. XỬ LÝ STATUS
-    //    RULE: Cho phép toggle Active <-> Inactive
-    //    - Không cho sửa nếu đã Expired (đã chặn ở trên)
-    //    - Chỉ cho đổi khi ưu đãi đang Active hoặc Inactive
-    //    - Muốn bật lại Active thì ngày hiện tại phải nằm trong khoảng áp dụng (autoStatus === 'Active')
+    // 7. Tính autoStatus theo NGÀY VN (chỉ để làm default)
+    // =========================
+    const todayVNStartUtc = DateHelper.getTodayVNStartUTC(); // 00:00 VN -> UTC
+    const tomorrowVNStartUtc = new Date(
+      todayVNStartUtc.getTime() + 24 * 60 * 60 * 1000
+    );
+
+    let autoStatus = 'Upcoming';
+
+    if (finalEndDate < todayVNStartUtc) {
+      autoStatus = 'Expired';
+    } else if (finalStartDate >= tomorrowVNStartUtc) {
+      autoStatus = 'Upcoming';
+    } else {
+      autoStatus = 'Active';
+    }
+
+    // =========================
+    // 8. XỬ LÝ STATUS (toggle Active <-> Inactive)
     // =========================
     let finalStatus;
 
     if (status !== undefined) {
-      // Chỉ cho phép client gửi Active / Inactive
       if (!['Active', 'Inactive'].includes(status)) {
         throw new Error('Chỉ được cập nhật trạng thái thành Active hoặc Inactive');
       }
@@ -508,30 +564,21 @@ class PromotionService {
       const isCurrentlyActive = promotion.status === 'Active';
       const isCurrentlyInactive = promotion.status === 'Inactive';
 
-      // Upcoming thì không cho đổi thủ công
       if (!isCurrentlyActive && !isCurrentlyInactive) {
         throw new Error('Chỉ có thể thay đổi trạng thái khi ưu đãi đang ở trạng thái Active hoặc Inactive');
       }
 
-      // ===== Trường hợp muốn tắt ưu đãi: chuyển sang Inactive =====
       if (status === 'Inactive') {
-        // Đang Active hoặc Inactive đều có thể set về Inactive
         finalStatus = 'Inactive';
       }
 
-      // ===== Trường hợp muốn bật ưu đãi: chuyển sang Active =====
       if (status === 'Active') {
-        // Chỉ cho bật Active nếu ngày hiện tại nằm trong khoảng áp dụng
         if (autoStatus !== 'Active') {
           throw new Error('Chỉ có thể chuyển sang Active khi ngày hiện tại nằm trong khoảng áp dụng ưu đãi');
         }
         finalStatus = 'Active';
       }
-
     } else {
-      // client không gửi status:
-      //  - nếu đang Inactive thì giữ nguyên Inactive
-      //  - còn lại dùng autoStatus theo ngày
       if (promotion.status === 'Inactive') {
         finalStatus = 'Inactive';
       } else {
@@ -539,9 +586,8 @@ class PromotionService {
       }
     }
 
-
     // =========================
-    // 8. Update DB
+    // 9. Update DB
     // =========================
     promotion.title = cleanTitle;
     promotion.description = cleanDescription;
@@ -555,7 +601,7 @@ class PromotionService {
     await promotion.save();
 
     // =========================
-    // 9. Update service links
+    // 10. Update service links
     // =========================
     if (!isApplyToAll && serviceIds !== undefined) {
       await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
@@ -574,6 +620,7 @@ class PromotionService {
       status: finalStatus,
     };
   }
+
 
 
 
