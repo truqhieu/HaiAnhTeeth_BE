@@ -32,7 +32,7 @@ const createPromotion = async (req, res) => {
 
     } catch (error) {
         console.error('Lỗi khi tạo ưu đãi giảm giá:', error);
-        
+
         // Handle conflict error
         if (error.conflictedServiceIds) {
             return res.status(400).json({
@@ -52,12 +52,12 @@ const createPromotion = async (req, res) => {
 const getAllPromotions = async (req, res) => {
     try {
         const {
-            search,           
-            startDate,      
-            endDate,         
-            discountType,   
-            status,  
-            sort = 'desc',    
+            search,
+            startDate,
+            endDate,
+            discountType,
+            status,
+            sort = 'desc',
             page = 1,
             limit = 10
         } = req.query;
@@ -74,7 +74,7 @@ const getAllPromotions = async (req, res) => {
         });
 
         return res.status(200).json({
-          success: true,
+            success: true,
             ...result
         });
 
@@ -87,20 +87,20 @@ const getAllPromotions = async (req, res) => {
     }
 };
 
-const viewDetailPromotion = async(req,res) =>{
+const viewDetailPromotion = async (req, res) => {
     try {
         const result = await promotionService.getPromotionById(req.params.id);
         res.status(200).json({
-            success : true,
-            message : 'Chi tiết ưu đãi',
-            data : result
+            success: true,
+            message: 'Chi tiết ưu đãi',
+            data: result
         })
     } catch (error) {
         console.error('Lỗi khi xem chi tiết ưu đãi', error);
         res.status(400).json({
             success: false,
             message: error.message || 'Đã xảy ra lỗi khi xem chi tiết ưu đãi'
-        });        
+        });
     }
 }
 
@@ -115,7 +115,8 @@ const updatePromotion = async (req, res) => {
             applyToAll,
             startDate,
             endDate,
-            serviceIds
+            serviceIds,
+            status
         } = req.body;
 
         const result = await promotionService.updatePromotion(id, {
@@ -126,7 +127,8 @@ const updatePromotion = async (req, res) => {
             applyToAll,
             startDate,
             endDate,
-            serviceIds
+            serviceIds,
+            status
         });
 
         res.status(200).json({

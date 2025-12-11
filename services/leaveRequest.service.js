@@ -6,7 +6,7 @@ const User = require('../models/user.model');
 const notificationService = require('./notification.service');
 
 const STATUS = LeaveRequest.schema.path('status').enumValues;
-const DateHelper = require('../utils/dateHelper'); 
+const DateHelper = require('../utils/dateHelper');
 
 
 class LeaveRequestService {
@@ -14,97 +14,105 @@ class LeaveRequestService {
   /**
    * Tạo leave request mới
    */
-async createLeaveRequest(userId, data) {
-  const { startDate, endDate, reason } = data;
+  async createLeaveRequest(userId, data) {
+    const { startDate, endDate, reason } = data;
 
-  if (!startDate || !endDate || !reason) {
-    throw new Error('Vui lòng nhập đầy đủ thông tin');
+    if (!startDate || !endDate || !reason) {
+      throw new Error('Vui lòng nhập đầy đủ thông tin');
+    }
+
+    const checkUser = await User.findById(userId).select('role');
+    if (checkUser.role === 'Doctor') {
+      const checkAppointment = await Appointment.find({ doctorUserId: userId })
+      if (checkAppointment.length > 0) {
+        throw new Error('Bạn không thể nghỉ phép khi có lịch hẹn')
+      }
+    }
+
+    let startUtc;
+    let endUtc;
+
+    try {
+      startUtc = DateHelper.parseVNDateOnlyStart(startDate);
+      endUtc = DateHelper.parseVNDateOnlyEnd(endDate);
+    } catch (e) {
+      console.error('❌ Lỗi parse ngày nghỉ:', e.message);
+      throw new Error('Ngày nghỉ không hợp lệ');
+    }
+
+    if (isNaN(startUtc.getTime())) {
+      throw new Error('Ngày bắt đầu không hợp lệ');
+    }
+
+    if (isNaN(endUtc.getTime())) {
+      throw new Error('Ngày kết thúc không hợp lệ');
+    }
+
+    const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
+
+    if (startUtc < todayVNStartUtc) {
+      throw new Error('Ngày bắt đầu phải tính từ hiện tại');
+    }
+
+    if (endUtc < startUtc) {
+      throw new Error('Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu');
+    }
+
+    const cleanReason = reason.trim().replace(/\s{2,}/g, ' ');
+    if (cleanReason.length === 0) {
+      throw new Error('Lý do nghỉ không thể để trống');
+    }
+    if (cleanReason.length < 3) {
+      throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
+    }
+    if (/[<>]/.test(cleanReason)) {
+      throw new Error(
+        'Lý do nghỉ không hợp lệ. Vui lòng không sử dụng ký tự < hoặc >'
+      );
+    }
+
+    const existingApprovedLeave = await LeaveRequest.findOne({
+      userId,
+      status: { $in: ['Approved', 'Pending'] },
+      startDate: { $lte: endUtc },
+      endDate: { $gte: startUtc },
+    });
+
+    if (existingApprovedLeave) {
+      throw new Error('Bạn đã có đơn nghỉ trong khoảng thời gian này');
+    }
+
+    const newRequest = new LeaveRequest({
+      userId,
+      startDate: startUtc,
+      endDate: endUtc,
+      reason: cleanReason,
+      status: 'Pending',
+    });
+
+    await newRequest.save();
+
+    const listManager = await User.find({ role: 'Manager' });
+    try {
+      await Promise.all(
+        listManager.map((manager) =>
+          notificationService.createNotification({
+            userId: manager._id,
+            createdByUserId: userId,
+            title: 'Đơn xin nghỉ phép',
+            message: 'Có đơn xin nghỉ phép mới cần duyệt',
+            relatedAppointmentId: null,
+            leaveRequestId: newRequest._id,
+            link: null,
+          })
+        )
+      );
+    } catch (notifError) {
+      console.warn('⚠️ Lỗi gửi notification cho manager:', notifError.message);
+    }
+
+    return newRequest;
   }
-
-  let startUtc;
-  let endUtc;
-
-  try {
-    startUtc = DateHelper.parseVNDateOnlyStart(startDate);
-    endUtc   = DateHelper.parseVNDateOnlyEnd(endDate);
-  } catch (e) {
-    console.error('❌ Lỗi parse ngày nghỉ:', e.message);
-    throw new Error('Ngày nghỉ không hợp lệ');
-  }
-
-  if (isNaN(startUtc.getTime())) {
-    throw new Error('Ngày bắt đầu không hợp lệ');
-  }
-
-  if (isNaN(endUtc.getTime())) {
-    throw new Error('Ngày kết thúc không hợp lệ');
-  }
-
-  const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
-
-  if (startUtc < todayVNStartUtc) {
-    throw new Error('Ngày bắt đầu phải tính từ hiện tại');
-  }
-
-  if (endUtc < startUtc) {
-    throw new Error('Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu');
-  }
-
-  const cleanReason = reason.trim().replace(/\s{2,}/g, ' ');
-  if (cleanReason.length === 0) {
-    throw new Error('Lý do nghỉ không thể để trống');
-  }
-  if (cleanReason.length < 3) {
-    throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
-  }
-  if (/[<>]/.test(cleanReason)) {
-    throw new Error(
-      'Lý do nghỉ không hợp lệ. Vui lòng không sử dụng ký tự < hoặc >'
-    );
-  }
-
-  const existingApprovedLeave = await LeaveRequest.findOne({
-    userId,
-    status: { $in: ['Approved', 'Pending'] },
-    startDate: { $lte: endUtc },
-    endDate:   { $gte: startUtc },
-  });
-
-  if (existingApprovedLeave) {
-    throw new Error('Bạn đã có đơn nghỉ trong khoảng thời gian này');
-  }
-
-  const newRequest = new LeaveRequest({
-    userId,
-    startDate: startUtc,
-    endDate: endUtc,
-    reason: cleanReason,
-    status: 'Pending',
-  });
-
-  await newRequest.save();
-
-  const listManager = await User.find({ role: 'Manager' });
-  try {
-    await Promise.all(
-      listManager.map((manager) =>
-        notificationService.createNotification({
-          userId: manager._id,
-          createdByUserId: userId,
-          title: 'Đơn xin nghỉ phép',
-          message: 'Có đơn xin nghỉ phép mới cần duyệt',
-          relatedAppointmentId: null,
-          leaveRequestId: newRequest._id,
-          link: null,
-        })
-      )
-    );
-  } catch (notifError) {
-    console.warn('⚠️ Lỗi gửi notification cho manager:', notifError.message);
-  }
-
-  return newRequest;
-}
 
 
 
@@ -112,101 +120,101 @@ async createLeaveRequest(userId, data) {
    * Lấy danh sách leave requests
    */
   async getAllLeaveRequests(filters = {}, userRole = null, userId = null) {
-  const {
-    page = 1,
-    limit = 10,
-    status,
-    search,
-    startDate,
-    endDate,
-    sort = 'desc',
-  } = filters;
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      search,
+      startDate,
+      endDate,
+      sort = 'desc',
+    } = filters;
 
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, parseInt(limit, 10) || 10);
-  const skip = (pageNum - 1) * limitNum;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
 
-  const filter = {};
+    const filter = {};
 
-  // Chỉ xem được đơn của chính mình nếu là Doctor/Nurse/Staff
-  if (userRole && ['Doctor', 'Nurse', 'Staff'].includes(userRole)) {
-    filter.userId = userId;
-  }
-
-  if (status && STATUS.includes(status)) {
-    filter.status = status;
-  }
-
-  // 🔍 SEARCH: theo lý do + tên người gửi đơn
-  if (search && String(search).trim().length > 0) {
-    const searchKey = String(search).trim();
-    const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(safe, 'i');
-
-    // 1) Tìm userId có fullName khớp
-    const matchedUsers = await User.find({
-      fullName: { $regex: regex }
-    }).select('_id').lean();
-
-    const userIds = matchedUsers.map(u => u._id);
-
-    // 2) Gộp điều kiện vào $or
-    const orConditions = [
-      { reason: { $regex: regex } } // search theo lý do
-    ];
-
-    if (userIds.length > 0) {
-      orConditions.push({ userId: { $in: userIds } }); // search theo tên người gửi
+    // Chỉ xem được đơn của chính mình nếu là Doctor/Nurse/Staff
+    if (userRole && ['Doctor', 'Nurse', 'Staff'].includes(userRole)) {
+      filter.userId = userId;
     }
 
-    filter.$or = orConditions;
-  }
-
-  // Lọc theo khoảng ngày nghỉ
-  if (startDate || endDate) {
-    filter.startDate = {};
-    if (startDate) {
-      const start = new Date(startDate);
-      start.setHours(0, 0, 0, 0);
-      filter.startDate.$gte = start;
+    if (status && STATUS.includes(status)) {
+      filter.status = status;
     }
-    if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      filter.startDate.$lte = end;
+
+    // 🔍 SEARCH: theo lý do + tên người gửi đơn
+    if (search && String(search).trim().length > 0) {
+      const searchKey = String(search).trim();
+      const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(safe, 'i');
+
+      // 1) Tìm userId có fullName khớp
+      const matchedUsers = await User.find({
+        fullName: { $regex: regex }
+      }).select('_id').lean();
+
+      const userIds = matchedUsers.map(u => u._id);
+
+      // 2) Gộp điều kiện vào $or
+      const orConditions = [
+        { reason: { $regex: regex } } // search theo lý do
+      ];
+
+      if (userIds.length > 0) {
+        orConditions.push({ userId: { $in: userIds } }); // search theo tên người gửi
+      }
+
+      filter.$or = orConditions;
     }
-  }
 
-  const sortOrder = sort === 'asc' ? 1 : -1;
+    // Lọc theo khoảng ngày nghỉ
+    if (startDate || endDate) {
+      filter.startDate = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filter.startDate.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.startDate.$lte = end;
+      }
+    }
 
-  const [total, leaveRequests] = await Promise.all([
-    LeaveRequest.countDocuments(filter),
-    LeaveRequest.find(filter)
-      .populate({
-        path: 'userId',
-        select: '_id fullName role'
-      })
-      .populate({
-        path: 'approvedByManager',
-        select: 'fullName'
-      })
-      .select('-__v')
-      .sort({ startDate: sortOrder })
-      .skip(skip)
-      .limit(limitNum)
-      .lean()
-  ]);
+    const sortOrder = sort === 'asc' ? 1 : -1;
 
-  const totalPages = Math.max(1, Math.ceil(total / limitNum));
+    const [total, leaveRequests] = await Promise.all([
+      LeaveRequest.countDocuments(filter),
+      LeaveRequest.find(filter)
+        .populate({
+          path: 'userId',
+          select: '_id fullName role'
+        })
+        .populate({
+          path: 'approvedByManager',
+          select: 'fullName'
+        })
+        .select('-__v')
+        .sort({ startDate: sortOrder })
+        .skip(skip)
+        .limit(limitNum)
+        .lean()
+    ]);
 
-  return {
-    success: true,
-    total,
-    totalPages,
-    page: pageNum,
-    limit: limitNum,
-    data: leaveRequests
-  };
+    const totalPages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      success: true,
+      total,
+      totalPages,
+      page: pageNum,
+      limit: limitNum,
+      data: leaveRequests
+    };
   }
 
   /**
@@ -347,7 +355,7 @@ async createLeaveRequest(userId, data) {
     if (status === 'Rejected' && handleRequest.userId) {
       try {
         const doctorUserId = handleRequest.userId._id || handleRequest.userId;
-        
+
         const activeLeaves = await LeaveRequest.countDocuments({
           userId: doctorUserId,
           status: 'Approved',
@@ -451,7 +459,7 @@ async createLeaveRequest(userId, data) {
         const doctorUserId = leave.userId._id;
         const leaveStart = new Date(leave.startDate);
         const leaveEnd = new Date(leave.endDate);
-        
+
         await this._restoreDoctorSchedule(doctorUserId, leaveStart, leaveEnd);
         doctorIds.add(doctorUserId.toString());
       }

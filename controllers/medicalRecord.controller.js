@@ -209,8 +209,9 @@ exports.updateMedicalRecordForDoctor = async (req, res) => {
 exports.approveMedicalRecordByDoctor = async (req, res) => {
   try {
     const { appointmentId } = req.params;
+    const { followUpEndDate } = req.body; // ⭐ Nhận followUpEndDate từ FE
 
-    const record = await medicalRecordService.approveMedicalRecordByDoctor(appointmentId);
+    const record = await medicalRecordService.approveMedicalRecordByDoctor(appointmentId, followUpEndDate);
 
     return res.status(200).json({
       success: true,
@@ -247,8 +248,8 @@ exports.getMedicalRecordForPatient = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ getMedicalRecordForPatient error:', error);
-    const statusCode = error.message.includes('không có quyền') ? 403 : 
-                      error.message.includes('không tìm thấy') ? 404 : 500;
+    const statusCode = error.message.includes('không có quyền') ? 403 :
+      error.message.includes('không tìm thấy') ? 404 : 500;
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Lỗi máy chủ',
@@ -270,7 +271,7 @@ exports.getPatientMedicalRecordsList = async (req, res) => {
     }
 
     console.log(`📋 [getPatientMedicalRecordsList] Controller - Patient ID: ${patientUserId}`);
-    
+
     const records = await medicalRecordService.getPatientMedicalRecordsList(patientUserId);
 
     console.log(`✅ [getPatientMedicalRecordsList] Controller - Trả về ${records.length} records`);

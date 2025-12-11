@@ -55,7 +55,7 @@ class MedicalRecordService {
     // 2. Nếu chưa có record, tạo mới (sẽ copy services từ appointment trước đó)
     // 3. Nếu có record rồi, dùng lại record đó
     // 4. Khi tạo follow-up tiếp theo, sẽ dùng record của follow-up trước đó
-    
+
     // ⭐ Bước 1: Tìm record của chính appointment này trước
     let record = await MedicalRecord.findOne({ appointmentId })
       .populate({ path: 'additionalServiceIds', select: 'serviceName price' })
@@ -105,8 +105,8 @@ class MedicalRecordService {
         currentUserRole === 'Nurse'
           ? currentUserId
           : appointment.inProgressByUserId ||
-            appointment.checkInByUserId ||
-            currentUserId;
+          appointment.checkInByUserId ||
+          currentUserId;
 
       // ⭐ FIX: Tạo record mới cho chính appointment này (không phải appointment trước đó)
       // Mỗi follow-up appointment sẽ có record riêng, nhưng copy services từ appointment trước đó
@@ -140,7 +140,7 @@ class MedicalRecordService {
     // Prepare additional services - filter out null/undefined and ensure we have valid data
     // ⭐ FIX: Nếu là follow-up và record chưa có services, copy từ previousRecord hoặc lấy từ appointment
     let additionalServices = [];
-    
+
     // ⭐ FIX: Nếu là follow-up và record chưa có services, copy từ previousRecord
     if (appointment.type === 'FollowUp' && (!record.additionalServiceIds || record.additionalServiceIds.length === 0)) {
       if (previousRecord && previousRecord.additionalServiceIds && Array.isArray(previousRecord.additionalServiceIds) && previousRecord.additionalServiceIds.length > 0) {
@@ -162,7 +162,7 @@ class MedicalRecordService {
           .populate({ path: 'additionalServiceIds', select: 'serviceName price' });
       }
     }
-    
+
     if (record?.additionalServiceIds && Array.isArray(record.additionalServiceIds)) {
       const mapped = record.additionalServiceIds
         .filter(s => s && s._id)
@@ -176,7 +176,7 @@ class MedicalRecordService {
         discountAmount: 0, // Không có giảm giá
       }));
     }
-    
+
     console.log('🔍 [getOrCreateMedicalRecord] Appointment serviceId:', appointment.serviceId);
     console.log('🔍 [getOrCreateMedicalRecord] Record additionalServiceIds:', record?.additionalServiceIds);
     console.log('🔍 [getOrCreateMedicalRecord] Mapped additionalServices:', additionalServices);
@@ -185,10 +185,10 @@ class MedicalRecordService {
     const recordStatus = record?.status || 'Draft';
     const isAppointmentLocked = ['Completed', 'Finalized'].includes(appointmentStatus);
     const isRecordFinalized = recordStatus === 'Finalized';
-    
+
     // ⭐ FIX: Sau khi duyệt, không cho chỉnh sửa nữa (kể cả follow-up appointments)
     const isFollowUpAppointment = appointment.type === 'FollowUp' && appointment.followUpOfAppointmentId;
-    
+
     // ⭐ FIX: Nurse không thể chỉnh sửa hồ sơ đã Finalized
     const nurseCanEdit = !isAppointmentLocked && !isRecordFinalized;
     // ⭐ FIX: Doctor không thể chỉnh sửa hồ sơ đã Finalized (kể cả follow-up appointments)
@@ -322,7 +322,7 @@ class MedicalRecordService {
    */
   async getActiveServicesForDoctor() {
     // ⭐ Lấy danh sách dịch vụ Active và chỉ lấy Examination (không có Consultation)
-    const services = await Service.find({ 
+    const services = await Service.find({
       status: 'Active',
       category: 'Examination' // ⭐ Chỉ lấy Examination
     })
@@ -442,7 +442,7 @@ class MedicalRecordService {
         throw new Error('Chẩn đoán là bắt buộc. Vui lòng nhập chẩn đoán.');
       }
     }
-    
+
     if (conclusion !== undefined) {
       if (!conclusion || typeof conclusion !== 'string' || conclusion.trim() === '') {
         throw new Error('Kết luận là bắt buộc. Vui lòng nhập kết luận.');
@@ -477,8 +477,8 @@ class MedicalRecordService {
     // ⭐ FIX: Nếu approve, set status = 'Finalized'
     // Nếu không approve, set status = 'Draft' (kể cả follow-up appointments)
     // if (approve === true) {
-      // updateFields.status = 'Finalized';
-    if(approve !== true) {
+    // updateFields.status = 'Finalized';
+    if (approve !== true) {
       // Sau khi duyệt, không cho chỉnh sửa nữa, nên chỉ set về Draft khi không approve
       updateFields.status = 'Draft';
     }
@@ -587,8 +587,10 @@ class MedicalRecordService {
   /**
    * Approve medical record by doctor - Set status = "Finalized"
    * ⭐ FIX: Khi approve, nếu có followUpRequired, tạo follow-up appointment
+   * @param {string} appointmentId - ID của appointment
+   * @param {Date|string} followUpEndDate - Thời gian kết thúc tái khám (từ FE)
    */
-  async approveMedicalRecordByDoctor(appointmentId) {
+  async approveMedicalRecordByDoctor(appointmentId, followUpEndDate = null) {
     if (!appointmentId) {
       throw new Error('Thiếu appointmentId');
     }
@@ -618,7 +620,7 @@ class MedicalRecordService {
     let followUpAppointmentId = record.followUpAppointmentId;
     if (record.followUpRequired && !followUpAppointmentId && record.followUpDate) {
       const actingDoctorId = appointment.doctorUserId;
-      
+
       if (!actingDoctorId) {
         throw new Error('Không xác định được bác sĩ tạo tái khám.');
       }
@@ -632,6 +634,20 @@ class MedicalRecordService {
         throw new Error('Ngày tái khám phải ở trong tương lai.');
       }
 
+      // ⭐ Validate followUpEndDate từ FE
+      if (!followUpEndDate) {
+        throw new Error('Vui lòng chọn thời gian kết thúc tái khám.');
+      }
+
+      const followUpEndDateObj = new Date(followUpEndDate);
+      if (Number.isNaN(followUpEndDateObj.getTime())) {
+        throw new Error('Thời gian kết thúc tái khám không hợp lệ.');
+      }
+
+      if (followUpEndDateObj.getTime() <= followUpDateObj.getTime()) {
+        throw new Error('Thời gian kết thúc tái khám phải sau thời gian bắt đầu.');
+      }
+
       // ⭐ Lấy tất cả serviceIds từ additional services để tạo follow-up appointment với nhiều services
       let followUpServiceIds = [];
       if (record.additionalServiceIds && Array.isArray(record.additionalServiceIds) && record.additionalServiceIds.length > 0) {
@@ -642,21 +658,22 @@ class MedicalRecordService {
         followUpServiceIds = [appointment.serviceId._id || appointment.serviceId];
       }
 
-      // ⭐ Tạo follow-up appointment khi approve
+      // ⭐ Tạo follow-up appointment khi approve với followUpEndDate từ FE
       const followUpAppointment = await appointmentService.createFollowUpAppointment({
         originalAppointmentId: appointmentId,
         followUpDate: followUpDateObj,
+        followUpEndDate: followUpEndDateObj, // ⭐ Truyền followUpEndDate từ FE
         followUpNote: record.followUpNote || '',
         actingDoctorId,
         serviceIds: followUpServiceIds // ⭐ Truyền array serviceIds từ additional services
       });
       followUpAppointmentId = followUpAppointment?._id || null;
-      
+
       console.log('🔍 [approveMedicalRecordByDoctor] Created follow-up appointment:', followUpAppointmentId);
     }
 
     // ⭐ Update record với status = 'Finalized' và followUpAppointmentId (nếu có)
-    const updateFields = { 
+    const updateFields = {
       status: 'Finalized'
     };
     if (followUpAppointmentId) {
@@ -665,7 +682,7 @@ class MedicalRecordService {
 
     const finalizedRecord = await MedicalRecord.findOneAndUpdate(
       { appointmentId },
-      { 
+      {
         $set: updateFields
       },
       { new: true }
@@ -711,7 +728,7 @@ class MedicalRecordService {
         isEmailOwner = user.email.toLowerCase() === appointment.customerId.email.toLowerCase();
       }
     }
-    
+
     if (!isPatientOwner && !isCustomerOwner && !isEmailOwner) {
       throw new Error('Bạn không có quyền xem hồ sơ khám bệnh này');
     }
@@ -767,8 +784,8 @@ class MedicalRecordService {
         diagnosis: record.diagnosis || '',
         conclusion: record.conclusion || '',
         // ⭐ Hỗ trợ backward compatibility: nếu có prescriptions (array mới) thì dùng, nếu không thì dùng prescription (object cũ)
-        prescription: (record.prescriptions && record.prescriptions.length > 0) 
-          ? record.prescriptions[0] 
+        prescription: (record.prescriptions && record.prescriptions.length > 0)
+          ? record.prescriptions[0]
           : (record.prescription || {}),
         prescriptions: record.prescriptions || (record.prescription ? [record.prescription] : []),
         nurseNote: record.nurseNote || '',
@@ -864,14 +881,14 @@ class MedicalRecordService {
         console.log(`⚠️ [getPatientMedicalRecordsList] Record ${record._id} không có appointmentId`);
         return false;
       }
-      
+
       // Kiểm tra appointment status và record status
       const isValid = record.appointmentId.status === 'Completed' && record.status === 'Finalized';
-      
+
       if (!isValid) {
         console.log(`⚠️ [getPatientMedicalRecordsList] Record ${record._id} không hợp lệ - appointment.status: ${record.appointmentId.status}, record.status: ${record.status}`);
       }
-      
+
       return isValid;
     });
 
@@ -916,8 +933,8 @@ class MedicalRecordService {
           (record.prescriptions && record.prescriptions.length > 0 && record.prescriptions.some(p => p.medicine || p.dosage || p.duration)) ||
           (record.prescription && (record.prescription.medicine || record.prescription.dosage || record.prescription.duration))
         ),
-        prescription: (record.prescriptions && record.prescriptions.length > 0) 
-          ? record.prescriptions[0] 
+        prescription: (record.prescriptions && record.prescriptions.length > 0)
+          ? record.prescriptions[0]
           : (record.prescription || null),
         prescriptions: record.prescriptions || (record.prescription ? [record.prescription] : []),
         diagnosis: record.diagnosis || null,
