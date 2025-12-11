@@ -23,9 +23,9 @@ class LeaveRequestService {
 
     const checkUser = await User.findById(userId).select('role');
     if (checkUser.role === 'Doctor') {
-      const checkAppointment = await Appointment.find({ doctorUserId: userId })
+      const checkAppointment = await Appointment.find({ doctorUserId: userId, status: 'InProgress' })
       if (checkAppointment.length > 0) {
-        throw new Error('Bạn không thể nghỉ phép khi có lịch hẹn')
+        throw new Error('Bạn không thể nghỉ phép khi có lịch khám')
       }
     }
 
