@@ -2148,12 +2148,17 @@ class AppointmentService {
       // ⭐ LOGIC MỚI: Tính thời gian còn lại đến ca khám
       let hoursUntilAppointment = null;
       let isEligibleForRefund = false;
-      const CANCELLATION_THRESHOLD_HOURS = 1; // ⭐ 1 giờ cho test (production: 24 giờ)
+      
+      // ⭐ DYNAMIC: Extract cancellation threshold from policy description
+      const Policy = require('../models/policy.model');
+      const policyHelper = require('../utils/policyHelper');
+      const CANCELLATION_THRESHOLD_HOURS = await policyHelper.getCancellationThresholdFromPolicy(Policy, 1);
 
       console.log('🔍 DEBUG: Appointment type:', appointment.type);
       console.log('🔍 DEBUG: Appointment mode:', appointment.mode);
       console.log('🔍 DEBUG: Timeslot exists:', !!appointment.timeslotId);
       console.log('🔍 DEBUG: Timeslot startTime:', appointment.timeslotId?.startTime);
+      console.log(`🔍 DEBUG: Cancellation threshold: ${CANCELLATION_THRESHOLD_HOURS} hours (from policy)`);
 
       if (appointment.timeslotId && appointment.timeslotId.startTime) {
         const now = new Date();
@@ -2166,7 +2171,7 @@ class AppointmentService {
         console.log('🔍 DEBUG: Time diff (ms):', timeDiffMs);
         console.log('🔍 DEBUG: Hours until appointment:', hoursUntilAppointment.toFixed(2));
 
-        // Nếu hủy trước 1 giờ (test) thì được hoàn tiền
+        // Nếu hủy trước threshold (động từ policy) thì được hoàn tiền
         isEligibleForRefund = hoursUntilAppointment > CANCELLATION_THRESHOLD_HOURS;
 
         console.log(`⏰ Thời gian còn lại đến ca khám: ${hoursUntilAppointment.toFixed(2)} giờ`);
@@ -2179,7 +2184,6 @@ class AppointmentService {
         console.log('📋 Consultation appointment - yêu cầu xác nhận hủy với policies');
 
         // ⭐ CHỈ lấy policy khi KHÔNG đủ điều kiện hoàn tiền (vi phạm chính sách)
-        const Policy = require('../models/policy.model');
         let policies = [];
 
         if (!isEligibleForRefund) {
