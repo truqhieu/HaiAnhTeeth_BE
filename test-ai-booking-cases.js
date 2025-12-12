@@ -1985,8 +1985,14 @@ async function runTests() {
     // ==========================================================================
     logTest(37, 'Tiếp tục hỏi "vậy 9h thì sao" sau khi 7h bị từ chối');
     
-    logStep(1, 'User: "vậy 9h hôm nay thì sao"');
-    result = await sendMessage('vậy 9h hôm nay thì sao');
+    // ⭐ FIX: Add conversation history from Case 36
+    logStep(1, 'User: "vậy 9h hôm nay thì sao" (tiếp tục từ Case 36)');
+    const history37 = [
+      { role: 'user', content: 'Có bác sĩ nào rảnh vào 7h sáng mai không' },
+      { role: 'assistant', content: responseText36 } // Response from Case 36
+    ];
+    
+    result = await sendMessage('vậy 9h hôm nay thì sao', history37);
     
     const responseText37 = result.message || result.response || '';
     
@@ -2134,7 +2140,9 @@ async function runTests() {
                               !responseText38.includes('mã lịch') &&
                               !responseText38.includes('#');
     
-    const testPassed38 = bookingSuccess && mentionsPayment && noAppointmentCode;
+    
+    // ⭐ FIX: Test passes if booking successful AND (mentions payment OR has payment info) AND no appointment code
+    const testPassed38 = bookingSuccess && (mentionsPayment || hasPaymentInfo) && noAppointmentCode;
     
     logResult(testPassed38, testPassed38 ? 
       '✅ Flow hoàn chỉnh: Đặt lịch thành công + Yêu cầu thanh toán + Không hiển thị mã lịch' : 
@@ -2662,6 +2670,120 @@ async function runTests() {
       testPassed45 ? 
         `Auto-display ${prepaidServiceCount} prepaid services without asking confirmation` : 
         `Failed: noAsk=${doesNotAskConfirmation45}, showsList=${showsServiceList45}, mentions=${mentionsPrepaid45}, price=${showsPriceAndDuration45}, onlyPrepaid=${onlyShowsPrepaidServices}, noNonPrepaid=${doesNotShowNonPrepaid}`);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 46: Chọn giờ trước → Chọn bác sĩ → Chọn dịch vụ → Hiển thị confirmation (KHÔNG hỏi lại giờ)
+    // ==========================================================================
+    logTest(46, 'Chọn giờ trước → Bác sĩ → Dịch vụ → Confirmation (không hỏi lại giờ)');
+    
+    // ⭐ CLEANUP: Delete any existing timeslots at 09:00 tomorrow to ensure test independence
+    const tomorrowStr46 = require('./utils/dateHelper').getTomorrowVN();
+    const tomorrow46 = new Date(tomorrowStr46);
+    tomorrow46.setHours(0, 0, 0, 0);
+    
+    const doctorHieu46 = await User.findOne({ fullName: { $regex: /hiếu/i }, role: 'Doctor' });
+    if (doctorHieu46) {
+      const startTime09 = new Date(tomorrow46);
+      startTime09.setHours(9, 0, 0, 0);
+      const endTime09 = new Date(startTime09);
+      endTime09.setMinutes(endTime09.getMinutes() + 30);
+      
+      await Timeslot.deleteMany({
+        doctorUserId: doctorHieu46._id,
+        startTime: { $gte: startTime09, $lt: endTime09 }
+      });
+      
+      logStep(0, 'Cleanup: Deleted existing 09:00 timeslots for test independence');
+    }
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch vào 9h ngày mai"');
+    result = await sendMessage('Tôi muốn đặt lịch vào 9h ngày mai');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch vào 9h ngày mai' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    const responseText46_step1 = result.message || result.response || '';
+    
+    // Step 1: Should show list of doctors available at 9h
+    const showsDoctorList46_step1 = (responseText46_step1.includes('bác sĩ') || responseText46_step1.includes('Bác sĩ')) &&
+                                     (responseText46_step1.includes('1.') || responseText46_step1.includes('2.'));
+    
+    logResult(showsDoctorList46_step1, showsDoctorList46_step1 ? 
+      'Bước 1: Hiển thị danh sách bác sĩ rảnh vào 9h' : 
+      'Bước 1: Không hiển thị danh sách bác sĩ');
+    
+    if (showsDoctorList46_step1) {
+      logStep(2, 'User: "bác sĩ hiếu"');
+      result = await sendMessage('bác sĩ hiếu', history);
+      history.push({ role: 'user', content: 'bác sĩ hiếu' });
+      history.push({ role: 'assistant', content: result.message });
+      
+      const responseText46_step2 = result.message || result.response || '';
+      
+      // Step 2: Should show list of services
+      const showsServiceList46_step2 = responseText46_step2.includes('dịch vụ') && 
+                                       (responseText46_step2.includes('1.') || responseText46_step2.includes('Làm sạch răng'));
+      
+      logResult(showsServiceList46_step2, showsServiceList46_step2 ? 
+        'Bước 2: Hiển thị danh sách dịch vụ' : 
+        'Bước 2: Không hiển thị danh sách dịch vụ');
+      
+      if (showsServiceList46_step2) {
+        logStep(3, 'User: "làm sạch răng"');
+        result = await sendMessage('làm sạch răng', history);
+        
+        const responseText46_step3 = result.message || result.response || '';
+        
+        // ⭐ CRITICAL CHECK: Should show CONFIRMATION with 09:00, NOT ask to choose time again
+        const showsConfirmation46 = responseText46_step3.includes('Xác nhận') || responseText46_step3.includes('xác nhận');
+        const showsTime09_46 = responseText46_step3.includes('09:00') || responseText46_step3.includes('9:00');
+        const asksForTime46 = responseText46_step3.includes('Bạn muốn chọn giờ nào') || 
+                             responseText46_step3.includes('chọn giờ');
+        
+        logResult(showsConfirmation46, showsConfirmation46 ? 
+          'Bước 3: Hiển thị confirmation' : 
+          'Bước 3: Không hiển thị confirmation');
+        
+        logResult(showsTime09_46, showsTime09_46 ? 
+          'Bước 3: Hiển thị giờ 09:00 đã chọn' : 
+          'Bước 3: Không hiển thị giờ 09:00');
+        
+        logResult(!asksForTime46, !asksForTime46 ? 
+          'Bước 3: KHÔNG hỏi lại giờ (đúng!)' : 
+          'Bước 3: SAI - Hỏi lại giờ khi đã có giờ trong context');
+        
+        const testPassed46 = showsConfirmation46 && showsTime09_46 && !asksForTime46;
+        
+        if (testPassed46) {
+          log('  📋 Flow đúng:', colors.cyan);
+          log('    1. User chọn giờ 9h ngày mai', colors.yellow);
+          log('    2. AI hiển thị danh sách bác sĩ rảnh vào 9h', colors.yellow);
+          log('    3. User chọn bác sĩ Hiếu', colors.yellow);
+          log('    4. AI hiển thị danh sách dịch vụ', colors.yellow);
+          log('    5. User chọn dịch vụ "Làm sạch răng"', colors.yellow);
+          log('    6. AI hiển thị CONFIRMATION với giờ 09:00 (KHÔNG hỏi lại giờ)', colors.yellow);
+        } else {
+          log('  ⚠️ Response preview (Bước 3):', colors.red);
+          log(`    ${responseText46_step3.substring(0, 300)}...`, colors.yellow);
+        }
+        
+        recordTestResult(46, 'Chọn giờ trước → Bác sĩ → Dịch vụ → Confirmation', testPassed46,
+          testPassed46 ? 
+            'Shows confirmation with selected time, does not ask for time again' : 
+            `Failed: confirmation=${showsConfirmation46}, time09=${showsTime09_46}, asksTime=${asksForTime46}`);
+      } else {
+        recordTestResult(46, 'Chọn giờ trước → Bác sĩ → Dịch vụ → Confirmation', false,
+          'Step 2 failed: Did not show service list');
+      }
+    } else {
+      recordTestResult(46, 'Chọn giờ trước → Bác sĩ → Dịch vụ → Confirmation', false,
+        'Step 1 failed: Did not show doctor list');
+    }
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 

@@ -2515,7 +2515,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             let response = `Vào ${context.time} ngày ${context.date}, có ${parsed.doctors.length} bác sĩ rảnh:\n\n`;
             
             parsed.doctors.forEach((doctor, idx) => {
-              response += `${idx + 1}. Bác sĩ ${doctor.name}\n`;
+              const displayName = doctor.name.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+              response += `${idx + 1}. Bác sĩ ${displayName}\n`;
             });
             
             response += '\nBạn muốn chọn bác sĩ nào? Hoặc bạn có thể cho tôi biết dịch vụ bạn muốn đặt.';
@@ -2897,7 +2898,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
               if (parsed.success && parsed.found && parsed.doctors && parsed.doctors.length > 0) {
                 finalResponse = `Dưới đây là một số bác sĩ có lịch rảnh vào ${timeStr} ngày ${dateStr}:`;
                 parsed.doctors.forEach((doctor, idx) => {
-                  finalResponse += `\n${idx + 1}. ${doctor.name}`;
+                  const displayName = doctor.name.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+                  finalResponse += `\n${idx + 1}. Bác sĩ ${displayName}`;
                   if (doctor.specialization) {
                     finalResponse += ` - ${doctor.specialization}`;
                   }
@@ -3007,7 +3009,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                 }
                 
                 availableDoctors.forEach((doctor, idx) => {
-                  finalResponse += `\n${idx + 1}. Bác sĩ ${doctor.name}`;
+                  const displayName = doctor.name.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+                  finalResponse += `\n${idx + 1}. Bác sĩ ${displayName}`;
                 });
                 finalResponse += '\n\nBạn muốn đặt lịch với bác sĩ nào?';
               } else {
@@ -3193,6 +3196,9 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           const doctorName = doctor?.fullName || 'bác sĩ';
           const serviceName = service?.serviceName || 'dịch vụ';
           
+          // Remove "bác sĩ" prefix if exists to avoid duplication
+          const doctorDisplayName = doctorName.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+          
           // Calculate end time
           const [h, m] = updatedContext.time.split(':').map(Number);
           const endTimeMinutes = h * 60 + m + (service?.durationMinutes || 30);
@@ -3200,7 +3206,7 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           const endM = endTimeMinutes % 60;
           const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
           
-          finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${serviceName}\n- Bác sĩ: ${doctorName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
+          finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${serviceName}\n- Bác sĩ: ${doctorDisplayName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
         }
         // ⭐ FIX Case 1: Handle doctor changes
         else if (preProcessedData.doctorChanged && preProcessedData.doctorResult?.found) {
@@ -3528,7 +3534,8 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             // Add doctor list
             finalResponse += '\n\nBạn muốn đặt lịch với bác sĩ nào? Dưới đây là danh sách bác sĩ đang hoạt động:';
             preProcessedData.serviceResult.activeDoctors.forEach((doctor, idx) => {
-              finalResponse += `\n${idx + 1}. ${doctor.name}`;
+              const displayName = doctor.name.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+              finalResponse += `\n${idx + 1}. Bác sĩ ${displayName}`;
               if (doctor.specialization) {
                 finalResponse += ` - ${doctor.specialization}`;
               }
@@ -3553,9 +3560,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           // Service found, have doctor and date
           console.log('🔧 [Fallback] Service + Doctor + Date detected');
           
-          // ⭐ FIX Case 35: Check if user has a requested time from "find doctor by time" flow
-          if (updatedContext.time && updatedContext.findDoctorByTime) {
-            console.log(`🎯 [Fallback] User requested specific time ${updatedContext.time} from "find doctor by time" flow, checking availability first...`);
+          // ⭐ FIX Case 35 & 46: Check if user has a pre-existing requested time (from ANY source)
+          // This includes both "find doctor by time" flow AND time specified in initial prompt
+          if (updatedContext.time) {
+            console.log(`🎯 [Fallback] User has pre-selected time ${updatedContext.time}, checking availability first...`);
             
             try {
               // Get service and doctor info
@@ -3584,7 +3592,10 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
                   const endM = endTimeMinutes % 60;
                   const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
                   
-                  finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${service.serviceName} (${service.durationMinutes} phút)\n- Bác sĩ: ${doctor.fullName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
+                  // Remove "bác sĩ" prefix if exists to avoid duplication
+                  const doctorDisplayName = doctor.fullName.replace(/^(bác\s*sĩ|bs)\s+/i, '');
+                  
+                  finalResponse = `Xác nhận lịch hẹn:\n- Ngày: ${updatedContext.date}\n- Dịch vụ: ${service.serviceName} (${service.durationMinutes} phút)\n- Bác sĩ: ${doctorDisplayName}\n- Giờ: ${updatedContext.time}-${endTime}\nBạn xác nhận đặt lịch?`;
                 } else {
                   // ❌ Requested time is NOT available → Show all available slots
                   console.log(`⚠️ [Fallback] Requested time ${updatedContext.time} is NOT AVAILABLE, showing all slots...`);
