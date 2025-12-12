@@ -449,7 +449,11 @@ const getDoctorScheduleRangeForFollowUp = async (req, res) => {
  */
 const validateAppointmentTime = async (req, res) => {
   try {
-    const { doctorUserId, serviceId, date, startTime, appointmentFor, customerFullName, customerEmail } = req.query;
+    const { doctorUserId, serviceId, date, startTime, endTime, appointmentFor, customerFullName, customerEmail } = req.query;
+
+    console.log('🔍 DEBUG validateAppointmentTime controller:');
+    console.log('   - endTime from query:', endTime);
+    console.log('   - startTime from query:', startTime);
 
     // Validation
     if (!doctorUserId || !serviceId || !date || !startTime) {
@@ -477,7 +481,7 @@ const validateAppointmentTime = async (req, res) => {
 
     // Lấy patientUserId từ req.user (nếu đã login)
     const patientUserId = req.user?.userId || null;
-    
+
     // ⭐ Normalize appointmentFor và customer info
     const appointmentForValue = appointmentFor || 'self';
     const normalizedCustomerFullName = appointmentForValue === 'other' && customerFullName
@@ -487,11 +491,31 @@ const validateAppointmentTime = async (req, res) => {
       ? decodeURIComponent(customerEmail)
       : null;
 
+    // ⭐ THÊM: Parse endTime nếu có
+    let slotEnd = null;
+    if (endTime) {
+      slotEnd = new Date(endTime);
+      if (isNaN(slotEnd.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Định dạng endTime không hợp lệ. Vui lòng sử dụng format ISO 8601'
+        });
+      }
+      // Validate endTime > startTime
+      if (slotEnd <= slotStart) {
+        return res.status(400).json({
+          success: false,
+          message: 'endTime phải lớn hơn startTime'
+        });
+      }
+    }
+
     const result = await availableSlotService.validateAppointmentTime({
       doctorUserId,
       serviceId,
       date: searchDate,
       startTime: slotStart,
+      endTime: slotEnd, // ⭐ THÊM: Truyền endTime (có thể null)
       patientUserId,
       appointmentFor: appointmentForValue,
       customerFullName: normalizedCustomerFullName,

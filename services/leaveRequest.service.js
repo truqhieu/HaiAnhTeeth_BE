@@ -22,12 +22,7 @@ class LeaveRequestService {
     }
 
     const checkUser = await User.findById(userId).select('role');
-    if (checkUser.role === 'Doctor') {
-      const checkAppointment = await Appointment.find({ doctorUserId: userId, status: 'InProgress' })
-      if (checkAppointment.length > 0) {
-        throw new Error('Bạn không thể nghỉ phép khi có lịch khám')
-      }
-    }
+    if (!checkUser) throw new Error('Vui lòng đăng nhập');
 
     let startUtc;
     let endUtc;
@@ -58,6 +53,25 @@ class LeaveRequestService {
       throw new Error('Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu');
     }
 
+    if (checkUser.role === 'Doctor') {
+      const inProgressAppointments = await Appointment.find({
+        doctorUserId: userId,
+        status: 'InProgress',
+        timeslotId: { $exists: true, $ne: null },
+      }).populate('timeslotId', 'startTime endTime');
+
+      const hasConflict = inProgressAppointments.some(a => {
+        const ts = a.timeslotId;
+        if (!ts?.startTime || !ts?.endTime) return false;
+        return ts.startTime <= endUtc && ts.endTime >= startUtc; // overlap
+      });
+
+      if (hasConflict) {
+        throw new Error('Bạn không thể tạo đơn nghỉ khi đang có ca khám');
+      }
+    }
+
+
     const cleanReason = reason.trim().replace(/\s{2,}/g, ' ');
     if (cleanReason.length === 0) {
       throw new Error('Lý do nghỉ không thể để trống');
@@ -66,9 +80,7 @@ class LeaveRequestService {
       throw new Error('Độ dài lý do nghỉ phép không hợp lệ (tối thiểu 3 ký tự)');
     }
     if (/[<>]/.test(cleanReason)) {
-      throw new Error(
-        'Lý do nghỉ không hợp lệ. Vui lòng không sử dụng ký tự < hoặc >'
-      );
+      throw new Error('Lý do nghỉ không hợp lệ. Vui lòng không sử dụng ký tự < hoặc >');
     }
 
     const existingApprovedLeave = await LeaveRequest.findOne({
@@ -113,6 +125,7 @@ class LeaveRequestService {
 
     return newRequest;
   }
+
 
 
 
