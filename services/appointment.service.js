@@ -1632,6 +1632,9 @@ class AppointmentService {
       const Doctor = require('../models/doctor.model');
       const LeaveRequest = require('../models/leaveRequest.model');
 
+      // ✅ ⭐ THÊM: VisitTicket model
+      const VisitTicket = require('../models/visitTicket.model');
+
       // Lấy tất cả doctorUserIds từ appointments
       const doctorUserIds = updatedAppointments
         .filter(apt => apt.doctorUserId && apt.doctorUserId._id)
@@ -1653,6 +1656,22 @@ class AppointmentService {
         status: 'Approved',
         userId: { $in: doctorUserIds }
       }).select('userId startDate endDate').lean();
+
+      // ✅ =========================
+      // ✅ ⭐ THÊM: Check VisitTicket existence (không N+1 query)
+      // ✅ =========================
+      const appointmentIds = updatedAppointments.map(a => a._id);
+
+      const visitTickets = await VisitTicket.find({
+        appointmentId: { $in: appointmentIds }
+      }).select('appointmentId').lean();
+
+      const visitTicketMap = new Map();
+      visitTickets.forEach(vt => {
+        if (vt.appointmentId) {
+          visitTicketMap.set(vt.appointmentId.toString(), true);
+        }
+      });
 
       // Thêm doctorStatus vào mỗi appointment - kiểm tra leave theo ngày appointment
       const appointmentsWithDoctorStatus = updatedAppointments.map((apt) => {
@@ -1703,6 +1722,9 @@ class AppointmentService {
           ? apt.additionalServiceIds.map(s => s?.serviceName || '').filter(Boolean)
           : [];
 
+        // ✅ ⭐ THÊM: field hasVisitTicket (boolean)
+        apt.hasVisitTicket = visitTicketMap.has(apt._id.toString());
+
         return apt;
       });
 
@@ -1720,6 +1742,7 @@ class AppointmentService {
       throw error;
     }
   }
+
 
   /**
    * Lấy tất cả ca khám của một người dùng
@@ -2881,7 +2904,7 @@ class AppointmentService {
           }).select('promotionId');
 
           if (promotionService) {
-            const promotion = await Promotion.findById(promotionService.promotionId);
+            const promotion = await Promotion.findOne({ _id: promotionService.promotionId, status: 'Active' });
             if (promotion) {
               services[i].price = promotion.discountType === 'Percent'
                 ? services[i].price * (1 - promotion.discountValue / 100)
@@ -4071,7 +4094,7 @@ class AppointmentService {
         doctorName: originalAppointment.doctorUserId?.fullName || 'Chưa xác định',
         appointmentDate: startTime,
         appointmentTime: startTime,
-        clinicName: 'Phòng khám Hải An'
+        clinicName: 'Phòng khám Hải Anh'
       });
       console.log('✅ [Email] Gửi email tái khám thành công');
     } catch (err) {
