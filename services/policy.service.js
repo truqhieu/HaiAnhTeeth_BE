@@ -33,6 +33,11 @@ class PolicyService {
       throw new Error('Vui lòng nhập đầy đủ tiêu đề và mô tả');
     }
 
+    const check = await Policy.findOne({ title, status: 'Active' });
+    if (check) {
+      throw new Error('Chính sách đã tồn tại');
+    }
+
     const policy = new Policy({
       title,
       description,
@@ -50,7 +55,7 @@ class PolicyService {
   async updatePolicy(id, data) {
     const { title, description, active, status } = data;
 
-    const policy = await Policy.findById(id);
+    const policy = await Policy.findOne({ _id: id, status: 'Active' });
     if (!policy) {
       throw new Error('Không tìm thấy chính sách');
     }

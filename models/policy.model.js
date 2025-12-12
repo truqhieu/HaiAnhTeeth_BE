@@ -17,17 +17,17 @@ const policySchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Active', 'Inactive', 'Draft'],
+    enum: ['Active', 'Inactive'],
     default: 'Active'
   }
 }, {
-  timestamps: true, 
-  collection: 'policies' 
+  timestamps: true,
+  collection: 'policies'
 });
 
 policySchema.index({ active: 1, status: 1 });
 
-policySchema.pre('save', function(next) {
+policySchema.pre('save', function (next) {
   if (this.status === 'Active' && !this.active) {
     this.active = true;
   }
@@ -37,13 +37,13 @@ policySchema.pre('save', function(next) {
   next();
 });
 
-policySchema.statics.getActivePolicies = function() {
+policySchema.statics.getActivePolicies = function () {
   return this.find({ active: true, status: 'Active' }).sort({ createdAt: -1 });
 };
 
-policySchema.statics.getPoliciesByType = function(type) {
-  return this.find({ 
-    active: true, 
+policySchema.statics.getPoliciesByType = function (type) {
+  return this.find({
+    active: true,
     status: 'Active',
     title: { $regex: type, $options: 'i' }
   }).sort({ createdAt: -1 });
