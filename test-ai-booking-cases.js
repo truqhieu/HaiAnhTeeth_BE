@@ -2787,6 +2787,194 @@ async function runTests() {
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
+    // ==========================================================================
+    // CASE 47: Đổi ý về ngày trong tuần khi đặt lịch tuần sau
+    // ==========================================================================
+    logTest(47, 'Đổi ý về ngày trong tuần khi đặt lịch tuần sau (thứ 2 → thứ 3)');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch vào tuần sau"');
+    result = await sendMessage('Tôi muốn đặt lịch vào tuần sau');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch vào tuần sau' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    const responseText47_step1 = result.message || result.response || '';
+    const asksForDayOfWeek = responseText47_step1.includes('thứ mấy') || 
+                             responseText47_step1.includes('ngày nào') ||
+                             responseText47_step1.includes('thứ');
+    
+    logResult(asksForDayOfWeek, asksForDayOfWeek ? 
+      'Bước 1: AI hỏi thứ mấy trong tuần' : 
+      'Bước 1: AI không hỏi ngày cụ thể');
+    
+    if (asksForDayOfWeek) {
+      logStep(2, 'User: "thứ 2"');
+      result = await sendMessage('thứ 2', history);
+      history.push({ role: 'user', content: 'thứ 2' });
+      history.push({ role: 'assistant', content: result.message });
+      
+      // Get context after selecting Monday
+      const context47_monday = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+      const mondayDate = context47_monday.date;
+      
+      logResult(!!mondayDate, mondayDate ? 
+        `Bước 2: AI lưu ngày thứ 2 = ${mondayDate}` : 
+        'Bước 2: AI không lưu ngày');
+      
+      if (mondayDate) {
+        logStep(3, 'User đổi ý: "À không thứ 3"');
+        result = await sendMessage('À không thứ 3', history);
+        
+        // Get context after changing to Tuesday
+        const context47_tuesday = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+        const tuesdayDate = context47_tuesday.date;
+        
+        logResult(!!tuesdayDate, tuesdayDate ? 
+          `Bước 3: AI cập nhật ngày thứ 3 = ${tuesdayDate}` : 
+          'Bước 3: AI không cập nhật ngày');
+        
+        // ⭐ CRITICAL CHECK: Tuesday date should be Monday date + 1 day
+        let dateIsCorrect = false;
+        let expectedTuesdayDate = '';
+        
+        if (mondayDate && tuesdayDate) {
+          const mondayDateObj = new Date(mondayDate);
+          const tuesdayDateObj = new Date(tuesdayDate);
+          
+          // Calculate expected Tuesday date (Monday + 1 day)
+          const expectedTuesdayDateObj = new Date(mondayDateObj);
+          expectedTuesdayDateObj.setDate(mondayDateObj.getDate() + 1);
+          expectedTuesdayDate = `${expectedTuesdayDateObj.getFullYear()}-${String(expectedTuesdayDateObj.getMonth() + 1).padStart(2, '0')}-${String(expectedTuesdayDateObj.getDate()).padStart(2, '0')}`;
+          
+          dateIsCorrect = tuesdayDate === expectedTuesdayDate;
+          
+          logResult(dateIsCorrect, dateIsCorrect ? 
+            `✅ Ngày đúng: thứ 3 (${tuesdayDate}) = thứ 2 (${mondayDate}) + 1 ngày` : 
+            `❌ BUG: thứ 3 (${tuesdayDate}) ≠ thứ 2 (${mondayDate}) + 1 ngày (expected: ${expectedTuesdayDate})`);
+        }
+        
+        // Also check if response message contains the correct date
+        const responseText47_step3 = result.message || result.response || '';
+        const responseContainsCorrectDate = tuesdayDate && responseText47_step3.includes(tuesdayDate);
+        
+        logResult(responseContainsCorrectDate, responseContainsCorrectDate ? 
+          'Response chứa ngày đúng' : 
+          'Response không chứa ngày đúng');
+        
+        const testPassed47 = dateIsCorrect && responseContainsCorrectDate;
+        
+        if (!testPassed47) {
+          log('  ⚠️ Bug Details:', colors.red);
+          log(`    Thứ 2: ${mondayDate}`, colors.yellow);
+          log(`    Thứ 3 (actual): ${tuesdayDate}`, colors.yellow);
+          log(`    Thứ 3 (expected): ${expectedTuesdayDate}`, colors.yellow);
+          log(`    Response preview: ${responseText47_step3.substring(0, 200)}...`, colors.yellow);
+        }
+        
+        recordTestResult(47, 'Đổi ý về ngày trong tuần (thứ 2 → thứ 3)', testPassed47,
+          testPassed47 ? 
+            `Correctly updated date from ${mondayDate} to ${tuesdayDate}` : 
+            `BUG: Date not updated correctly. Monday=${mondayDate}, Tuesday=${tuesdayDate}, Expected=${expectedTuesdayDate}`);
+      } else {
+        recordTestResult(47, 'Đổi ý về ngày trong tuần (thứ 2 → thứ 3)', false,
+          'Step 2 failed: Did not save Monday date');
+      }
+    } else {
+      recordTestResult(47, 'Đổi ý về ngày trong tuần (thứ 2 → thứ 3)', false,
+        'Step 1 failed: Did not ask for day of week');
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // CASE 48: Validate past date when user changes from future to past date
+    // ==========================================================================
+    logTest(48, 'Từ chối ngày quá khứ khi user đổi từ ngày tương lai sang ngày quá khứ');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch vào tuần sau"');
+    result = await sendMessage('Tôi muốn đặt lịch vào tuần sau');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch vào tuần sau' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    const responseText48_step1 = result.message || result.response || '';
+    const asksForDayOfWeek48 = responseText48_step1.includes('thứ mấy') || 
+                                responseText48_step1.includes('ngày nào') ||
+                                responseText48_step1.includes('thứ');
+    
+    logResult(asksForDayOfWeek48, asksForDayOfWeek48 ? 
+      'Bước 1: AI hỏi thứ mấy trong tuần' : 
+      'Bước 1: AI không hỏi ngày cụ thể');
+    
+    if (asksForDayOfWeek48) {
+      logStep(2, 'User: "thứ 4"');
+      result = await sendMessage('thứ 4', history);
+      history.push({ role: 'user', content: 'thứ 4' });
+      history.push({ role: 'assistant', content: result.message });
+      
+      // Get context after selecting Wednesday (future date)
+      const context48_future = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+      const futureDate = context48_future.date;
+      
+      logResult(!!futureDate, futureDate ? 
+        `Bước 2: AI lưu ngày thứ 4 = ${futureDate}` : 
+        'Bước 2: AI không lưu ngày');
+      
+      if (futureDate) {
+        logStep(3, 'User đổi sang ngày quá khứ: "à không ngày 15/11/2025"');
+        result = await sendMessage('à không ngày 15/11/2025', history);
+        
+        const responseText48_step3 = result.message || result.response || '';
+        
+        // ⭐ CRITICAL CHECK: Should REJECT past date (15/11/2025 is in the past from 13/12/2025)
+        const rejectsPastDate = responseText48_step3.includes('quá khứ') || 
+                                responseText48_step3.includes('đã qua') ||
+                                responseText48_step3.includes('trong tương lai') ||
+                                responseText48_step3.includes('không hợp lệ') ||
+                                responseText48_step3.includes('Vui lòng chọn ngày trong tương lai');
+        
+        // Get context after changing to past date
+        const context48_past = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+        const pastDate = context48_past.date;
+        
+        // Date should NOT be updated to past date
+        const dateNotUpdatedToPast = pastDate !== '2025-11-15';
+        
+        logResult(rejectsPastDate, rejectsPastDate ? 
+          '✅ Từ chối ngày quá khứ (15/11/2025)' : 
+          '❌ BUG: Chấp nhận ngày quá khứ');
+        
+        logResult(dateNotUpdatedToPast, dateNotUpdatedToPast ? 
+          `✅ Context không cập nhật sang ngày quá khứ (vẫn giữ ${pastDate})` : 
+          '❌ BUG: Context đã cập nhật sang ngày quá khứ 2025-11-15');
+        
+        const testPassed48 = rejectsPastDate && dateNotUpdatedToPast;
+        
+        if (!testPassed48) {
+          log('  ⚠️ Bug Details:', colors.red);
+          log(`    Future date (thứ 4): ${futureDate}`, colors.yellow);
+          log(`    User input: "à không ngày 15/11/2025" (PAST DATE)`, colors.yellow);
+          log(`    Context date after change: ${pastDate}`, colors.yellow);
+          log(`    Response preview: ${responseText48_step3.substring(0, 200)}...`, colors.yellow);
+        }
+        
+        recordTestResult(48, 'Từ chối ngày quá khứ khi đổi từ tương lai', testPassed48,
+          testPassed48 ? 
+            `Correctly rejected past date 15/11/2025` : 
+            `BUG: Accepted past date. Response rejects=${rejectsPastDate}, Date not updated=${dateNotUpdatedToPast}, Context date=${pastDate}`);
+      } else {
+        recordTestResult(48, 'Từ chối ngày quá khứ khi đổi từ tương lai', false,
+          'Step 2 failed: Did not save Wednesday date');
+      }
+    } else {
+      recordTestResult(48, 'Từ chối ngày quá khứ khi đổi từ tương lai', false,
+        'Step 1 failed: Did not ask for day of week');
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
     console.log('\n' + '='.repeat(80));
     log('📊 TEST SUMMARY', colors.bright + colors.cyan);
     console.log('='.repeat(80));

@@ -1649,8 +1649,20 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
+        // ⭐ FIX Case 47: Detect if user is CHANGING the day of week
+        // This happens when:
+        // 1. Context already has a date (from previous selection)
+        // 2. User mentions a new day of week
+        // 3. We need to recalculate the date for the new day
+        const isChangingDayOfWeek = context.date && context.date.length > 0;
+        
+        if (isChangingDayOfWeek) {
+          console.log(`🔄 [Pre-process] User is changing day of week. Previous date: ${context.date}, New day: ${targetDayOfWeek}`);
+        }
+        
         // Determine if it's next week or this week
-        const isNextWeek = hasNextWeekGeneral || context.needsSpecificDayOfWeek;
+        // ⭐ FIX: Include isChangingDayOfWeek to force recalculation when user changes day
+        const isNextWeek = hasNextWeekGeneral || context.needsSpecificDayOfWeek || isChangingDayOfWeek;
         
         if (isNextWeek) {
           // Calculate Monday of next week first
