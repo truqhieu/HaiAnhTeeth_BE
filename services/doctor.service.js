@@ -212,6 +212,7 @@ class DoctorService {
         type: appointment.type,
         status: appointment.status,
         mode: appointment.mode,
+        linkMeetUrl: appointment.linkMeetUrl || null, // ⭐ THÊM: Link Google Meet cho ca khám online
         medicalRecordStatus: appointment.noTreatment ? null : medicalRecordStatus,
         noTreatment: !!appointment.noTreatment,
         createdAt: appointment.createdAt ? appointment.createdAt.toISOString() : null,
