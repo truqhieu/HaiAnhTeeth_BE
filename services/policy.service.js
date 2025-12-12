@@ -60,11 +60,6 @@ class PolicyService {
       throw new Error('Không tìm thấy chính sách');
     }
 
-    const check = await Policy.findOne({ title, status: 'Active' });
-    if (check) {
-      throw new Error('Chính sách đã tồn tại');
-    }
-
     if (title) policy.title = title;
     if (description) policy.description = description;
     if (typeof active === 'boolean') policy.active = active;
