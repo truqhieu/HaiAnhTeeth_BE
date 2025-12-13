@@ -2252,7 +2252,7 @@ class AvailableSlotService {
       doctorUserId,
       serviceId,
       date,
-      patientUserId: null,
+      patientUserId,
       appointmentFor
     });
   }

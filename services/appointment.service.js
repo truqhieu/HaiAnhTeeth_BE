@@ -3815,21 +3815,33 @@ class AppointmentService {
     const service = await Service.findById(finalServiceId);
 
     // ======================================================================
-    // ✅ FIX 1: CHECK TRÙNG LỊCH THEO "NGƯỜI ĐI KHÁM" (self vs other)
-    // - self  -> identity = patientUserId
-    // - other -> identity = customerId
-    // Cho phép chủ acc đặt self trùng giờ với other (2 người khác nhau)
+    // ✅ FIX 1 (EMAIL + appointmentFor): CHECK TRÙNG LỊCH THEO "EMAIL NGƯỜI ĐI KHÁM"
+    // - targetEmail:
+    //    self  -> patientUserId.email (người khám là user)
+    //    other -> customerId.email    (người khám là customer)
+    // - Với lịch đã có:
+    //    appointmentFor=other -> người khám = customer.email (KHÔNG dùng patient.email vì đó là người đặt)
+    //    appointmentFor=self  -> người khám = patient.email
     // ======================================================================
     const bookingFor = originalAppointment.appointmentFor || 'self';
-    const targetIdentity =
-      bookingFor === 'other'
-        ? (customerId ? customerId.toString() : null)
-        : (patientUserId ? patientUserId.toString() : null);
 
-    if (!targetIdentity) {
-      throw new Error('Thiếu thông tin người khám để kiểm tra trùng lịch');
+    // 1) Lấy targetEmail (email NGƯỜI ĐI KHÁM của lịch tái khám)
+    let targetEmail = null;
+    if (bookingFor === 'other') {
+      const customerEmail = originalAppointment.customerId?.email;
+      if (!customerEmail || typeof customerEmail !== 'string' || !customerEmail.trim()) {
+        throw new Error('Thiếu email của người được đặt lịch để kiểm tra trùng lịch');
+      }
+      targetEmail = customerEmail.trim().toLowerCase();
+    } else {
+      const patientEmail = originalAppointment.patientUserId?.email;
+      if (!patientEmail || typeof patientEmail !== 'string' || !patientEmail.trim()) {
+        throw new Error('Thiếu email của bệnh nhân để kiểm tra trùng lịch');
+      }
+      targetEmail = patientEmail.trim().toLowerCase();
     }
 
+    // 2) Lấy timeslot overlap
     const overlappedTimeslots = await Timeslot.find({
       status: { $in: ['Booked', 'Reserved'] },
       startTime: { $lt: endTime },
@@ -3837,7 +3849,11 @@ class AppointmentService {
       appointmentId: { $exists: true, $ne: null },
     }).populate({
       path: 'appointmentId',
-      select: 'status appointmentFor patientUserId customerId'
+      select: 'status appointmentFor patientUserId customerId',
+      populate: [
+        { path: 'patientUserId', select: 'email' },
+        { path: 'customerId', select: 'email' }
+      ]
     });
 
     const conflictTimeslot = overlappedTimeslots.find(ts => {
@@ -3848,14 +3864,21 @@ class AppointmentService {
       if (ap.status === 'Cancelled') return false;
 
       const apFor = ap.appointmentFor || 'self';
-      const apIdentity =
-        apFor === 'other'
-          ? (ap.customerId ? ap.customerId.toString() : null)
-          : (ap.patientUserId ? ap.patientUserId.toString() : null);
 
-      if (!apIdentity) return false;
+      const apPatientEmail = ap.patientUserId?.email
+        ? String(ap.patientUserId.email).trim().toLowerCase()
+        : null;
 
-      return apIdentity === targetIdentity;
+      const apCustomerEmail = ap.customerId?.email
+        ? String(ap.customerId.email).trim().toLowerCase()
+        : null;
+
+      // ✅ email người khám thực sự của appointment đã có
+      const apExamEmail = apFor === 'other' ? apCustomerEmail : apPatientEmail;
+
+      if (!apExamEmail) return false;
+
+      return apExamEmail === targetEmail;
     });
 
     if (conflictTimeslot) {
@@ -3900,7 +3923,6 @@ class AppointmentService {
 
     // ======================================================================
     // ✅ FIX 2: BS có 2 ca sáng/chiều -> startTime & endTime phải nằm gọn trong 1 ca
-    // Ví dụ ca 07:00-10:00 mà end=12:00 => báo luôn
     // ======================================================================
     const coveringRange = scheduleResult.data.scheduleRanges.find(range => {
       const rangeStart = new Date(range.startTime);
@@ -4114,6 +4136,7 @@ class AppointmentService {
 
     return await Appointment.findById(followUpAppointment._id).populate('timeslotId', 'startTime endTime');
   }
+
 
 
 
