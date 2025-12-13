@@ -1830,7 +1830,7 @@ class AvailableSlotService {
     // ⭐ CRITICAL FIX: Đảm bảo TẤT CẢ timeslots Reserved/Booked đều được exclude
     // KHÔNG exclude user's own timeslots vì chúng có thể là từ PatientRequest pending
     const allBookedSlotsFinal = [...uniqueBookedSlots];
-    
+
     // ⭐ CHỈ thêm user's appointments vào exclude list, KHÔNG thêm user's reserved timeslots
     // vì reserved timeslots đã được include trong uniqueBookedSlots rồi
     allBookedSlotsFinal.push(...userBookedSlots);
@@ -2252,7 +2252,7 @@ class AvailableSlotService {
       doctorUserId,
       serviceId,
       date,
-      patientUserId: null,
+      patientUserId,
       appointmentFor
     });
   }
@@ -2270,6 +2270,7 @@ class AvailableSlotService {
     serviceId,
     date,
     startTime,
+    endTime = null, // ⭐ THÊM: Cho phép truyền endTime tùy chỉnh (cho follow-up)
     patientUserId = null,
     appointmentFor = 'self',
     customerFullName,
@@ -2298,7 +2299,16 @@ class AvailableSlotService {
 
     // 3. Calculate end time
     const startTimeObj = new Date(startTime);
-    const endTimeObj = new Date(startTimeObj.getTime() + serviceDuration * 60000);
+    // ⭐ Sử dụng endTime từ parameter nếu có, nếu không thì tự tính từ service duration
+    const endTimeObj = endTime
+      ? new Date(endTime)
+      : new Date(startTimeObj.getTime() + serviceDuration * 60000);
+
+    console.log('🔍 DEBUG validateAppointmentTime:');
+    console.log('   - endTime parameter:', endTime);
+    console.log('   - startTimeObj:', startTimeObj.toISOString());
+    console.log('   - endTimeObj:', endTimeObj.toISOString());
+    console.log('   - serviceDuration:', serviceDuration);
 
     // ⭐ 3.1. Không cho đặt thời gian ở quá khứ - CHECK TRƯỚC TẤT CẢ CÁC VALIDATION KHÁC
     // ⭐ FIX: Chỉ check quá khứ nếu date là ngày hiện tại, không check nếu date là ngày trong tương lai
@@ -2384,7 +2394,7 @@ class AvailableSlotService {
               // ⭐ Lấy thông tin bác sĩ của appointment hiện tại để hiển thị trong error message
               const aptDoctorId = apt.timeslotId.doctorUserId ? apt.timeslotId.doctorUserId.toString() : null;
               let aptDoctorName = 'một bác sĩ khác';
-              
+
               // Nếu có doctorUserId, lấy tên bác sĩ
               if (aptDoctorId) {
                 try {
@@ -2396,7 +2406,7 @@ class AvailableSlotService {
                   console.error('Error fetching doctor name:', err);
                 }
               }
-              
+
               throw new Error(
                 `Bạn đã có lịch khám vào ${aptStartDisplay} - ${aptEndDisplay} với ${aptDoctorName}. ` +
                 `Vui lòng chọn thời gian khác.`

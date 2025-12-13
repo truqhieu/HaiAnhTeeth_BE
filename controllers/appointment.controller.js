@@ -15,15 +15,15 @@ const ScheduleHelper = require('../utils/scheduleHelper');
 // Helper function to calculate available time range for morning/afternoon shifts
 function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
   console.log(`🔍 Calculating ${shift} shift from ${availableSlots.length} available slots`);
-  
+
   const slots = availableSlots.filter(slot => {
     const startTime = new Date(slot.startTime);
     // Convert UTC to Vietnam time for comparison
     const vietnamTime = new Date(startTime.getTime() + 7 * 60 * 60 * 1000);
     const hour = vietnamTime.getHours();
-    
+
     console.log(`   Slot: ${slot.displayTime} (UTC: ${startTime.toISOString()}, VN: ${vietnamTime.toLocaleTimeString('vi-VN')})`);
-    
+
     if (shift === 'morning') {
       return hour >= 8 && hour < 12;
     } else {
@@ -44,33 +44,33 @@ function calculateAvailableTimeRange(availableSlots, shift, workingHours) {
 
   // Sort slots by start time
   slots.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-  
+
   // Lấy slot đầu tiên và cuối cùng
   const firstSlot = slots[0];
   const lastSlot = slots[slots.length - 1];
-  
+
   const startTime = new Date(firstSlot.startTime);
   const endTime = new Date(lastSlot.endTime);
-  
+
   console.log(`📅 ${shift} shift: First slot ${firstSlot.startTime} - ${firstSlot.endTime}`);
   console.log(`📅 ${shift} shift: Last slot ${lastSlot.startTime} - ${lastSlot.endTime}`);
   console.log(`📅 ${shift} shift: Final range ${startTime.toLocaleTimeString('vi-VN')} - ${endTime.toLocaleTimeString('vi-VN')}`);
-  
+
   // Convert UTC to Vietnam time for display
   const vnStartTime = new Date(startTime.getTime() + 7 * 60 * 60 * 1000);
   const vnEndTime = new Date(endTime.getTime() + 7 * 60 * 60 * 1000);
-  
+
   return {
     hasAvailable: true,
-    startTime: vnStartTime.toLocaleTimeString('vi-VN', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      hour12: false 
+    startTime: vnStartTime.toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
     }),
-    endTime: vnEndTime.toLocaleTimeString('vi-VN', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      hour12: false 
+    endTime: vnEndTime.toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
     }),
     message: shift === 'morning' ? 'Ca sáng có sẵn' : 'Ca chiều có sẵn'
   };
@@ -82,7 +82,7 @@ const createConsultationAppointment = async (req, res) => {
       phoneNumber,
       appointmentFor,
       serviceId,
-      doctorUserId, 
+      doctorUserId,
       doctorScheduleId,
       selectedSlot,
       notes,
@@ -151,7 +151,7 @@ const createConsultationAppointment = async (req, res) => {
       const user = await User.findById(userId);
       if (!user) {
         return res.status(404).json({
-        success: false,
+          success: false,
           message: 'Không tìm thấy thông tin người dùng'
         });
       }
@@ -204,7 +204,7 @@ const createWalkInAppointment = async (req, res) => {
       email: req.user?.email,
       role: req.user?.role
     });
-    
+
     const {
       fullName,
       email,
@@ -257,7 +257,7 @@ const createWalkInAppointment = async (req, res) => {
       fullName: req.body.fullName,
       email: req.body.email
     });
-    
+
     return res.status(400).json({
       success: false,
       message: error.message || 'Lỗi khi tạo lịch hẹn trực tiếp',
@@ -361,6 +361,7 @@ const reserveTimeslot = async (req, res) => {
       doctorScheduleId,
       date,
       startTime,
+      endTime, // ⭐ THÊM: Nhận endTime từ request
       appointmentFor,
       customerFullName,
       customerEmail
@@ -373,6 +374,7 @@ const reserveTimeslot = async (req, res) => {
       doctorScheduleId,
       date,
       startTime,
+      endTime, // ⭐ THÊM: Truyền endTime vào service
       appointmentFor,
       customerFullName,
       customerEmail
@@ -431,7 +433,7 @@ const releaseReservedTimeslot = async (req, res) => {
 const getPendingAppointments = async (req, res) => {
   try {
     const appointments = await appointmentService.getPendingAppointments();
-    
+
     return res.status(200).json({
       success: true,
       message: 'Lấy danh sách lịch hẹn chờ duyệt thành công',
@@ -451,7 +453,7 @@ const getPendingAppointments = async (req, res) => {
 const getAllAppointments = async (req, res) => {
   try {
     const { status, startDate, endDate, doctorId, serviceId, page = 1, limit = 10 } = req.query;
-    
+
     const appointments = await appointmentService.getAllAppointments({
       status,
       startDate,
@@ -461,13 +463,13 @@ const getAllAppointments = async (req, res) => {
       page: parseInt(page),
       limit: parseInt(limit)
     });
-    
+
     console.log('📋 getAllAppointments response:', {
       success: appointments.success,
       dataType: Array.isArray(appointments.data) ? 'array' : typeof appointments.data,
       dataLength: appointments.data?.length || 0
     });
-    
+
     return res.status(200).json({
       success: true,
       message: 'Lấy danh sách tất cả lịch hẹn thành công',
@@ -503,16 +505,16 @@ const getMyAppointments = async (req, res) => {
         status,
       }
     );
-    
+
     // ⭐ Check for pending requests (reschedule/change doctor) for each appointment
     const PatientRequest = require('../models/patientRequest.model');
     const appointmentIds = appointments.map(apt => apt._id);
-    
+
     const pendingRequests = await PatientRequest.find({
       appointmentId: { $in: appointmentIds },
       status: 'Pending'
     }).select('appointmentId requestType');
-    
+
     // Create a map of appointmentId -> pending request types
     const pendingRequestMap = {};
     pendingRequests.forEach(req => {
@@ -522,14 +524,14 @@ const getMyAppointments = async (req, res) => {
       }
       pendingRequestMap[aptId].push(req.requestType);
     });
-    
+
     // Add pending request info to each appointment
     const appointmentsWithPendingInfo = appointments.map(apt => ({
       ...apt.toObject ? apt.toObject() : apt,
       hasPendingReschedule: pendingRequestMap[apt._id?.toString()]?.includes('Reschedule') || false,
       hasPendingChangeDoctor: pendingRequestMap[apt._id?.toString()]?.includes('ChangeDoctor') || false
     }));
-    
+
     return res.status(200).json({
       success: true,
       message: 'Lấy danh sách lịch hẹn của bạn thành công',
@@ -622,10 +624,10 @@ const cancelAppointment = async (req, res) => {
     });
 
     return res.status(200).json({
-        success: true,
+      success: true,
       message: 'Hủy lịch hẹn thành công',
-        data: result
-      });
+      data: result
+    });
 
   } catch (error) {
     console.error('❌ Error in cancelAppointment:', error);
@@ -673,10 +675,10 @@ const confirmCancelAppointment = async (req, res) => {
     });
 
     return res.status(200).json({
-        success: true,
+      success: true,
       message: confirmed ? 'Xác nhận hủy lịch hẹn thành công' : 'Đã hủy thao tác hủy lịch hẹn',
-        data: result
-      });
+      data: result
+    });
 
   } catch (error) {
     console.error('❌ Error in confirmCancelAppointment:', error);
@@ -691,7 +693,7 @@ const confirmCancelAppointment = async (req, res) => {
 const getAppointmentDetails = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    
+
     if (!appointmentId) {
       return res.status(400).json({
         success: false,
@@ -700,7 +702,7 @@ const getAppointmentDetails = async (req, res) => {
     }
 
     const appointment = await appointmentService.getAppointmentDetails(appointmentId);
-    
+
     if (!appointment) {
       return res.status(404).json({
         success: false,
@@ -858,7 +860,7 @@ const requestReschedule = async (req, res) => {
       .populate('doctorUserId', 'fullName email')
       .populate('serviceId', 'serviceName')
       .populate('timeslotId');
-    
+
     if (!appointment) {
       return res.status(404).json({
         success: false,
@@ -910,7 +912,7 @@ const requestReschedule = async (req, res) => {
     // ⭐ Nếu có reservedTimeslotId, sử dụng timeslot đã reserved từ trước
     if (reservedTimeslotId) {
       reservedTimeslot = await Timeslot.findById(reservedTimeslotId);
-      
+
       if (!reservedTimeslot) {
         return res.status(400).json({
           success: false,
@@ -937,7 +939,7 @@ const requestReschedule = async (req, res) => {
       // Kiểm tra xem timeslot có khớp với thời gian yêu cầu không
       const slotStart = new Date(reservedTimeslot.startTime);
       const slotEnd = new Date(reservedTimeslot.endTime);
-      
+
       if (slotStart.getTime() !== newStart.getTime() || slotEnd.getTime() !== newEnd.getTime()) {
         return res.status(400).json({
           success: false,
@@ -964,7 +966,7 @@ const requestReschedule = async (req, res) => {
       // Extract date từ newStart để validate
       const rescheduleDate = new Date(newStart);
       rescheduleDate.setUTCHours(0, 0, 0, 0);
-      
+
       try {
         const scheduleRangeResult = await availableSlotService.getDoctorScheduleRange({
           doctorUserId: appointment.doctorUserId._id.toString(),
@@ -1043,62 +1045,62 @@ const requestReschedule = async (req, res) => {
       console.log('✅ Using existing reserved timeslot:', reservedTimeslot._id);
     } else {
       // ⭐ Nếu không có reservedTimeslotId, kiểm tra xem có bị trùng với lịch hẹn khác không
-    const existingAppointments = await Appointment.find({
-      doctorUserId: appointment.doctorUserId._id,
-      _id: { $ne: appointmentId },
-      status: { $in: ['Pending', 'Approved', 'CheckedIn'] }
-    }).populate('timeslotId');
+      const existingAppointments = await Appointment.find({
+        doctorUserId: appointment.doctorUserId._id,
+        _id: { $ne: appointmentId },
+        status: { $in: ['Pending', 'Approved', 'CheckedIn'] }
+      }).populate('timeslotId');
 
       // Kiểm tra timeslot đã bị reserved chưa (trừ timeslot của chính user này)
-    const existingTimeslot = await Timeslot.findOne({
-      doctorUserId: appointment.doctorUserId._id,
-      startTime: newStart,
-      endTime: newEnd,
+      const existingTimeslot = await Timeslot.findOne({
+        doctorUserId: appointment.doctorUserId._id,
+        startTime: newStart,
+        endTime: newEnd,
         status: { $in: ['Reserved', 'Booked'] },
         $or: [
           { reservedByUserId: { $ne: userId } },
           { reservedByUserId: null }
         ]
-    });
+      });
 
-    if (existingTimeslot) {
-      return res.status(400).json({
-        success: false,
+      if (existingTimeslot) {
+        return res.status(400).json({
+          success: false,
           message: 'Khung giờ này đã được đặt hoặc đang được người khác giữ chỗ'
+        });
+      }
+
+      // Kiểm tra conflict với appointments đã có (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
+      const hasConflict = existingAppointments.some(apt => {
+        if (!apt.timeslotId) return false;
+        const aptStart = new Date(apt.timeslotId.startTime);
+        const aptEnd = new Date(apt.timeslotId.endTime);
+
+        // Conflict nếu: newStart < aptEnd && newEnd > aptStart (không cộng buffer time)
+        return (newStart < aptEnd && newEnd > aptStart);
       });
-    }
 
-    // Kiểm tra conflict với appointments đã có (KHÔNG cộng buffer time - cho phép đặt liên tiếp)
-    const hasConflict = existingAppointments.some(apt => {
-      if (!apt.timeslotId) return false;
-      const aptStart = new Date(apt.timeslotId.startTime);
-      const aptEnd = new Date(apt.timeslotId.endTime);
-      
-      // Conflict nếu: newStart < aptEnd && newEnd > aptStart (không cộng buffer time)
-      return (newStart < aptEnd && newEnd > aptStart);
-    });
+      if (hasConflict) {
+        return res.status(400).json({
+          success: false,
+          message: 'Thời gian yêu cầu bị trùng với lịch hẹn khác'
+        });
+      }
 
-    if (hasConflict) {
-      return res.status(400).json({
-        success: false,
-        message: 'Thời gian yêu cầu bị trùng với lịch hẹn khác'
-      });
-    }
-
-    // Tạo timeslot với status "Reserved" để tránh xung đột
+      // Tạo timeslot với status "Reserved" để tránh xung đột
       // ⭐ CRITICAL FIX: Phải set reservedUntil để tránh bị cleanup ngay lập tức
       // Timeslot này sẽ được giữ cho đến khi PatientRequest được approve/reject
       const reservedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 ngày
-      
+
       reservedTimeslot = await Timeslot.create({
-      doctorUserId: appointment.doctorUserId._id,
-      serviceId: appointment.serviceId._id,
-      startTime: newStart,
-      endTime: newEnd,
+        doctorUserId: appointment.doctorUserId._id,
+        serviceId: appointment.serviceId._id,
+        startTime: newStart,
+        endTime: newEnd,
         status: 'Reserved',
         reservedByUserId: userId,
         reservedUntil: reservedUntil // ⭐ CRITICAL: Prevent immediate cleanup
-    });
+      });
 
       console.log('✅ Created new reserved timeslot:', reservedTimeslot._id);
       console.log('   - Doctor:', appointment.doctorUserId._id);
@@ -1107,7 +1109,7 @@ const requestReschedule = async (req, res) => {
       console.log('   - End:', newEnd.toISOString());
       console.log('   - Status:', reservedTimeslot.status);
       console.log('   - Reserved by:', userId);
-      
+
       // ⭐ Verify timeslot was saved to database
       const verifyTimeslot = await Timeslot.findById(reservedTimeslot._id);
       if (verifyTimeslot) {
@@ -1132,7 +1134,7 @@ const requestReschedule = async (req, res) => {
         timeslotId: reservedTimeslot._id,
         startTime: newStart,
         endTime: newEnd,
-        reason: reason 
+        reason: reason
       }
     });
 
@@ -1167,7 +1169,7 @@ const requestChangeDoctor = async (req, res) => {
     const { appointmentId } = req.params;
     const { newDoctorUserId, reason } = req.body;
     const userId = req.user?.userId;
-    
+
     console.log('🔍 DEBUG requestChangeDoctor:');
     console.log('   - appointmentId:', appointmentId);
     console.log('   - userId:', userId);
@@ -1232,7 +1234,7 @@ const requestChangeDoctor = async (req, res) => {
     // Kiểm tra bác sĩ mới có tồn tại không
     const User = require('../models/user.model');
     const newDoctor = await User.findById(newDoctorUserId);
-    
+
     if (!newDoctor || newDoctor.role !== 'Doctor') {
       return res.status(400).json({
         success: false,
@@ -1243,7 +1245,7 @@ const requestChangeDoctor = async (req, res) => {
     // Kiểm tra bác sĩ mới có khác bác sĩ cũ không
     if (appointment.doctorUserId._id.toString() === newDoctorUserId) {
       return res.status(400).json({
-      success: false,
+        success: false,
         message: 'Bác sĩ mới phải khác bác sĩ hiện tại'
       });
     }
@@ -1265,7 +1267,7 @@ const requestChangeDoctor = async (req, res) => {
       if (!apt.timeslotId) return false;
       const aptStart = new Date(apt.timeslotId.startTime);
       const aptEnd = new Date(apt.timeslotId.endTime);
-      
+
       // Conflict nếu: currentStartTime < aptEnd && currentEndTime > aptStart (không cộng buffer time)
       return (currentStartTime < aptEnd && currentEndTime > aptStart);
     });
@@ -1288,7 +1290,7 @@ const requestChangeDoctor = async (req, res) => {
     if (existingTimeslot) {
       return res.status(400).json({
         success: false,
-      message: 'Bác sĩ mới đã có khung giờ này được đặt hoặc đang chờ xử lý'
+        message: 'Bác sĩ mới đã có khung giờ này được đặt hoặc đang chờ xử lý'
       });
     }
 
@@ -1296,7 +1298,7 @@ const requestChangeDoctor = async (req, res) => {
     // ⭐ CRITICAL FIX: Phải set reservedUntil và reservedByUserId để tránh bị cleanup ngay lập tức
     // Timeslot này sẽ được giữ cho đến khi PatientRequest được approve/reject
     const reservedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 ngày
-    
+
     const reservedTimeslot = await Timeslot.create({
       doctorUserId: newDoctorUserId,
       serviceId: appointment.serviceId._id,
@@ -1327,7 +1329,7 @@ const requestChangeDoctor = async (req, res) => {
       requestedData: {
         doctorUserId: newDoctorUserId,
         timeslotId: reservedTimeslot._id,
-        reason: reason 
+        reason: reason
       }
     });
 
@@ -1423,14 +1425,14 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
     const availableDoctorsUser = doctors.filter(doctor => {
       const doctorStatus = doctorStatusMap.get(doctor._id.toString());
       const workingHours = doctorWorkingHoursMap.get(doctor._id.toString());
-      
+
       // Kiểm tra xem bác sĩ đã có workingHours chưa
-      const hasWorkingHours = workingHours && 
-        workingHours.morningStart && 
-        workingHours.morningEnd && 
-        workingHours.afternoonStart && 
+      const hasWorkingHours = workingHours &&
+        workingHours.morningStart &&
+        workingHours.morningEnd &&
+        workingHours.afternoonStart &&
         workingHours.afternoonEnd;
-      
+
       if (!hasWorkingHours) {
         console.log(`⚠️  Bác sĩ ${doctor.fullName} (${doctor._id}) chưa có workingHours, skip...`);
         return false;
@@ -1446,7 +1448,7 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
           return false;
         }
       }
-      
+
       // Nếu không có trong Doctor model → coi như Available (cho backward compatibility)
       if (!doctorStatus) return true;
       // Chỉ lấy bác sĩ có status "Available", "Busy", hoặc "On Leave"
@@ -1465,12 +1467,12 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
       const checkLeaveDate = new Date(searchDate);
       checkLeaveDate.setUTCHours(12, 0, 0, 0);
       const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctor._id, checkLeaveDate);
-      
+
       if (isOnLeave) {
         console.log(`   ⚠️  SKIP: Doctor ${doctor.fullName} is on leave on ${searchDate.toISOString().split('T')[0]}`);
         continue;
       }
-      
+
       // Kiểm tra xem bác sĩ có schedule available cho ngày này không
       const doctorSchedule = await DoctorSchedule.findOne({
         doctorUserId: doctor._id,
@@ -1642,7 +1644,7 @@ const confirmChangeDoctor = async (req, res) => {
     const userId = req.user.userId;
 
     // Patient confirm thủ công → auto = false
-    const data = await appointmentService.confirmChangeDoctor(appointmentId, userId,{ auto: false });
+    const data = await appointmentService.confirmChangeDoctor(appointmentId, userId, { auto: false });
 
     return res.status(200).json({
       success: true,
@@ -1661,87 +1663,87 @@ const confirmChangeDoctor = async (req, res) => {
 
 
 // ⭐ Từ chối đổi bác sĩ mới thay thế bác sĩ cũ 
-const cancelChangeDoctor = async(req,res) =>{
+const cancelChangeDoctor = async (req, res) => {
   try {
-    const {appointmentId} = req.params;
+    const { appointmentId } = req.params;
     const data = await appointmentService.cancelChangeDoctor(appointmentId);
 
     return res.status(200).json({
       success: true,
       message: 'Từ chối đổi bác sĩ mới thành công',
       data
-    });     
+    });
   } catch (error) {
     console.error('❌ Error in cancelChangeDoctor:', error);
     return res.status(500).json({
       success: false,
       message: error.message || 'Lỗi máy chủ',
       error: error.message
-    });        
+    });
   }
 }
 
-  const getVisitTicket = async(req,res) =>{
-      try {
-          const {appointmentId} = req.params
-          await appointmentService.getVisitTicketPDF(appointmentId,res);
-      } catch (error) {
-      console.error('❌ getVisitTicket error:', error);
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Lỗi máy chủ',
-        error: error.message
-      });
-      }
+const getVisitTicket = async (req, res) => {
+  try {
+    const { appointmentId } = req.params
+    await appointmentService.getVisitTicketPDF(appointmentId, res);
+  } catch (error) {
+    console.error('❌ getVisitTicket error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi máy chủ',
+      error: error.message
+    });
   }
+}
 
-  const managerDashboard = async(req,res) =>{
-    try {
-      const {startDate, endDate} = req.query
-      const result = await appointmentService.managerDashboard(startDate, endDate);
-      return res.status(200).json({
+const managerDashboard = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query
+    const result = await appointmentService.managerDashboard(startDate, endDate);
+    return res.status(200).json({
       success: true,
       message: 'Doanh thu',
       result
-    }); 
-    } catch (error) {
+    });
+  } catch (error) {
     console.error('❌ Error in managerDashboard:', error);
     return res.status(500).json({
       success: false,
       message: error.message || 'Lỗi máy chủ',
       error: error.message
-    });           
-    }
+    });
   }
+}
 
-  const getMonthlyRevenue = async(req,res) =>{
-    try {
-      const {startDate, endDate} = req.query
-      const result = await appointmentService.getMonthlyRevenue(startDate, endDate);
-      
-      const now = new Date();
-      const year = now.getFullYear(); 
-      return res.status(200).json({
+const getMonthlyRevenue = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query
+    const result = await appointmentService.getMonthlyRevenue(startDate, endDate);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    return res.status(200).json({
       success: true,
       message: `Doanh thu từng tháng trong năm ${year}`,
       result
-    });      
-    } catch (error) {
+    });
+  } catch (error) {
     console.error('❌ Error in getMonthlyRevenue:', error);
     return res.status(500).json({
       success: false,
       message: error.message || 'Lỗi máy chủ',
       error: error.message
-    });                
-    }
+    });
   }
+}
 
 
 // ⭐ Lấy danh sách người thân đã đặt lịch của user
 const getMyRelatives = async (req, res) => {
   try {
     const patientUserId = req.user?.userId;
-    
+
     if (!patientUserId) {
       return res.status(401).json({
         success: false,
@@ -1750,19 +1752,19 @@ const getMyRelatives = async (req, res) => {
     }
 
     const Customer = require('../models/customer.model');
-    
+
     // Lấy tất cả customers mà user này đã đặt lịch (appointmentFor = 'other')
     const customers = await Customer.find({
       patientUserId: patientUserId
     })
-    .select('fullName email phoneNumber')
-    .sort({ createdAt: -1 }) // Mới nhất trước
-    .lean();
+      .select('fullName email phoneNumber')
+      .sort({ createdAt: -1 }) // Mới nhất trước
+      .lean();
 
     // Loại bỏ duplicate dựa trên fullName + email
     const uniqueCustomers = [];
     const seen = new Set();
-    
+
     for (const customer of customers) {
       if (customer.fullName && customer.email) {
         const key = `${customer.fullName.toLowerCase().trim()}_${customer.email.toLowerCase().trim()}`;
@@ -1794,10 +1796,10 @@ const getMyRelatives = async (req, res) => {
   }
 };
 
-const getServiceRevenueReport = async(req,res) =>{
+const getServiceRevenueReport = async (req, res) => {
 
   try {
-    const {startDate, endDate} = req.query
+    const { startDate, endDate } = req.query
     const result = await appointmentService.getServiceRevenueReport(startDate, endDate);
     return res.status(200).json({
       success: true,
