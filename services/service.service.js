@@ -63,7 +63,7 @@ class ServiceService {
       throw new Error('Giá dịch vụ phải là số nguyên dương');
     }
 
-    if (price < 0) {
+    if (price <= 0) {
       throw new Error('Giá dịch vụ không được âm');
     }
 
