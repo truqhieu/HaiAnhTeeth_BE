@@ -38,6 +38,7 @@ const getAllServices = async (req, res) => {
       search,
       sortPrice,
       sortTime,
+      minPrice,
     } = req.query;
 
     const result = await serviceService.getAllServices({
@@ -49,6 +50,7 @@ const getAllServices = async (req, res) => {
       search,
       sortPrice,
       sortTime,
+      minPrice,
     });
 
     return res.status(200).json({

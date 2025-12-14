@@ -52,6 +52,40 @@ describe('createConsultationAppointment - UI Error Messages', () => {
       startTime: { $gte: testDateStart, $lt: testDateEnd },
       status: { $in: ['Booked', 'Reserved'] }
     });
+
+    // ⭐ Ensure schedules exist and get valid IDs
+    const ScheduleHelper = require('../utils/scheduleHelper');
+    const DoctorSchedule = require('../models/doctorSchedule.model');
+
+    // Ensure for test dates
+    await ScheduleHelper.ensureSchedulesForDate(new Date('2026-12-08'));
+    await ScheduleHelper.ensureSchedulesForDate(new Date('2026-12-09'));
+    await ScheduleHelper.ensureSchedulesForDate(new Date('2026-12-10'));
+
+    // Get real schedule IDs
+    const schedule1 = await DoctorSchedule.findOne({
+      doctorUserId: DB_IDS.doctor1,
+      date: { $gte: new Date('2026-12-08'), $lt: new Date('2026-12-09') }
+    });
+
+    const schedule2 = await DoctorSchedule.findOne({
+      doctorUserId: DB_IDS.doctor2,
+      date: { $gte: new Date('2026-12-08'), $lt: new Date('2026-12-09') }
+    });
+
+    if (schedule1) {
+      console.log('✅ Found valid schedule1:', schedule1._id);
+      DB_IDS.schedule1 = schedule1._id.toString();
+    } else {
+      console.warn('⚠️ Could not find schedule for doctor1');
+    }
+
+    if (schedule2) {
+      console.log('✅ Found valid schedule2:', schedule2._id);
+      DB_IDS.schedule2 = schedule2._id.toString();
+    } else {
+      console.warn('⚠️ Could not find schedule for doctor2');
+    }
   });
 
   afterEach(async () => {

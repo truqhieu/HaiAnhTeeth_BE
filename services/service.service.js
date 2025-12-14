@@ -114,6 +114,7 @@ class ServiceService {
       search,
       sortPrice,
       sortTime,
+      minPrice,
     } = filters;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -135,6 +136,10 @@ class ServiceService {
       const safe = searchKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const regex = new RegExp(safe, "i");
       filter.$or = [{ serviceName: { $regex: regex } }];
+    }
+
+    if (minPrice !== undefined) {
+      filter.price = { ...filter.price, $gt: Number(minPrice) };
     }
 
     const sortOption = [];
