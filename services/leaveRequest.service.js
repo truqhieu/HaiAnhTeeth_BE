@@ -273,48 +273,16 @@ class LeaveRequestService {
    */
   async _restoreDoctorSchedule(doctorUserId, startDate, endDate) {
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setUTCHours(0, 0, 0, 0);
     const leaveStart = new Date(startDate);
-    leaveStart.setHours(0, 0, 0, 0);
+    leaveStart.setUTCHours(0, 0, 0, 0);
     const leaveEnd = new Date(endDate);
-    leaveEnd.setHours(0, 0, 0, 0);
-
-    // Chỉ restore nếu đã quá ngày kết thúc nghỉ
-    if (today <= leaveEnd) {
-      return; // Chưa đến ngày restore
-    }
-
-    console.log(`🔄 [_restoreDoctorSchedule] Restoring schedules for doctor ${doctorUserId.toString()} after leave ended`);
-
-    // Restore schedules trong khoảng thời gian leave đã hết hạn
-    const updatePromises = [];
-    for (const shift of ['Morning', 'Afternoon']) {
-      const updatePromise = DoctorSchedule.updateMany(
-        {
-          doctorUserId: doctorUserId,
-          date: {
-            $gte: leaveStart,
-            $lte: leaveEnd
-          },
-          shift: shift,
-          status: 'Unavailable'
-        },
-        { $set: { status: 'Available' } }
-      );
-      updatePromises.push(updatePromise);
-    }
-
-    await Promise.all(updatePromises);
-  }
-
-  /**
-   * Helper: Đánh dấu DoctorSchedule thành Unavailable
-   */
-  async _updateDoctorSchedule(doctorUserId, startDate, endDate) {
+    leaveEnd.setUTCHours(0, 0, 0, 0);
+// ...
     const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
+    start.setUTCHours(0, 0, 0, 0);
     const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
+    end.setUTCHours(23, 59, 59, 999);
 
     const currentDate = new Date(start);
     const lastDate = new Date(end);
@@ -322,9 +290,9 @@ class LeaveRequestService {
 
     while (currentDate <= lastDate) {
       const dateToMatch = new Date(currentDate);
-      dateToMatch.setHours(0, 0, 0, 0);
+      dateToMatch.setUTCHours(0, 0, 0, 0);
       const dateToMatchEnd = new Date(currentDate);
-      dateToMatchEnd.setHours(23, 59, 59, 999);
+      dateToMatchEnd.setUTCHours(23, 59, 59, 999);
 
       for (const shift of ['Morning', 'Afternoon']) {
         const updatePromise = DoctorSchedule.updateMany(

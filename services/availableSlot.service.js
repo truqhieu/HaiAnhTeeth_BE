@@ -88,6 +88,34 @@ class AvailableSlotService {
       status: 'Available'
     }).sort({ shift: 1 });
 
+    // ⭐ SELF-HEALING: Nếu không có schedule Available, kiểm tra xem có Unavailable do lỗi không
+    if (schedules.length === 0) {
+      const anySchedule = await DoctorSchedule.findOne({
+        doctorUserId,
+        date: searchDate
+      });
+
+      if (anySchedule && anySchedule.status === 'Unavailable') {
+        const checkLeaveDate = new Date(searchDate);
+        checkLeaveDate.setUTCHours(12, 0, 0, 0);
+        const isOnLeave = await leaveRequestService.isDoctorOnLeave(doctorUserId, checkLeaveDate);
+
+        if (!isOnLeave) {
+          console.log(`⚠️ Schedule is Unavailable but Doctor is NOT on leave. Auto-fixing to Available...`);
+          await DoctorSchedule.updateMany(
+            { doctorUserId, date: searchDate, status: 'Unavailable' },
+            { $set: { status: 'Available' } }
+          );
+          // Re-fetch
+          schedules = await DoctorSchedule.find({
+            doctorUserId,
+            date: searchDate,
+            status: 'Available'
+          }).sort({ shift: 1 });
+        }
+      }
+    }
+
     // ⭐ THÊM: Nếu chưa có schedule cho ngày này → Tự động tạo bằng helper
     if (schedules.length === 0) {
       console.log(`⚠️  Không tìm thấy DoctorSchedule cho ngày ${searchDate.toISOString().split('T')[0]}, tự động tạo...`);
@@ -2221,10 +2249,12 @@ class AvailableSlotService {
       // };
 
 
-      const startStr = date.getDate(approvedLeave.startDate);
-      const startMonth = date.getMonth(approvedLeave.startDate);
-      const endStr = date.getDate(approvedLeave.endDate);
-      const endMonth = date.getMonth(approvedLeave.endDate);
+      const startObj = new Date(approvedLeave.startDate);
+      const endObj = new Date(approvedLeave.endDate);
+      const startStr = startObj.getUTCDate();
+      const startMonth = startObj.getUTCMonth();
+      const endStr = endObj.getUTCDate();
+      const endMonth = endObj.getUTCMonth();
 
 
       const message = startStr === endStr

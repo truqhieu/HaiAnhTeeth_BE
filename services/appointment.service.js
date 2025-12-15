@@ -1694,10 +1694,11 @@ class AppointmentService {
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
                 // Convert leave dates to VN Date (UTC+7)
-                const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
+                // Convert leave dates (stored as UTC) directly to comparable boundaries
+                const leaveStartVN = new Date(leave.startDate);
                 leaveStartVN.setUTCHours(0, 0, 0, 0);
 
-                const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
+                const leaveEndVN = new Date(leave.endDate);
                 leaveEndVN.setUTCHours(23, 59, 59, 999);
 
                 // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)

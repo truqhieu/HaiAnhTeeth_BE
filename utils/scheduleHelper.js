@@ -1,5 +1,6 @@
 const DoctorSchedule = require('../models/doctorSchedule.model');
 const Doctor = require('../models/doctor.model');
+const LeaveRequest = require('../models/leaveRequest.model');
 
 class ScheduleHelper {
 
@@ -400,9 +401,25 @@ class ScheduleHelper {
           afternoon: `${afternoonStart.toISOString()} - ${afternoonEnd.toISOString()}`
         });
 
+        // ⭐ Check leave status
+        const leaveCheckDate = new Date(searchDate);
+        leaveCheckDate.setUTCHours(12, 0, 0, 0);
+        const onLeave = await LeaveRequest.exists({
+            userId: doctorUserId,
+            status: 'Approved',
+            startDate: { $lte: leaveCheckDate },
+            endDate: { $gte: leaveCheckDate }
+        });
+
         // Check status dựa vào thời gian thực
-        const morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
-        const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+        let morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
+        let afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+
+        if (onLeave) {
+            console.log(`⚠️ Bác sĩ ${doctorUserId} đang nghỉ phép ngày ${searchDate.toISOString().split('T')[0]}, set status = Unavailable`);
+            morningStatus = 'Unavailable';
+            afternoonStatus = 'Unavailable';
+        }
 
         const schedulesToCreate = [
           {
@@ -603,8 +620,24 @@ class ScheduleHelper {
       const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
       afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0);
 
-      const morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
-      const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+      // ⭐ Check leave status
+      const leaveCheckDate = new Date(dayStart);
+      leaveCheckDate.setUTCHours(12, 0, 0, 0);
+      const onLeave = await LeaveRequest.exists({
+          userId: doctorUserId,
+          status: 'Approved',
+          startDate: { $lte: leaveCheckDate },
+          endDate: { $gte: leaveCheckDate }
+      });
+
+      let morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
+      let afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+
+      if (onLeave) {
+          console.log(`⚠️ Bác sĩ ${doctorUserId} đang nghỉ phép ngày ${searchDate}, set status = Unavailable`);
+          morningStatus = 'Unavailable';
+          afternoonStatus = 'Unavailable';
+      }
 
       const schedulesToCreate = [
         {
@@ -708,9 +741,25 @@ class ScheduleHelper {
         const [afternoonEndHour, afternoonEndMinute] = workingHours.afternoonEnd.split(':').map(Number);
         afternoonEnd.setUTCHours(afternoonEndHour - 7, afternoonEndMinute, 0, 0); // Convert VN time to UTC
 
+        // ⭐ Check leave status
+        const leaveCheckDate = new Date(searchDate);
+        leaveCheckDate.setUTCHours(12, 0, 0, 0);
+        const onLeave = await LeaveRequest.exists({
+            userId: doctor._id,
+            status: 'Approved',
+            startDate: { $lte: leaveCheckDate },
+            endDate: { $gte: leaveCheckDate }
+        });
+
         // ⭐ Check status dựa vào thời gian thực (so sánh UTC với UTC)
-        const morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
-        const afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+        let morningStatus = morningEnd <= now ? 'Unavailable' : 'Available';
+        let afternoonStatus = afternoonEnd <= now ? 'Unavailable' : 'Available';
+
+        if (onLeave) {
+            console.log(`⚠️ Bác sĩ ${doctor.fullName} đang nghỉ phép ngày ${searchDate.toISOString().split('T')[0]}, set status = Unavailable`);
+            morningStatus = 'Unavailable';
+            afternoonStatus = 'Unavailable';
+        }
 
         // Debug logging
         console.log(`🔍 [${doctor.fullName}] Schedule Status Check:`);

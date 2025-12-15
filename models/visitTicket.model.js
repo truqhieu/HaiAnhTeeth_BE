@@ -12,7 +12,7 @@ const visitTicketSchema = new mongoose.Schema({
     },
     patientGender : {
         type : String,
-        required : true,
+        default: null
     },
     patientAge : {
         type : Number,
