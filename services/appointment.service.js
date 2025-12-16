@@ -1114,16 +1114,17 @@ class AppointmentService {
       throw new Error(`Khung giờ không hợp lệ. Dịch vụ cần ${service.durationMinutes} phút, bạn chọn ${slotDurationMinutes} phút.`);
     }
 
-    // Tạo Customer (khách vãng lai) gắn với staff (bookedBy)
-    const newCustomer = await Customer.create({
-      patientUserId: staffUserId,
+    // Tạo Customer cho walk-in
+    const customer = await Customer.create({
       fullName,
       email,
       phoneNumber,
+      gender: appointmentData.gender || null, // ⭐ THÊM: Lưu giới tính
       hasAccount: false,
-      linkedUserId: null
+      linkedStaffUserId: staffUserId // Link walk-in customer về staff đã tạo
     });
 
+    console.log('✅ Customer created for walk-in:', customer._id);
     // ⭐ Tạo hoặc reuse Timeslot - Áp dụng logic từ patient booking
     let timeslotRecord = null;
 
@@ -1219,7 +1220,7 @@ class AppointmentService {
     // Tạo appointment: trạng thái Approved (bệnh nhân đã đến quầy), mode Offline
     const newAppointment = await Appointment.create({
       patientUserId: staffUserId,       // Người tạo (staff)
-      customerId: newCustomer._id,      // Bệnh nhân vãng lai
+      customerId: customer._id,         // Bệnh nhân vãng lai
       doctorUserId,
       serviceId,
       timeslotId: timeslotRecord._id,
@@ -1869,24 +1870,23 @@ class AppointmentService {
           // ⭐ Kiểm tra xem appointment có nằm trong khoảng thời gian nghỉ phép không
           let isOnLeaveForThisDate = false;
           if (apt.timeslotId && apt.timeslotId.startTime) {
-            // Convert appointment time to VN Date (UTC+7)
-            // Tạo "fake UTC" date bằng cách cộng 7 giờ vào thời gian thực
-            const appointmentTimeVN = new Date(new Date(apt.timeslotId.startTime).getTime() + 7 * 60 * 60 * 1000);
-            const appointmentDateVN = new Date(appointmentTimeVN);
-            appointmentDateVN.setUTCHours(0, 0, 0, 0);
+            // ⭐ FIX: Normalize appointment date để so sánh chính xác theo ngày
+            // Không cộng 7 giờ vì có thể làm sai lệch ngày
+            const appointmentDate = new Date(apt.timeslotId.startTime);
+            appointmentDate.setUTCHours(0, 0, 0, 0);
 
             // Kiểm tra trong danh sách approved leaves
             for (const leave of approvedLeaves) {
               if (leave.userId && leave.userId.toString() === doctorUserId) {
-                // Convert leave dates to VN Date (UTC+7)
-                const leaveStartVN = new Date(new Date(leave.startDate).getTime() + 7 * 60 * 60 * 1000);
-                leaveStartVN.setUTCHours(0, 0, 0, 0);
+                // Normalize leave dates
+                const leaveStart = new Date(leave.startDate);
+                leaveStart.setUTCHours(0, 0, 0, 0);
 
-                const leaveEndVN = new Date(new Date(leave.endDate).getTime() + 7 * 60 * 60 * 1000);
-                leaveEndVN.setUTCHours(23, 59, 59, 999);
+                const leaveEnd = new Date(leave.endDate);
+                leaveEnd.setUTCHours(23, 59, 59, 999);
 
-                // Nếu appointment nằm trong khoảng nghỉ phép (theo ngày VN)
-                if (appointmentDateVN.getTime() >= leaveStartVN.getTime() && appointmentDateVN.getTime() <= leaveEndVN.getTime()) {
+                // So sánh theo timestamp sau khi đã normalize
+                if (appointmentDate.getTime() >= leaveStart.getTime() && appointmentDate.getTime() <= leaveEnd.getTime()) {
                   isOnLeaveForThisDate = true;
                   break;
                 }
