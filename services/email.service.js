@@ -260,7 +260,7 @@ async sendConsultationFormStaffEmail(staffEmail, data) {
     fullName: data.fullName,
     phoneNumber: data.phoneNumber,
     email: data.email,
-    clinicName: data.clinicName || 'Phòng khám Hải An',
+    clinicName: data.clinicName || 'Phòng khám Hải Anh',
     emailStaff: staffEmail, // truyền vào để hiển thị trong nội dung mail
   });
 

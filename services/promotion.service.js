@@ -95,26 +95,21 @@ class PromotionService {
     }
 
     // =========================
-    // 5. Parse & normalize dates (DÙNG DateHelper GIỐNG LeaveRequest)
+    // 5. Parse & normalize dates (VN date-only -> UTC boundaries)
     // =========================
     let startUtc;
     let endUtc;
 
     try {
       startUtc = DateHelper.parseVNDateOnlyStart(startDate); // 00:00 VN -> UTC
-      endUtc = DateHelper.parseVNDateOnlyEnd(endDate);     // 23:59:59.999 VN -> UTC
+      endUtc = DateHelper.parseVNDateOnlyEnd(endDate);       // 23:59:59.999 VN -> UTC
     } catch (e) {
       console.error('❌ Lỗi parse ngày khuyến mãi:', e.message);
       throw new Error('Ngày khuyến mãi không hợp lệ');
     }
 
-    if (isNaN(startUtc.getTime())) {
-      throw new Error('Ngày bắt đầu không hợp lệ');
-    }
-
-    if (isNaN(endUtc.getTime())) {
-      throw new Error('Ngày kết thúc không hợp lệ');
-    }
+    if (isNaN(startUtc.getTime())) throw new Error('Ngày bắt đầu không hợp lệ');
+    if (isNaN(endUtc.getTime())) throw new Error('Ngày kết thúc không hợp lệ');
 
     // ✅ Lấy đầu ngày hôm nay theo VN (UTC)
     const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
@@ -123,22 +118,19 @@ class PromotionService {
       throw new Error('Ngày bắt đầu khuyến mãi không được nhỏ hơn ngày hiện tại');
     }
 
-    // ✅ Cho phép 1 ngày (end == start)
     if (endUtc < startUtc) {
       throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
     }
 
-    const now = new Date();
+    const start = startUtc;
+    const end = endUtc;
 
-    const start = startUtc; // ✅ 00:00 VN (UTC)
-    const end = endUtc;   // ✅ 23:59:59.999 VN (UTC)
-
-    console.log('⏰ [Promotion] Now:', now.toISOString());
-    console.log('📅 [Promotion] Start (UTC+VN):', start.toISOString());
-    console.log('📅 [Promotion] End   (UTC+VN):', end.toISOString());
+    console.log('📅 [Promotion] Start:', start.toISOString());
+    console.log('📅 [Promotion] End  :', end.toISOString());
+    console.log('📅 [Promotion] TodayVNStartUTC:', todayVNStartUtc.toISOString());
 
     // =========================
-    // 6. Check conflict with existing promotions (CHỈ CHECK Active + Upcoming)
+    // 6. Check conflict with existing promotions (Active + Upcoming)
     // =========================
     const conflictingPromotions = await PromotionServiceModel.aggregate([
       { $match: { serviceId: { $in: finalServiceIds } } },
@@ -168,14 +160,19 @@ class PromotionService {
     }
 
     // =========================
-    // 7. Tính status ban đầu
+    // 7. Tính status NGAY LÚC TẠO theo NGÀY VN
+    // - Nếu "hôm nay VN" nằm trong [startDate..endDate] => Active
+    // - Nếu chưa tới => Upcoming
+    // (Expired gần như không xảy ra vì đã validate start >= today)
     // =========================
+    const todayVNEndUtc = new Date(todayVNStartUtc.getTime() + 24 * 60 * 60 * 1000 - 1);
+
     let status = 'Upcoming';
-    if (start <= now && now < end) {
+    if (start <= todayVNEndUtc && end >= todayVNStartUtc) {
       status = 'Active';
-    } else if (now >= end) {
-      status = 'Expired';
     }
+
+    console.log('✅ [Promotion] Initial status (VN-day):', status);
 
     // =========================
     // 8. Tạo promotion
@@ -192,8 +189,6 @@ class PromotionService {
     });
 
     await promotion.save();
-
-    console.log(`✅ [Promotion] Tạo thành công: ${promotion._id} - Status: ${status}`);
 
     // =========================
     // 9. Tạo liên kết dịch vụ trong PromotionService
@@ -219,6 +214,8 @@ class PromotionService {
       status
     };
   }
+
+
 
 
 
