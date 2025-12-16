@@ -83,6 +83,9 @@ class ServiceService {
       if (durationMinutes <= 0) {
         throw new Error('Thời gian làm dịch vụ phải lớn hơn 0 phút');
       }
+      if (durationMinutes > 180) {
+        throw new Error('Thời gian làm dịch vụ không được vượt quá 180 phút (3 tiếng)');
+      }
     }
 
     const finalDuration = category === 'Consultation' ? 30 : durationMinutes;
