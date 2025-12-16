@@ -343,7 +343,7 @@ class PromotionService {
       startDate,
       endDate,
       serviceIds,
-      status, // chỉ cho phép 'Active' | 'Inactive'
+      status,
     } = data;
 
     const promotion = await Promotion.findById(id);
@@ -351,10 +351,7 @@ class PromotionService {
       throw new Error('Không tìm thấy ưu đãi');
     }
 
-    // Không cho sửa ưu đãi đã hết hạn
-    if (promotion.status === 'Expired') {
-      throw new Error('Không thể cập nhật ưu đãi đã hết hạn');
-    }
+    // ✅ Cho phép cập nhật cả promotion đã hết hạn
 
     // =========================
     // 1. Validate title
@@ -558,23 +555,19 @@ class PromotionService {
 
     if (status !== undefined) {
       if (!['Active', 'Inactive'].includes(status)) {
-        throw new Error('Chỉ được cập nhật trạng thái thành Active hoặc Inactive');
+        throw new Error('Chỉ được cập nhật trạng thái thành Đang áp dụng hoặc Không áp dụng');
       }
 
-      const isCurrentlyActive = promotion.status === 'Active';
-      const isCurrentlyInactive = promotion.status === 'Inactive';
-
-      if (!isCurrentlyActive && !isCurrentlyInactive) {
-        throw new Error('Chỉ có thể thay đổi trạng thái khi ưu đãi đang ở trạng thái Active hoặc Inactive');
-      }
+      // ✅ Cho phép thay đổi status từ BẤT KỲ trạng thái nào (Expired, Upcoming, Active, Inactive)
 
       if (status === 'Inactive') {
         finalStatus = 'Inactive';
       }
 
       if (status === 'Active') {
+        // ✅ Cho phép set Active kể cả khi đã hết hạn (admin có thể muốn extend)
         if (autoStatus !== 'Active') {
-          throw new Error('Chỉ có thể chuyển sang Active khi ngày hiện tại nằm trong khoảng áp dụng ưu đãi');
+          console.warn(`⚠️ [Promotion] Admin đang force Active promotion ${id} mặc dù autoStatus = ${autoStatus}`);
         }
         finalStatus = 'Active';
       }

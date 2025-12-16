@@ -6,7 +6,7 @@ const createTransporter = () => {
     const missingVars = [];
     if (!process.env.EMAIL_USER) missingVars.push('EMAIL_USER');
     if (!process.env.EMAIL_PASSWORD) missingVars.push('EMAIL_PASSWORD');
-    
+
     console.error(`⚠️ Thiếu biến môi trường: ${missingVars.join(', ')} trong file .env`);
     console.error('💡 Hướng dẫn: Thêm EMAIL_USER và EMAIL_PASSWORD vào file .env');
     throw new Error(`Email configuration missing: ${missingVars.join(', ')}`);
@@ -229,7 +229,7 @@ HaiAnhTeeth Team
 
 const getAppointmentConfirmationEmailTemplate = (appointmentData) => {
   const { fullName, serviceName, doctorName, startTime, endTime, type, mode } = appointmentData;
-  
+
   // Format date and time với timezone Việt Nam (UTC+7) sử dụng DateHelper
   const formattedDate = DateHelper.formatVietnameseDate(startTime);
   const formattedStartTime = DateHelper.formatVietnameseTime(startTime);
@@ -424,7 +424,7 @@ HaiAnhTeeth Team
 
 const getAppointmentApprovedEmailTemplate = (appointmentData) => {
   const { fullName, serviceName, doctorName, startTime, endTime, type, mode, meetLink } = appointmentData;
-  
+
   // Format date and time
   const formattedDate = DateHelper.formatVietnameseDate(startTime);
   const formattedStartTime = DateHelper.formatVietnameseTime(startTime);
@@ -636,14 +636,14 @@ HaiAnhTeeth Team
 };
 
 const getAppointmentCancelledEmailTemplate = (appointmentData) => {
-  const { 
-    fullName, 
-    serviceName, 
-    doctorName, 
-    startTime, 
-    endTime, 
-    type, 
-    mode, 
+  const {
+    fullName,
+    serviceName,
+    doctorName,
+    startTime,
+    endTime,
+    type,
+    mode,
     cancelReason,
     appointmentId,
     patientPhone,
@@ -652,7 +652,7 @@ const getAppointmentCancelledEmailTemplate = (appointmentData) => {
     serviceDuration,
     cancelledAt
   } = appointmentData;
-  
+
   // Format date and time
   const formattedDate = DateHelper.formatVietnameseDate(startTime);
   const formattedStartTime = DateHelper.formatVietnameseTime(startTime);
@@ -682,11 +682,11 @@ const getAppointmentCancelledEmailTemplate = (appointmentData) => {
 
   const typeText = type === 'Consultation' ? 'Tư vấn' : type === 'Examination' ? 'Khám bệnh' : 'Tái khám';
   const modeText = mode === 'Online' ? 'Trực tuyến' : 'Trực tiếp';
-  
+
   // Format price
-  const formattedPrice = servicePrice ? new Intl.NumberFormat('vi-VN', { 
-    style: 'currency', 
-    currency: 'VND' 
+  const formattedPrice = servicePrice ? new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND'
   }).format(servicePrice) : 'Miễn phí';
 
   return {
@@ -993,9 +993,9 @@ ${clinicName}
       <p>Xin chào <strong>${patientName}</strong>,</p>
       <p>${reason}</p>
       <div class="doctor-change">
-        ${hasOldDoctor 
-          ? `Bác sĩ <span style="text-decoration: line-through;">${oldDoctorName}</span> → <strong>${newDoctorName}</strong>` 
-          : `<strong>${newDoctorName}</strong> được chỉ định khám cho bạn`}
+        ${hasOldDoctor
+        ? `Bác sĩ <span style="text-decoration: line-through;">${oldDoctorName}</span> → <strong>${newDoctorName}</strong>`
+        : `<strong>${newDoctorName}</strong> được chỉ định khám cho bạn`}
       </div>
       <div class="highlight">
         <strong>Dịch vụ:</strong> ${serviceName}<br>
@@ -1110,7 +1110,8 @@ const getReExaminationEmailTemplate = (data) => {
     doctorName,
     appointmentDate,
     appointmentTime,
-    clinicName = 'Phòng khám Hải An',
+    appointmentEndTime,
+    clinicName = 'Phòng khám Hải Anh',
   } = data;
 
   // Format ngày tái khám
@@ -1121,12 +1122,21 @@ const getReExaminationEmailTemplate = (data) => {
     day: 'numeric'
   });
 
-  // Format giờ tái khám
+  // Format giờ bắt đầu tái khám
   const formattedTime = new Date(appointmentTime).toLocaleTimeString('vi-VN', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false
   });
+
+  // Format giờ kết thúc tái khám
+  const formattedEndTime = appointmentEndTime
+    ? new Date(appointmentEndTime).toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    })
+    : null;
 
   return {
     subject: `[TÁI KHÁM] Đơn tái khám mới - ${patientName}`,
@@ -1141,7 +1151,7 @@ THÔNG TIN BỆNH NHÂN:
 THÔNG TIN TÁI KHÁM:
 - Bác sĩ: ${doctorName}
 - Ngày tái khám: ${formattedDate}
-- Giờ tái khám: ${formattedTime}
+- Giờ tái khám: ${formattedTime}${formattedEndTime ? ` - ${formattedEndTime}` : ''}
 - Cơ sở: ${clinicName}
 
 Vui lòng xem chi tiết lịch tái khám trong hệ thống.
@@ -1297,7 +1307,7 @@ Vui lòng xem chi tiết lịch tái khám trong hệ thống.
         </div>
         <div class="info-row">
           <span class="label">Giờ tái khám:</span>
-          <span class="value">${formattedTime}</span>
+          <span class="value">${formattedTime}${formattedEndTime ? ` - ${formattedEndTime}` : ''}</span>
         </div>
         <div class="info-row">
           <span class="label">Cơ sở:</span>
@@ -1328,7 +1338,7 @@ module.exports = {
   getResetPasswordEmailTemplate,
   getAppointmentConfirmationEmailTemplate,
   getAppointmentApprovedEmailTemplate,
-  getAppointmentCancelledEmailTemplate, 
+  getAppointmentCancelledEmailTemplate,
   getRequestApprovedEmailTemplate,
   getRequestRejectedEmailTemplate,
   getDoctorAssignedEmailTemplate,
