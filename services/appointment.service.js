@@ -3058,7 +3058,7 @@ class AppointmentService {
               alignment: 'left'
             },
             {
-              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              text: 'Hotline: 0338281982\nWebsite: haianhteeth.vercel.app',
               fontSize: 8,
               alignment: 'right',
               color: '#555'
@@ -4124,6 +4124,7 @@ class AppointmentService {
         doctorName: originalAppointment.doctorUserId?.fullName || 'Chưa xác định',
         appointmentDate: startTime,
         appointmentTime: startTime,
+        appointmentEndTime: endTime,
         clinicName: 'Phòng khám Hải Anh'
       });
       console.log('✅ [Email] Gửi email tái khám thành công');

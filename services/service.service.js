@@ -63,8 +63,8 @@ class ServiceService {
       throw new Error('Giá dịch vụ phải là số nguyên dương');
     }
 
-    if (price <= 0) {
-      throw new Error('Giá dịch vụ không được âm');
+    if (price < 0) {
+      throw new Error('Giá dịch vụ không được nhỏ hơn 0 đồng');
     }
 
     // Validate category
@@ -82,6 +82,9 @@ class ServiceService {
       }
       if (durationMinutes <= 0) {
         throw new Error('Thời gian làm dịch vụ phải lớn hơn 0 phút');
+      }
+      if (durationMinutes > 180) {
+        throw new Error('Thời gian làm dịch vụ không được vượt quá 180 phút (3 tiếng)');
       }
     }
 
@@ -481,8 +484,8 @@ class ServiceService {
 
     // Validate price
     if (price !== undefined) {
-      if (isNaN(price) || Number(price) <= 0) {
-        throw new Error('Giá dịch vụ phải là số nguyên dương');
+      if (isNaN(price) || Number(price) < 0) {
+        throw new Error('Giá dịch vụ phải là số không âm');
       }
       updates.price = Number(price);
     }
@@ -509,17 +512,20 @@ class ServiceService {
       if (isNaN(durationMinutes) || Number(durationMinutes) <= 0) {
         throw new Error('Thời gian làm dịch vụ phải là số dương (phút)');
       }
+      if (Number(durationMinutes) > 180) {
+        throw new Error('Thời gian làm dịch vụ không được vượt quá 180 phút');
+      }
       updates.durationMinutes = Number(durationMinutes);
     }
 
-    // Logic tự động theo category
-    if (category === 'Consultation') {
-      updates.durationMinutes = 30;
-      updates.isPrepaid = true;
-    } else if (category === 'Examination') {
-      updates.durationMinutes = 45;
-      updates.isPrepaid = false;
-    }
+    // // Logic tự động theo category
+    // if (category === 'Consultation') {
+    //   updates.durationMinutes = 30;
+    //   updates.isPrepaid = true;
+    // } else if (category === 'Examination') {
+    //   updates.durationMinutes = 45;
+    //   updates.isPrepaid = false;
+    // }
 
     // Validate status
     if (status !== undefined) {
