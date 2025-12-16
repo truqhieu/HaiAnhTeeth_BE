@@ -512,6 +512,9 @@ class ServiceService {
       if (isNaN(durationMinutes) || Number(durationMinutes) <= 0) {
         throw new Error('Thời gian làm dịch vụ phải là số dương (phút)');
       }
+      if (Number(durationMinutes) > 180) {
+        throw new Error('Thời gian làm dịch vụ không được vượt quá 180 phút');
+      }
       updates.durationMinutes = Number(durationMinutes);
     }
 
