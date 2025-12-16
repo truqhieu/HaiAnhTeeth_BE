@@ -28,7 +28,8 @@ const {
   reserveTimeslot,
   releaseReservedTimeslot,
   getServiceRevenueReport,
-  getRevenueServicePDF
+  getRevenueServicePDF,
+  checkEmailExistence // ⭐ THÊM export
 } = require('../controllers/appointment.controller');
 const { getMedicalRecordForPatient, getPatientMedicalRecordsList } = require('../controllers/medicalRecord.controller');
 const { createAppointmentByAI } = require('../controllers/aiBooking.controller');
@@ -48,6 +49,9 @@ router.post('/release-slot', verifyToken, verifyRole(['Patient', 'Doctor', 'Staf
 
 // ⭐ Staff tạo lịch hẹn khám trực tiếp (walk-in)
 router.post('/walk-in/create', verifyToken, verifyRole(['Staff', 'Manager']), createWalkInAppointment);
+
+// ⭐ Check email existence (Staff only)
+router.get('/walk-in/check-email', verifyToken, verifyRole(['Staff', 'Manager']), checkEmailExistence);
 
 // Bao gồm cả lịch tư vấn và lịch khám
 router.post('/create-by-staff', verifyToken, verifyRole(['Staff', 'Manager']), createConsultationAppointment);

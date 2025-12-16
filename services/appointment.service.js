@@ -959,6 +959,19 @@ class AppointmentService {
       throw new Error('Vui lòng nhập đầy đủ họ tên, email và số điện thoại của bệnh nhân');
     }
 
+    // ⭐ VALIDATE: Check if email already exists in User or Customer
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      throw new Error(`Email "${email}" đã tồn tại trong hệ thống.`);
+    }
+
+    const existingCustomer = await Customer.findOne({ email: normalizedEmail });
+    if (existingCustomer) {
+      throw new Error(`Email "${email}" đã tồn tại trong hệ thống.`);
+    }
+
     const requestedStartTime = new Date(selectedSlot.startTime);
     if (Number.isNaN(requestedStartTime.getTime())) {
       throw new Error('Thời gian khung giờ không hợp lệ');
@@ -1645,12 +1658,14 @@ class AppointmentService {
       // Fetch tất cả doctors cùng lúc (tránh N+1 queries)
       const doctors = await Doctor.find({
         doctorUserId: { $in: doctorUserIds }
-      }).select('doctorUserId status').lean();
+      }).select('doctorUserId status workingHours').lean();
 
       // Tạo map để lookup nhanh
       const doctorStatusMap = new Map();
+      const doctorWorkingHoursMap = new Map();
       doctors.forEach(doctor => {
         doctorStatusMap.set(doctor.doctorUserId.toString(), doctor.status);
+        doctorWorkingHoursMap.set(doctor.doctorUserId.toString(), doctor.workingHours);
       });
 
       // ⭐ Lấy tất cả approved leave requests để kiểm tra theo ngày
@@ -1717,6 +1732,12 @@ class AppointmentService {
           } else {
             // Nếu không có leave cho ngày này, dùng status global (Available, Busy, Inactive)
             apt.doctorStatus = globalStatus || null;
+          }
+
+          // ⭐ Attach working hours from Doctor model if available
+          const workingHours = doctorWorkingHoursMap.get(doctorUserId);
+          if (workingHours) {
+            apt.doctorWorkingHours = workingHours;
           }
         }
 

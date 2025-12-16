@@ -266,6 +266,49 @@ const createWalkInAppointment = async (req, res) => {
   }
 };
 
+// ⭐ Check email existence for walk-in
+const checkEmailExistence = async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Vui lòng cung cấp email' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(200).json({ 
+        success: true,
+        data: {
+          exists: true, 
+          message: 'Email đã tồn tại trong hệ thống.',
+          type: 'User'
+        }
+      });
+    }
+
+    const existingCustomer = await Customer.findOne({ email: normalizedEmail });
+    if (existingCustomer) {
+      return res.status(200).json({ 
+        success: true,
+        data: {
+          exists: true, 
+          message: 'Email đã tồn tại trong hệ thống.',
+          type: 'Customer'
+        }
+      });
+    }
+
+    return res.status(200).json({ success: true, data: { exists: false } });
+
+  } catch (error) {
+    console.error('❌ Error in checkEmailExistence:', error);
+    return res.status(500).json({ success: false, message: 'Lỗi server' });
+  }
+};
+
 const reviewAppointment = async (req, res) => {
   try {
     const { appointmentId, action, cancelReason } = req.body;
@@ -1860,5 +1903,6 @@ module.exports = {
   reserveTimeslot,
   releaseReservedTimeslot,
   getServiceRevenueReport,
-  getRevenueServicePDF
+  getRevenueServicePDF,
+  checkEmailExistence // ⭐ THÊM Export
 };
