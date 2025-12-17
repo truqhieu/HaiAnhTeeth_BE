@@ -85,7 +85,7 @@ paymentMonitor.startMonitoring(1); // Check mỗi 1 phút
 console.log('');
 
 
-// ⭐ THÊM: Khởi động AppointmentMonitor (auto-expire appointments sau 18:00)
+// ⭐ THÊM: Khởi động AppointmentMonitor (auto-update status sau end of day - 23:59:59)
 console.log('🔔 Khởi động Appointment Monitor...');
 appointmentMonitor.startMonitoring(60); // Check mỗi 60 phút (1 giờ)
 console.log('');

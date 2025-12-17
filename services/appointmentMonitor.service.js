@@ -3,65 +3,21 @@ const DoctorSchedule = require('../models/doctorSchedule.model');
 
 /**
  * Service để monitor và auto-expire các appointment
- * - Chạy định kỳ để check và update status appointments dựa trên endTime của buổi làm việc:
- *   + Pending, Approved → sau endTime buổi chiều → Expired
- *   + CheckedIn → sau endTime buổi chiều → No-Show
- *   + InProgress → sau endTime buổi chiều → Completed
+ * - Chạy định kỳ để check và update status appointments dựa trên end of day (23:59:59):
+ *   + Pending, Approved → sau end of day → Cancelled
+ *   + CheckedIn → sau end of day → No-Show
+ *   + InProgress → sau end of day → Completed
  */
 class AppointmentMonitorService {
   
-  /**
-   * Helper: Tính endTime của buổi làm việc từ DoctorSchedule
-   * @param {Object} schedules - Array of DoctorSchedule
-   * @param {Date} appointmentDate - Ngày của appointment
-   * @returns {Date|null} - EndTime của buổi chiều (hoặc buổi làm việc cuối cùng trong ngày)
-   */
-  _getScheduleEndTime(schedules, appointmentDate) {
-    if (!schedules || schedules.length === 0) {
-      return null;
-    }
-
-    const appointmentDateOnly = new Date(appointmentDate);
-    appointmentDateOnly.setUTCHours(0, 0, 0, 0);
-
-    let maxEndTime = null;
-
-    for (const schedule of schedules) {
-      const workingHours = schedule.workingHours || {
-        morningStart: '08:00',
-        morningEnd: '12:00',
-        afternoonStart: '14:00',
-        afternoonEnd: '18:00'
-      };
-
-      // Lấy endTime của buổi chiều (nếu có) hoặc buổi làm việc
-      if (schedule.shift === 'Afternoon') {
-        const [endHour, endMinute] = workingHours.afternoonEnd.split(':').map(Number);
-        const endTime = new Date(appointmentDateOnly);
-        endTime.setUTCHours(endHour - 7, endMinute, 0, 0); // Convert VN time to UTC
-        if (!maxEndTime || endTime > maxEndTime) {
-          maxEndTime = endTime;
-        }
-      } else if (schedule.shift === 'Morning') {
-        // Nếu chỉ có buổi sáng, lấy endTime buổi sáng
-        const [endHour, endMinute] = workingHours.morningEnd.split(':').map(Number);
-        const endTime = new Date(appointmentDateOnly);
-        endTime.setUTCHours(endHour - 7, endMinute, 0, 0);
-        // Chỉ dùng nếu không có buổi chiều
-        if (!maxEndTime) {
-          maxEndTime = endTime;
-        }
-      }
-    }
-
-    return maxEndTime;
-  }
+  // ⭐ REMOVED: _getScheduleEndTime method no longer needed
+  // Now using end-of-day (23:59:59) instead of working hours
 
   /**
-   * Auto-update status appointments dựa trên endTime của buổi làm việc
-   * - Pending, Approved → sau endTime buổi chiều → Expired
-   * - CheckedIn → sau endTime buổi chiều → No-Show
-   * - InProgress → sau endTime buổi chiều → Completed
+   * Auto-update status appointments dựa trên end of day (23:59:59)
+   * - Pending, Approved → sau end of day → Cancelled
+   * - CheckedIn → sau end of day → No-Show
+   * - InProgress → sau end of day → Completed
    */
   async expireAppointments() {
     try {
@@ -120,13 +76,13 @@ class AppointmentMonitorService {
             
             // Chỉ xử lý nếu appointment là ngày hôm nay hoặc quá khứ
             if (appointmentDateStr <= todayVNStr) {
-              // Nếu là ngày hôm nay hoặc quá khứ và không có schedule, dùng mặc định 18:00 cho buổi chiều
+              // ⭐ CHANGE: Dùng end of day (23:59:59) thay vì 18:00
               const defaultEndTime = new Date(appointmentDateOnly);
-              defaultEndTime.setUTCHours(18 - 7, 0, 0, 0); // 18:00 VN = 11:00 UTC
+              defaultEndTime.setUTCHours(23, 59, 59, 999); // End of day UTC
               
               if (now >= defaultEndTime) {
                 const oldStatus = appointment.status;
-                const updated = await this._updateAppointmentStatus(appointment, now);
+                const updated = await this._updateAppointmentStatus(appointment, now, defaultEndTime);
                 if (updated) {
                   if (oldStatus === 'Pending' || oldStatus === 'Approved') {
                     expiredCount++;
@@ -144,18 +100,14 @@ class AppointmentMonitorService {
             continue;
           }
 
-          // Tính endTime của buổi làm việc (ưu tiên buổi chiều)
-          const scheduleEndTime = this._getScheduleEndTime(schedules, appointmentDate);
+          // ⭐ CHANGE: Dùng end of day (23:59:59) thay vì working hours
+          const appointmentEndOfDay = new Date(appointmentDateOnly);
+          appointmentEndOfDay.setUTCHours(23, 59, 59, 999); // End of day UTC
 
-          if (!scheduleEndTime) {
-            console.log(`   ⚠️  Không thể xác định endTime cho appointment ${appointment._id}`);
-            continue;
-          }
-
-          // Kiểm tra: Nếu hiện tại đã qua endTime của buổi làm việc
-          if (now >= scheduleEndTime) {
+          // Kiểm tra: Nếu hiện tại đã qua end of day
+          if (now >= appointmentEndOfDay) {
             const oldStatus = appointment.status;
-            const updated = await this._updateAppointmentStatus(appointment, now, scheduleEndTime);
+            const updated = await this._updateAppointmentStatus(appointment, now, appointmentEndOfDay);
             
             if (updated) {
               if (oldStatus === 'Pending' || oldStatus === 'Approved') {
