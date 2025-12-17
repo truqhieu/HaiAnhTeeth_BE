@@ -79,7 +79,7 @@ class consultationInformationService {
                                 fullName: cleanName,
                                 phoneNumber: cleanPhone,
                                 email: cleanEmail,
-                                clinicName: 'Phòng khám Hải An',
+                                clinicName: 'Phòng khám Hải Anh',
                             })
                         )
                 );

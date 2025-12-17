@@ -1024,7 +1024,7 @@ const getConsultationFormStaffEmailTemplate = (data) => {
     fullName,
     phoneNumber,
     email,
-    clinicName = 'Phòng khám Hải An',
+    clinicName = 'Phòng khám Hải Anh',
     emailStaff, // email staff lấy từ DB truyền vào
   } = data;
 
@@ -1087,13 +1087,9 @@ Vui lòng liên hệ khách sớm để tư vấn & chốt lịch.
       <div class="info-box">
         <div class="info-row"><span class="label">Thời điểm gửi form:</span> ${createdAt}</div>
         <div class="info-row"><span class="label">Cơ sở:</span> ${clinicName}</div>
-        ${emailStaff ? `<div class="info-row"><span class="label">Gửi tới:</span> ${emailStaff}</div>` : ''}
       </div>
 
       <p><strong>Gợi ý xử lý:</strong> Vui lòng liên hệ khách sớm để tư vấn chi tiết và đề xuất lịch hẹn phù hợp.</p>
-    </div>
-    <div class="email-footer">
-      Email tự động gửi tới staff${emailStaff ? ` (${emailStaff})` : ''}.
     </div>
   </div>
 </body>
@@ -1123,20 +1119,10 @@ const getReExaminationEmailTemplate = (data) => {
   });
 
   // Format giờ bắt đầu tái khám
-  const formattedTime = new Date(appointmentTime).toLocaleTimeString('vi-VN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  });
+  const formattedTime = formatVietnameseTime(appointmentTime);
 
   // Format giờ kết thúc tái khám
-  const formattedEndTime = appointmentEndTime
-    ? new Date(appointmentEndTime).toLocaleTimeString('vi-VN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    })
-    : null;
+  const formattedEndTime = formatVietnameseTime(appointmentEndTime);
 
   return {
     subject: `[TÁI KHÁM] Đơn tái khám mới - ${patientName}`,
