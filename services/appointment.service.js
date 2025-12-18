@@ -3154,7 +3154,7 @@ class AppointmentService {
           {
             columns: [
               {
-                width: '40%',
+                width: '50%',
                 stack: [
                   { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
                   { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
@@ -3162,9 +3162,9 @@ class AppointmentService {
                 ]
               },
               {
-                width: '60%',
+                width: '50%',
                 stack: [
-                  { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: `BÁC SĨ`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
                   { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
                   '\n\n\n',
                 ]
@@ -3205,7 +3205,7 @@ class AppointmentService {
               alignment: 'left'
             },
             {
-              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              text: 'Hotline: 0338281982\nWebsite: haianhteeth.vercel.app',
               fontSize: 8,
               alignment: 'right',
               color: '#555'
@@ -3301,7 +3301,7 @@ class AppointmentService {
           {
             columns: [
               {
-                width: '40%',
+                width: '50%',
                 stack: [
                   { text: 'KHÁCH HÀNG', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
                   { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
@@ -3309,9 +3309,9 @@ class AppointmentService {
                 ]
               },
               {
-                width: '60%',
+                width: '50%',
                 stack: [
-                  { text: `BÁC SĨ ${visitTicketData.doctor}`, alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
+                  { text: 'BÁC SĨ', alignment: 'center', bold: true, margin: [0, 20, 0, 5] },
                   { text: '(Ký và ghi rõ họ tên)', alignment: 'center', fontSize: 8, italics: true },
                   '\n\n\n',
                 ]
