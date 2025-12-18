@@ -4592,9 +4592,7 @@ class AppointmentService {
     console.log('📌 [getServiceRevenueReport] Range:', start, end);
 
     // ====== 2. VISIT TICKET (Examination / Consultation) ======
-    // Ở đây dùng giá trong VisitTicket:
-    // - service.price  => giá gốc lúc khám
-    // - service.total  => giá sau giảm (thanh toán)
+    // Lấy doanh thu thực thu từ VisitTicket
     const ticketAgg = await VisitTicket.aggregate([
       {
         $addFields: {
@@ -4608,38 +4606,18 @@ class AppointmentService {
       },
       { $unwind: "$service" },
       {
-        $project: {
-          serviceId: "$service.serviceId",
-          serviceName: "$service.serviceName",
-          category: {
-            $switch: {
-              branches: [
-                { case: { $eq: ["$service.category", "Examination"] }, then: "Khám trực tiếp" },
-                { case: { $eq: ["$service.category", "Consultation"] }, then: "Tư vấn online" }
-              ],
-              default: "—"
-            }
-          },
-          originalUnitPrice: "$service.price",   // giá gốc 1 lần
-          paidUnitPrice: "$service.total"        // giá đã giảm 1 lần
-        }
-      },
-      {
         $group: {
-          _id: "$serviceId",
-          serviceName: { $first: "$serviceName" },
-          category: { $first: "$category" },
-          // tổng doanh thu theo giá gốc (chưa giảm)
-          totalOriginal: { $sum: "$originalUnitPrice" },
+          _id: "$service.serviceId",
+          serviceName: { $first: "$service.serviceName" },
+          category: { $first: "$service.category" },
           // tổng doanh thu thực thu (sau giảm)
-          totalPaid: { $sum: "$paidUnitPrice" },
+          totalPaid: { $sum: "$service.total" },
           count: { $sum: 1 }
         }
       }
     ]);
 
     // ====== 3. CONSULTATION COMPLETED (Appointment) ======
-    // Không có discount riêng, tạm coi giá gốc = giá thanh toán
     const consultationAgg = await Appointment.aggregate([
       {
         $match: {
@@ -4659,21 +4637,11 @@ class AppointmentService {
       },
       { $unwind: "$serviceInfo" },
       {
-        $project: {
-          serviceId: "$serviceId",
-          serviceName: "$serviceInfo.serviceName",
-          category: "Tư vấn online",
-          originalUnitPrice: "$serviceInfo.price" // giá chuẩn của dịch vụ tư vấn
-          // nếu sau này có field giảm giá/giá thực tế trong Appointment thì chỉnh thêm ở đây
-        }
-      },
-      {
         $group: {
           _id: "$serviceId",
-          serviceName: { $first: "$serviceName" },
-          category: { $first: "$category" },
-          totalOriginal: { $sum: "$originalUnitPrice" },
-          totalPaid: { $sum: "$originalUnitPrice" }, // hiện tại = giá gốc (chưa giảm)
+          serviceName: { $first: "$serviceInfo.serviceName" },
+          category: { $first: "$serviceInfo.category" },
+          totalPaid: { $sum: "$serviceInfo.price" }, // giá chuẩn (chưa có giảm giá)
           count: { $sum: 1 }
         }
       }
@@ -4689,7 +4657,6 @@ class AppointmentService {
         serviceId: sv._id,
         serviceName: sv.serviceName,
         category: sv.category,
-        totalOriginal: sv.totalOriginal,
         totalPaid: sv.totalPaid,
         count: sv.count
       });
@@ -4703,56 +4670,93 @@ class AppointmentService {
           serviceId: sv._id,
           serviceName: sv.serviceName,
           category: sv.category,
-          totalOriginal: sv.totalOriginal,
           totalPaid: sv.totalPaid,
           count: sv.count
         });
       } else {
         const existing = map.get(key);
-        existing.totalOriginal += sv.totalOriginal;
         existing.totalPaid += sv.totalPaid;
         existing.count += sv.count;
       }
     });
 
-    // Map ra format FE cần: có giá gốc & giá thanh toán
+    // ====== 5. LOOKUP GIÁ NIÊM YẾT HIỆN TẠI TỪ BẢNG SERVICE ======
+    const serviceIds = Array.from(map.keys());
+    const currentServices = await Service.find({ _id: { $in: serviceIds } }).select('_id serviceName price category');
+
+    const servicePriceMap = new Map();
+    currentServices.forEach(s => {
+      servicePriceMap.set(s._id.toString(), {
+        listPrice: s.price,
+        serviceName: s.serviceName,
+        category: s.category
+      });
+    });
+
+    // Map ra format FE cần
     const services = Array.from(map.values()).map(s => {
-      const avgOriginalPrice = s.count > 0 ? s.totalOriginal / s.count : 0;
+      const key = s.serviceId.toString();
+      const serviceInfo = servicePriceMap.get(key) || {};
+      const listPrice = serviceInfo.listPrice || 0;
       const avgPaidPrice = s.count > 0 ? s.totalPaid / s.count : 0;
+
+      // Tính % giảm giá trung bình
+      let discountPercent = 0;
+      if (listPrice > 0 && s.count > 0) {
+        const expectedRevenue = listPrice * s.count;
+        discountPercent = ((expectedRevenue - s.totalPaid) / expectedRevenue) * 100;
+      }
+
+      // Format category
+      let displayCategory = s.category;
+      if (s.category === 'Examination') {
+        displayCategory = 'Khám trực tiếp';
+      } else if (s.category === 'Consultation') {
+        displayCategory = 'Tư vấn online';
+      }
 
       return {
         serviceId: s.serviceId,
-        serviceName: s.serviceName,
-        category: s.category,
-        // đơn giá
-        originalPrice: avgOriginalPrice, // giá gốc trung bình 1 lần
-        paidPrice: avgPaidPrice,         // giá thanh toán trung bình 1 lần
+        serviceName: serviceInfo.serviceName || s.serviceName,
+        category: displayCategory,
+        // giá niêm yết hiện tại
+        listPrice: listPrice,
+        // giá thanh toán trung bình
+        paidPrice: avgPaidPrice,
+        // % giảm giá trung bình
+        discountPercent: discountPercent,
         // số lượng
         count: s.count,
-        // doanh thu
-        totalOriginalRevenue: s.totalOriginal, // tổng nếu không giảm
-        totalPaidRevenue: s.totalPaid,         // tổng thực thu
-        totalRevenue: s.totalPaid              // backward-compatible
+        // doanh thu thực thu
+        totalPaidRevenue: s.totalPaid,
+        totalRevenue: s.totalPaid  // backward-compatible
       };
     });
 
-    // ====== 5. SUMMARY ======
-    let totalOriginalRevenue = 0;
+    // ====== 6. SUMMARY ======
     let totalPaidRevenue = 0;
+    let totalExpectedRevenue = 0;
     let totalCount = 0;
 
     services.forEach(s => {
-      totalOriginalRevenue += s.totalOriginalRevenue;
       totalPaidRevenue += s.totalPaidRevenue;
+      totalExpectedRevenue += (s.listPrice * s.count);
       totalCount += s.count;
     });
+
+    const totalDiscountAmount = totalExpectedRevenue - totalPaidRevenue;
+    const totalDiscountPercent = totalExpectedRevenue > 0
+      ? (totalDiscountAmount / totalExpectedRevenue) * 100
+      : 0;
 
     return {
       filterRange: { startDate: start, endDate: end },
       summary: {
         totalServices: services.length,
-        totalOriginalRevenue,
-        totalPaidRevenue,
+        totalExpectedRevenue,      // Tổng nếu bán giá niêm yết
+        totalPaidRevenue,           // Tổng thực thu
+        totalDiscountAmount,        // Tổng tiền giảm
+        totalDiscountPercent,       // % giảm giá trung bình
         totalRevenue: totalPaidRevenue, // cho FE dùng như cũ
         totalCount
       },
@@ -4779,6 +4783,10 @@ class AppointmentService {
         }).format(price || 0);
       }
 
+      function formatPercent(percent) {
+        return `${percent.toFixed(1)}%`;
+      }
+
       // ⭐ SẮP XẾP DỊCH VỤ THEO SỐ LẦN SỬ DỤNG (count) GIẢM DẦN
       const sortedServices = [...services].sort((a, b) => {
         const countA = a.count || 0;
@@ -4786,47 +4794,42 @@ class AppointmentService {
         return countB - countA; // dùng nhiều nhất đứng trên
       });
 
-      // ==== BẢNG DỊCH VỤ (mới: có giá gốc & giá thanh toán) ====
+      // ==== BẢNG DỊCH VỤ ====
       const serviceTableBody = [
         [
           { text: 'STT', style: 'tableHeader', alignment: 'center' },
           { text: 'Dịch vụ', style: 'tableHeader' },
           { text: 'Loại', style: 'tableHeader', alignment: 'center' },
           { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
-          { text: 'Giá gốc', style: 'tableHeader', alignment: 'right' },
-          { text: 'Giá thanh toán', style: 'tableHeader', alignment: 'right' },
-          { text: 'Tổng doanh thu (thực thu)', style: 'tableHeader', alignment: 'right' }
+          { text: 'Giá niêm yết', style: 'tableHeader', alignment: 'right' },
+          { text: 'Tổng doanh thu', style: 'tableHeader', alignment: 'right' },
+          { text: 'Tổng thực thu', style: 'tableHeader', alignment: 'right' },
+          { text: 'Tiền giảm', style: 'tableHeader', alignment: 'right' }
         ]
       ];
 
       // ⭐ DÙNG sortedServices THAY VÌ services
       sortedServices.forEach((sv, index) => {
-        let displayCategory = '—';
-        if (sv.category === 'Examination') {
-          displayCategory = 'Khám trực tiếp';
-        } else if (sv.category === 'Consultation') {
-          displayCategory = 'Tư vấn online';
-        } else if (sv.category) {
-          displayCategory = sv.category;
-        }
+        const expectedRevenue = (sv.listPrice || 0) * (sv.count || 0);
+        const actualRevenue = sv.totalPaidRevenue || sv.totalRevenue || 0;
+        const discountAmount = expectedRevenue - actualRevenue;
 
         serviceTableBody.push([
           { text: (index + 1).toString(), alignment: 'center' },
           { text: sv.serviceName || '—' },
-          { text: displayCategory, alignment: 'center' },
+          { text: sv.category || '—', alignment: 'center' },
           { text: (sv.count || 0).toString(), alignment: 'right' },
-
-          { text: formatPrice(sv.originalPrice || 0), alignment: 'right' },
-          { text: formatPrice(sv.paidPrice || 0), alignment: 'right' },
-
+          { text: formatPrice(sv.listPrice || 0), alignment: 'right' },
+          { text: formatPrice(expectedRevenue), alignment: 'right', color: '#666' },
           {
-            text: formatPrice(
-              sv.totalPaidRevenue != null
-                ? sv.totalPaidRevenue
-                : sv.totalRevenue || 0
-            ),
+            text: formatPrice(actualRevenue),
             alignment: 'right',
             bold: true
+          },
+          {
+            text: formatPrice(discountAmount),
+            alignment: 'right',
+            color: discountAmount > 0 ? '#d32f2f' : '#333'
           }
         ]);
       });
@@ -4850,7 +4853,7 @@ class AppointmentService {
               alignment: 'left'
             },
             {
-              text: 'Hotline: 0945650166\nWebsite: haianhclinic.vn',
+              text: 'Hotline: 0338281982\nWebsite: haianhteeth.vercel.app',
               fontSize: 8,
               alignment: 'right',
               color: '#555'
@@ -4882,8 +4885,9 @@ class AppointmentService {
             ul: [
               `Tổng số dịch vụ có doanh thu: ${summary.totalServices}`,
               `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
-              `Tổng doanh thu (giá gốc, chưa giảm): ${formatPrice(summary.totalOriginalRevenue || 0)}`,
-              `Tổng doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
+              `Doanh thu nếu bán giá niêm yết: ${formatPrice(summary.totalExpectedRevenue || 0)}`,
+              `Doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
+              `Tổng tiền giảm giá: ${formatPrice(summary.totalDiscountAmount || 0)}`,
               `Danh sách dịch vụ được sắp xếp theo số lần sử dụng giảm dần.`
             ],
             margin: [0, 0, 0, 10]
@@ -4895,7 +4899,7 @@ class AppointmentService {
           {
             table: {
               headerRows: 1,
-              widths: ['5%', '21%', '15%', '9%', '14%', '14%', '22%'],
+              widths: ['3%', '18%', '10%', '7%', '14%', '16%', '17%', '15%'],
               body: serviceTableBody
             },
             layout: {
@@ -4911,9 +4915,8 @@ class AppointmentService {
           {
             text:
               'Ghi chú:\n' +
-              '- Giá gốc: giá dịch vụ theo bảng giá tại thời điểm khám (chưa áp dụng khuyến mãi).\n' +
-              '- Giá thanh toán: số tiền khách hàng thực tế phải trả sau khi áp dụng khuyến mãi/giảm giá.\n' +
-              '- Doanh thu thực thu được tính theo giá thanh toán.\n' +
+              '- Giá niêm yết: giá dịch vụ theo bảng giá hiện tại của phòng khám.\n' +
+              '- Doanh thu thực thu: tổng tiền thực tế thu được sau khi áp dụng khuyến mãi.\n' +
               '- Bảng trên được sắp xếp theo số lần sử dụng dịch vụ (cao đến thấp).',
             fontSize: 8,
             color: '#666',
