@@ -337,10 +337,27 @@ class AIBookingLangchainService {
           }
 
           // Try partial match
-          const services = await Service.find({
+          let services = await Service.find({
             ...query,
             serviceName: { $regex: new RegExp(serviceName, 'i') },
           }).lean();
+          
+          // ⭐ FIX Case 15: Filter for dental-specific keywords
+          // If query contains "răng", only show services with "răng" in name
+          const normalizedQuery = serviceName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          const containsRang = normalizedQuery.includes('rang') || serviceName.toLowerCase().includes('răng');
+          
+          if (containsRang && services.length > 0) {
+            // Filter to ONLY services with "răng" in the name
+            const dentalServices = services.filter(s => 
+              s.serviceName.toLowerCase().includes('răng')
+            );
+            
+            if (dentalServices.length > 0) {
+              services = dentalServices;
+              console.log(`🦷 [Tool] Filtered to ${services.length} dental services containing "răng"`);
+            }
+          }
 
           if (services.length === 1) {
             this.updateConversationContext(patientUserId, { serviceId: services[0]._id.toString() });
@@ -361,7 +378,7 @@ class AIBookingLangchainService {
             };
             console.log(`✅ [Tool] find_service_by_name result (partial match): service found, ${activeDoctors.length} active doctors`);
             return JSON.stringify(result);
-          } else if (services.length > 1) {
+         } else if (services.length > 1) {
             const result = {
               success: true,
               found: false,
@@ -1618,9 +1635,31 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
     const hasSpecificDayOfWeek = /(thứ\s+[2-8]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật)/i.test(userPrompt);
     
     // ⭐ NEW: Parse specific day of week to calculate date
-    if (hasSpecificDayOfWeek) {
+    // Check EITHER: user mentions specific day in prompt OR context.needsSpecificDayOfWeek flag is set
+    if (hasSpecificDayOfWeek || (context.needsSpecificDayOfWeek && !hasNextWeekGeneral)) {
       console.log('🗓️ [Pre-process] Detected specific day of week, calculating date...');
       
+      // ⭐ FIX: If context flag is set but no day detected in pattern, check for standalone day
+      let parsedWeekdayFromPrompt = hasSpecificDayOfWeek;
+      
+      if (!parsedWeekdayFromPrompt && context.needsSpecificDayOfWeek) {
+        // Check for standalone weekday responses like just "thứ 2" or "thứ hai"
+        const lowercasePrompt = userPrompt.toLowerCase().trim();
+        const standaloneWeekdayPatterns = [
+          /^(thứ\s+[2-8]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật)$/i,
+          /^(thứ\s+[2-8]|thứ\s+hai|thứ\s+ba|thứ\s+tư|thứ\s+năm|thứ\s+sáu|thứ\s+bảy|chủ\s+nhật)\s*$/i,
+        ];
+        
+        for (const pattern of standaloneWeekdayPatterns) {
+          if (pattern.test(lowercasePrompt)) {
+            parsedWeekdayFromPrompt = true;
+            console.log(`✅ [Pre-process] Found standalone weekday response: "${lowercasePrompt}"`);
+            break;
+          }
+        }
+      }
+      
+      if (parsedWeekdayFromPrompt) {
       // Map Vietnamese day names to day numbers (Monday = 1, Sunday = 0)
       const dayMap = {
         'thứ 2': 1, 'thứ hai': 1,
@@ -1679,7 +1718,7 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           
           const dateStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
           
-          console.log(`✅ [Pre-process] Calculated date for next week: ${dateStr}`);
+          console.log( `✅ [Pre-process] Calculated date for next week: ${dateStr}`);
           
           // Update context with calculated date
           this.updateConversationContext(patientUserId, { 
@@ -1690,7 +1729,14 @@ TUYỆT ĐỐI PHẢI TRẢ LỜI SAU MỖI TOOL CALL!`;
           // Don't set needsSpecificDayOfWeek flag since we already have the date
           results.needsSpecificDayOfWeek = false;
           results.parsedDate = dateStr;
+          
+          // ⭐ FIX: If we have doctor already, should show services after setting date
+          if (context.doctorId && !context.serviceId) {
+            console.log(`✅ [Pre-process] Date set with existing doctor, will show services`);
+            results.shouldShowServices = true;
+          }
         }
+      }
       }
     } else if (hasNextWeekGeneral && !hasSpecificDayOfWeek) {
       console.log('⚠️ [Pre-process] User said "tuần sau" without specific day, will ask for day of week');
@@ -2368,6 +2414,72 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
         this.updateConversationContext(patientUserId, { needsSpecificDayOfWeek: true });
       }
       
+      // ⭐ NEW: Detect date change when user already has a date (e.g., at confirmation step)
+      let dateChanged = false;
+      if (context.date) {
+        const oldDate = context.date; // Save old date for comparison
+        const todayStr = DateHelper.getTodayVN();
+        const tomorrowStr = DateHelper.getTomorrowVN();
+        const dayAfterTomorrowStr = DateHelper.getDayAfterTomorrowVN();
+        
+        let newDate = null;
+        
+        // Check for relative date keywords
+        if (lowerPrompt.includes('ngày mai') || (lowerPrompt.includes('mai') && lowerPrompt.includes('đổi'))) {
+          newDate = tomorrowStr;
+          console.log(`📅 [LangChain] Date change detected: "ngày mai" → ${tomorrowStr}`);
+        } else if (lowerPrompt.includes('hôm nay') || (lowerPrompt.includes('nay') && lowerPrompt.includes('đổi'))) {
+          newDate = todayStr;
+          console.log(`📅 [LangChain] Date change detected: "hôm nay" → ${todayStr}`);
+        } else if (lowerPrompt.includes('ngày kia')) {
+          newDate = dayAfterTomorrowStr;
+          console.log(`📅 [LangChain] Date change detected: "ngày kia" → ${dayAfterTomorrowStr}`);
+        } else {
+          // Check for DD/MM/YYYY format
+          const datePattern = /(ngày\s+)?(\d{1,2})\/(\d{1,2})(\/(\d{4}))?/i;
+          const dateMatch = userPrompt.match(datePattern);
+          if (dateMatch) {
+            const day = parseInt(dateMatch[2]);
+            const month = parseInt(dateMatch[3]);
+            const year = dateMatch[5] ? parseInt(dateMatch[5]) : new Date().getFullYear();
+            
+            const parsedDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+            
+            if (parsedDate.getUTCDate() === day && parsedDate.getUTCMonth() === month - 1) {
+              const parsedDateStr = parsedDate.toISOString().split('T')[0];
+              
+              // Check if date is in the past
+              const today = new Date();
+              const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
+              
+              if (parsedDate < todayUTC) {
+                console.log(`❌ [LangChain] Date change to past date rejected: ${parsedDateStr}`);
+                this.updateConversationContext(patientUserId, { rejectedPastDate: true });
+                
+                const errorMessage = `Không thể đặt lịch vào ngày ${day}/${month}/${year} vì đây là ngày ở quá khứ. Vui lòng chọn ngày trong tương lai.`;
+                return {
+                  success: false,
+                  message: errorMessage,
+                  response: errorMessage,
+                  needsMoreInfo: true,
+                  context: this.getConversationContext(patientUserId)
+                };
+              }
+              
+              newDate = parsedDateStr;
+              console.log(`📅 [LangChain] Date change detected: "${day}/${month}/${year}" → ${parsedDateStr}`);
+            }
+          }
+        }
+        
+        // If new date detected and different from OLD date (not current context.date)
+        if (newDate && newDate !== oldDate) {
+          this.updateConversationContext(patientUserId, { date: newDate, rejectedPastDate: false });
+          dateChanged = true;
+          console.log(`✅ [LangChain] Date changed from ${oldDate} to ${newDate}`);
+        }
+      }
+      
       if (!context.date && !context.needsSpecificDayOfWeek) {
         const todayStr = DateHelper.getTodayVN();
         const tomorrowStr = DateHelper.getTomorrowVN();
@@ -2391,19 +2503,19 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             const month = parseInt(dateMatch[3]);
             const year = dateMatch[5] ? parseInt(dateMatch[5]) : new Date().getFullYear();
             
-            // Create date object (month is 0-indexed in JS)
-            const parsedDate = new Date(year, month - 1, day);
-            parsedDate.setHours(0, 0, 0, 0);
+            // ⭐ FIX: Create date object in UTC to avoid timezone offset issues
+            // Using Date.UTC() ensures the date is created in UTC timezone
+            const parsedDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
             
             // Check if date is valid
-            if (parsedDate.getDate() === day && parsedDate.getMonth() === month - 1) {
+            if (parsedDate.getUTCDate() === day && parsedDate.getUTCMonth() === month - 1) {
               const parsedDateStr = parsedDate.toISOString().split('T')[0];
               
-              // ⭐ Check if date is in the past
+              // ⭐ Check if date is in the past (compare in UTC)
               const today = new Date();
-              today.setHours(0, 0, 0, 0);
+              const todayUTC = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0));
               
-              if (parsedDate < today) {
+              if (parsedDate < todayUTC) {
                 console.log(`❌ [LangChain] Detected past date: ${parsedDateStr}`);
                 this.updateConversationContext(patientUserId, { rejectedPastDate: true });
                 
@@ -2507,6 +2619,110 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
           needsMoreInfo: true
         };
       }
+      
+      // ⭐ NEW: Handle date change when user is at confirmation step
+      // If user already has serviceId + doctorId + time and just changed date,
+      // validate the time slot for new date and show updated confirmation
+      if (dateChanged && context.serviceId && context.doctorId && context.time) {
+        console.log('📅 [Early Return] Date changed at confirmation step, validating time slot for new date');
+        
+        try {
+          // Get service details to know duration
+          const Service = require('../models/Service');
+          const service = await Service.findById(context.serviceId);
+          
+          if (!service) {
+            console.log('❌ [Date Change] Service not found');
+            // Clear service and let user re-select
+            this.updateConversationContext(patientUserId, { serviceId: null, time: null });
+            const errorResponse = 'Dịch vụ không tồn tại. Vui lòng chọn lại dịch vụ.';
+            return {
+              success: false,
+              response: errorResponse,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: errorResponse },
+              ],
+              needsMoreInfo: true
+            };
+          }
+          
+          // Check if time slot is available on new date
+          const availableSlotService = require('./availableSlot.service');
+          const slotCheck = await availableSlotService.checkTimeSlotAvailability(
+            context.doctorId,
+            context.date,
+            context.time,
+            service.durationMinutes,
+            patientUserId
+          );
+          
+          if (!slotCheck.available) {
+            // Time not available on new date, clear time and ask for new time
+            this.updateConversationContext(patientUserId, { time: null });
+            
+            // Get available slots for new date
+            const slotsResult = await availableSlotService.getDoctorScheduleRange(
+              context.doctorId,
+              context.date,
+              context.serviceId
+            );
+            
+            let response = `Thời gian ${context.time} không khả dụng vào ngày ${context.date}.\n\n`;
+            
+            if (slotsResult.scheduleRanges && slotsResult.scheduleRanges.length > 0) {
+              response += `Các khung giờ khả dụng ngày ${context.date}:\n`;
+              slotsResult.scheduleRanges.forEach(range => {
+                response += `- ${range.shiftDisplay}: ${range.displayRange}\n`;
+              });
+              response += '\nBạn muốn chọn giờ nào?';
+            } else {
+              response += 'Rất tiếc, không có khung giờ nào khả dụng vào ngày này. Bạn có thể chọn ngày khác không?';
+            }
+            
+            return {
+              success: true,
+              response: response,
+              conversationHistory: [
+                ...conversationHistory,
+                { role: 'user', content: userPrompt },
+                { role: 'assistant', content: response },
+              ],
+              needsMoreInfo: true
+            };
+          }
+          
+          // Time slot is available, show updated confirmation
+          const User = require('../models/User');
+          const doctor = await User.findById(context.doctorId);
+          const doctorName = doctor ? doctor.fullName.replace(/^(bác\s*sĩ|bs)\s+/i, '') : 'Bác sĩ';
+          
+          // Calculate end time
+          const [hours, minutes] = context.time.split(':').map(Number);
+          const endMinutes = hours * 60 + minutes + service.durationMinutes;
+          const endHours = Math.floor(endMinutes / 60);
+          const endMins = endMinutes % 60;
+          const endTime = `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
+          
+          const confirmationResponse = `Xác nhận lịch hẹn:\n- Ngày: ${context.date}\n- Dịch vụ: ${service.name} (${service.durationMinutes} phút)\n- Bác sĩ: ${doctorName}\n- Giờ: ${context.time}-${endTime}\nBạn xác nhận đặt lịch?`;
+          
+          return {
+            success: true,
+            response: confirmationResponse,
+            conversationHistory: [
+              ...conversationHistory,
+              { role: 'user', content: userPrompt },
+              { role: 'assistant', content: confirmationResponse },
+            ],
+            needsMoreInfo: false
+          };
+        } catch (error) {
+          console.error('❌ [Date Change] Error:', error);
+          // Fall through to normal agent flow
+        }
+      }
+
       
       // ⭐ NEW: Check if user provides TIME + DATE → find doctors available at that time
       // Example: "tôi muốn đặt lịch vào 2h sáng mai" → check if any doctor works at 02:00

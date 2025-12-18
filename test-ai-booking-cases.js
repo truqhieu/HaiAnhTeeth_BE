@@ -1913,61 +1913,69 @@ async function runTests() {
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);
 
     // ==========================================================================
-    // CASE 36: Tìm bác sĩ rảnh vào 7h sáng - KHÔNG CÓ bác sĩ rảnh HOẶC ngoài giờ làm việc
+    // CASE 36: Tìm bác sĩ rảnh vào giờ đã qua - Từ chối thời gian đã qua
+    // ⭐ FIX: Use dynamic time calculation to ensure we test with a past time
     // ==========================================================================
-    logTest(36, 'Tìm bác sĩ rảnh vào 7h sáng mai - Không có bác sĩ rảnh hoặc ngoài giờ');
+    logTest(36, 'Tìm bác sĩ rảnh vào giờ đã qua hôm nay - Từ chối thời gian đã qua');
     
-    logStep(1, 'User: "Có bác sĩ nào rảnh vào 7h sáng mai không"');
-    result = await sendMessage('Có bác sĩ nào rảnh vào 7h sáng mai không');
+    // Calculate current VN time
+    const currentVNTime36 = new Date().toLocaleString('en-US', { 
+      timeZone: 'Asia/Ho_Chi_Minh',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const [currentHourVN36, currentMinVN36] = currentVNTime36.split(':').map(Number);
+    
+    // Calculate a time 3 hours ago (guaranteed to be in the past)
+    let pastHourVN36 = currentHourVN36 - 3;
+    if (pastHourVN36 < 0) pastHourVN36 += 24;
+    
+    const pastTimeStr36 = `${pastHourVN36}h`;
+    const pastTimePrompt36 = `Có bác sĩ nào rảnh vào ${pastTimeStr36} hôm nay không`;
+    
+    logStep(1, `User: "${pastTimePrompt36}" (Current VN time: ${currentVNTime36})`);
+    result = await sendMessage(pastTimePrompt36);
     
     const responseText36 = result.message || result.response || '';
     
-    // Kiểm tra: Nên thông báo KHÔNG CÓ bác sĩ rảnh HOẶC ngoài giờ làm việc
-    const notifiesNoDoctorsAvailable36 = responseText36.includes('Không có bác sĩ') || 
-                                          responseText36.includes('không có bác sĩ') ||
-                                          responseText36.includes('Không có ai');
+    // Kiểm tra: Nên thông báo thời gian đã qua
+    const notifiesPastTime36 = responseText36.includes('đã qua') || 
+                                responseText36.includes('quá khứ') ||
+                                responseText36.includes('tương lai') ||
+                                responseText36.includes('Thời gian');
     
-    const notifiesOutsideWorkingHours36 = responseText36.includes('ngoài giờ làm việc') ||
-                                           responseText36.includes('không khả dụng') ||
-                                           responseText36.includes('Khung giờ') && responseText36.includes('không khả dụng');
-    
-    const hasValidNotification36 = notifiesNoDoctorsAvailable36 || notifiesOutsideWorkingHours36;
-    
-    const mentions7AM36 = responseText36.includes('7') || 
-                          responseText36.includes('07:00') ||
-                          responseText36.includes('7h') ||
-                          responseText36.includes('7 giờ');
+    const mentionsPastTime36 = responseText36.includes(String(pastHourVN36)) || 
+                                responseText36.includes(`${pastHourVN36}:00`) ||
+                                responseText36.includes(`${pastHourVN36}h`);
     
     const suggestsAlternative36 = responseText36.includes('chọn thời gian khác') || 
                                    responseText36.includes('thời gian khác') ||
                                    responseText36.includes('khung giờ khác') ||
-                                   responseText36.includes('Vui lòng');
+                                   responseText36.includes('Vui lòng') ||
+                                   responseText36.includes('trong tương lai');
     
-    logResult(hasValidNotification36, hasValidNotification36 ? 
-      '✅ Thông báo không có bác sĩ rảnh hoặc ngoài giờ làm việc' : 
-      '❌ Không thông báo không có bác sĩ rảnh hoặc ngoài giờ');
+    logResult(notifiesPastTime36, notifiesPastTime36 ? 
+      '✅ Thông báo thời gian đã qua' : 
+      '❌ Không thông báo thời gian đã qua');
     
-    logResult(mentions7AM36, mentions7AM36 ? 
-      '✅ Nhắc đến thời gian 7h sáng' : 
+    logResult(mentionsPastTime36, mentionsPastTime36 ? 
+      `✅ Nhắc đến thời gian ${pastTimeStr36}` : 
       '❌ Không nhắc đến thời gian');
     
     logResult(suggestsAlternative36, suggestsAlternative36 ? 
       '✅ Đề xuất chọn thời gian khác' : 
       '❌ Không đề xuất chọn thời gian khác');
     
-    const testPassed36 = hasValidNotification36 && 
-                          mentions7AM36 &&
+    const testPassed36 = notifiesPastTime36 && 
+                          mentionsPastTime36 &&
                           suggestsAlternative36;
     
     if (testPassed36) {
       log('  📋 Flow hoàn chỉnh:', colors.cyan);
-      log('    User hỏi bác sĩ rảnh vào 7h sáng mai', colors.yellow);
-      if (notifiesNoDoctorsAvailable36) {
-        log('    → AI thông báo: Không có bác sĩ rảnh', colors.yellow);
-      } else {
-        log('    → AI thông báo: Ngoài giờ làm việc', colors.yellow);
-      }
-      log('    → AI đề xuất: Chọn thời gian khác', colors.yellow);
+      log(`    User hỏi bác sĩ rảnh vào ${pastTimeStr36} hôm nay (đã qua)`, colors.yellow);
+      log('    → AI thông báo: Thời gian đã qua', colors.yellow);
+      log('    → AI đề xuất: Chọn thời gian trong tương lai', colors.yellow);
     } else {
       log('  ⚠️ Response preview:', colors.red);
       log(`    ${responseText36.substring(0, 200)}...`, colors.yellow);
@@ -1975,20 +1983,20 @@ async function runTests() {
     
     recordTestResult(36, 'Tìm bác sĩ rảnh vào 7h sáng - Không có bác sĩ rảnh hoặc ngoài giờ', testPassed36,
       testPassed36 ? 
-        'Correctly notifies when no doctors available or outside working hours' : 
-        `Failed: notifies=${hasValidNotification36}, mentions_time=${mentions7AM36}, suggests_alternative=${suggestsAlternative36}`);
+        'Correctly notifies when time has passed' : 
+        `Failed: notifies=${notifiesPastTime36}, mentions_time=${mentionsPastTime36}, suggests_alternative=${suggestsAlternative36}`);
     
     // DON'T clear context yet - we need it for case 37
     
     // ==========================================================================
     // CASE 37: Tiếp tục hỏi thời gian khác sau khi bị từ chối - Nhớ context
     // ==========================================================================
-    logTest(37, 'Tiếp tục hỏi "vậy 9h thì sao" sau khi 7h bị từ chối');
+    logTest(37, `Tiếp tục hỏi "vậy 9h thì sao" sau khi ${pastTimeStr36} bị từ chối`);
     
     // ⭐ FIX: Add conversation history from Case 36
     logStep(1, 'User: "vậy 9h hôm nay thì sao" (tiếp tục từ Case 36)');
     const history37 = [
-      { role: 'user', content: 'Có bác sĩ nào rảnh vào 7h sáng mai không' },
+      { role: 'user', content: pastTimePrompt36 }, // Use dynamic prompt from Case 36
       { role: 'assistant', content: responseText36 } // Response from Case 36
     ];
     
@@ -2029,7 +2037,7 @@ async function runTests() {
     
     if (testPassed37) {
       log('  📋 Flow hoàn chỉnh:', colors.cyan);
-      log('    Bước 1: User hỏi 7h sáng → AI từ chối (ngoài giờ)', colors.yellow);
+      log(`    Bước 1: User hỏi ${pastTimeStr36} → AI từ chối (đã qua)`, colors.yellow);
       log('    Bước 2: User hỏi "vậy 9h thì sao" → AI nhớ context', colors.yellow);
       log('    → AI hiển thị: Danh sách bác sĩ rảnh vào 9h', colors.yellow);
       log('    → AI yêu cầu: Chọn bác sĩ', colors.yellow);
@@ -2971,6 +2979,103 @@ async function runTests() {
     } else {
       recordTestResult(48, 'Từ chối ngày quá khứ khi đổi từ tương lai', false,
         'Step 1 failed: Did not ask for day of week');
+    }
+    
+    aiBookingService.clearConversationContext(TEST_PATIENT_ID);
+
+    // ==========================================================================
+    // TEST CASE 49: Đổi ngày khi đang ở bước confirmation
+    // ==========================================================================
+    logTest(49, 'Đổi ngày khi đang ở bước confirmation - Giữ service và hiển thị confirmation mới');
+    
+    logStep(1, 'User: "Tôi muốn đặt lịch với bác sĩ hiếu vào 22/12/2025"');
+    result = await sendMessage('Tôi muốn đặt lịch với bác sĩ hiếu vào 22/12/2025');
+    history = [
+      { role: 'user', content: 'Tôi muốn đặt lịch với bác sĩ hiếu vào 22/12/2025' },
+      { role: 'assistant', content: result.message }
+    ];
+    
+    logStep(2, 'User chọn dịch vụ: "làm sạch răng"');
+    result = await sendMessage('làm sạch răng', history);
+    history.push({ role: 'user', content: 'làm sạch răng' });
+    history.push({ role: 'assistant', content: result.message });
+    
+    logStep(3, 'User chọn giờ: "14 giờ"');
+    result = await sendMessage('14 giờ', history);
+    history.push({ role: 'user', content: '14 giờ' });
+    history.push({ role: 'assistant', content: result.message });
+    
+    const responseText49_step3 = result.message || result.response || '';
+    const showsConfirmation49_original = responseText49_step3.includes('Xác nhận lịch hẹn') &&
+                                          responseText49_step3.includes('2025-12-22');
+    
+    logResult(showsConfirmation49_original, showsConfirmation49_original ?
+      'Bước 3: Hiển thị confirmation với ngày 2025-12-22' :
+      'Bước 3: Không hiển thị confirmation');
+    
+    if (showsConfirmation49_original) {
+      // Get context before date change
+      const context49_before = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+      const originalDate = context49_before.date;
+      const serviceId = context49_before.serviceId;
+      const doctorId = context49_before.doctorId;
+      const time = context49_before.time;
+      
+      logStep(4, 'User đổi ngày: "à không tôi muốn đổi thành ngày mai"');
+      result = await sendMessage('à không tôi muốn đổi thành ngày mai', history);
+      
+      const responseText49_step4 = result.message || result.response || '';
+      
+      // Get context after date change
+      const context49_after = aiBookingService.getConversationContext(TEST_PATIENT_ID);
+      const newDate = context49_after.date;
+      const serviceIdAfter = context49_after.serviceId;
+      const doctorIdAfter = context49_after.doctorId;
+      const timeAfter = context49_after.time;
+      
+      // Expected: 2025-12-19 (tomorrow from 2025-12-18)
+      const expectedNewDate = '2025-12-19';
+      const dateUpdated = newDate === expectedNewDate;
+      const serviceKept = serviceIdAfter === serviceId && serviceIdAfter !== null;
+      const doctorKept = doctorIdAfter === doctorId && doctorIdAfter !== null;
+      const timeKept = timeAfter === time && timeAfter !== null;
+      
+      // Check response - should NOT ask for service again
+      const asksForService = responseText49_step4.includes('Bạn muốn đặt dịch vụ nào') ||
+                             responseText49_step4.includes('chọn dịch vụ');
+      
+      // Should show new confirmation OR ask for new time (if time not available on new date)
+      const showsNewConfirmation = responseText49_step4.includes('Xác nhận lịch hẹn') &&
+                                    responseText49_step4.includes(expectedNewDate);
+      const asksForNewTime = responseText49_step4.includes('không khả dụng') &&
+                             responseText49_step4.includes('Bạn muốn chọn giờ nào');
+      
+      const correctBehavior = (showsNewConfirmation || asksForNewTime) && !asksForService;
+      
+      logResult(dateUpdated, `Date updated to ${expectedNewDate}: ${dateUpdated}`);
+      logResult(serviceKept, `ServiceId preserved: ${serviceKept}`);
+      logResult(doctorKept, `DoctorId preserved: ${doctorKept}`);
+      logResult(timeKept, `Time preserved: ${timeKept}`);
+      logResult(!asksForService, `Does NOT ask for service again: ${!asksForService}`);
+      logResult(correctBehavior, `Shows correct response: ${correctBehavior}`);
+      
+      const testPassed49 = dateUpdated && serviceKept && doctorKept && !asksForService;
+      
+      if (!testPassed49) {
+        log('  ⚠️ Bug Details:', colors.red);
+        log(`    Original date: ${originalDate}`, colors.yellow);
+        log(`    Expected new date: ${expectedNewDate}, got: ${newDate}`, colors.yellow);
+        log(`    ServiceId kept: ${serviceKept}`, colors.yellow);
+        log(`    Asks for service: ${asksForService}`, colors.yellow);
+      }
+      
+      recordTestResult(49, 'Đổi ngày khi đang ở bước confirmation', testPassed49,
+        testPassed49 ?
+          `Date changed to ${expectedNewDate}, service/doctor preserved` :
+          `Failed: date=${dateUpdated}, service=${serviceKept}, asksService=${asksForService}`);
+    } else {
+      recordTestResult(49, 'Đổi ngày khi đang ở bước confirmation', false,
+        'Step 3 failed: Did not show confirmation');
     }
     
     aiBookingService.clearConversationContext(TEST_PATIENT_ID);

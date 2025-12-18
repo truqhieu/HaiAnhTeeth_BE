@@ -1814,7 +1814,7 @@ class AppointmentService {
         // NGOẠI TRỪ "PendingPayment" (đang chờ thanh toán cho tư vấn online)
         if (options.includePendingPayment) {
           // Lấy tất cả bao gồm cả PendingPayment
-          query.status = { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress', 'Completed', 'Cancelled', 'Expired'] };
+          query.status = { $in: ['PendingPayment', 'Pending', 'Approved', 'CheckedIn', 'InProgress', 'Completed', 'Cancelled', 'Expired', 'No-Show'] };
         } else {
           // Mặc định: Chỉ lấy các ca đã hoàn tất đặt lịch (đã thanh toán nếu cần)
           query.status = { $in: ['Pending', 'Approved', 'CheckedIn', 'InProgress', 'Completed', 'Cancelled', 'Expired', 'No-Show'] };
