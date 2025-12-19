@@ -9,7 +9,10 @@ const PromotionService = require('../models/promotionService.model');
  */
 async function calculateServicePrice(serviceId, servicePrice) {
   try {
-    const now = new Date();
+    // ⭐ Sử dụng thời gian theo ngày VN (UTC representation of VN date)
+    // Thay vì dùng `new Date()` (thời gian UTC thực), dùng `getTodayVNStartUTC()` để lấy "hôm nay 00:00" theo ngày VN
+    const DateHelper = require('./dateHelper');
+    const now = DateHelper.getTodayVNStartUTC();
 
     // 1. Lấy links từ PromotionService
     const links = await PromotionService.find({
@@ -34,7 +37,7 @@ async function calculateServicePrice(serviceId, servicePrice) {
       _id: { $in: promotionIds },
       startDate: { $lte: now },  // Đã bắt đầu
       endDate: { $gte: now },      // Chưa hết hạn
-      status: { $ne: 'Expired', $ne: 'Inactive' }   
+      status: { $nin: ['Expired', 'Inactive'] }   // Loại trừ cả Expired và Inactive
     }).lean();
 
     if (promotions.length === 0) {
