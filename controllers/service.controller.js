@@ -39,6 +39,7 @@ const getAllServices = async (req, res) => {
       sortPrice,
       sortTime,
       minPrice,
+      forPromotion, 
     } = req.query;
 
     const result = await serviceService.getAllServices({
@@ -51,6 +52,7 @@ const getAllServices = async (req, res) => {
       sortPrice,
       sortTime,
       minPrice,
+      forPromotion, // ⭐ Pass to service
     });
 
     return res.status(200).json({

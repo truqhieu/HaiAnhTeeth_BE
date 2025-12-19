@@ -118,6 +118,7 @@ class ServiceService {
       sortPrice,
       sortTime,
       minPrice,
+      forPromotion,
     } = filters;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -144,6 +145,13 @@ class ServiceService {
     if (minPrice !== undefined) {
       filter.price = { ...filter.price, $gt: Number(minPrice) };
     }
+
+    // ⭐ Nếu forPromotion=true, chỉ lấy dịch vụ Active và price > 0
+    if (forPromotion === 'true' || forPromotion === true) {
+      filter.status = 'Active';
+      filter.price = { ...filter.price, $gt: 0 };
+    }
+
 
     const sortOption = [];
 
