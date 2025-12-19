@@ -2225,6 +2225,65 @@ class AppointmentService {
         console.log(`💰 Đủ điều kiện hoàn tiền: ${isEligibleForRefund ? 'CÓ' : 'KHÔNG'} (threshold: ${CANCELLATION_THRESHOLD_HOURS}h)`);
       }
 
+      // ⭐ PendingPayment: Chưa thanh toán → hủy trực tiếp, không cần bank info
+      if (appointment.status === 'PendingPayment') {
+        console.log('💳 PendingPayment appointment - hủy trực tiếp (chưa thanh toán)');
+
+        // Cập nhật thông tin hủy
+        appointment.status = 'Cancelled';
+        appointment.cancelReason = cancelReason || 'Người dùng hủy lịch hẹn';
+        appointment.cancelledAt = new Date();
+        appointment.updatedAt = new Date();
+
+        await appointment.save();
+
+        // ⭐ Cập nhật payment status thành Cancelled
+        if (appointment.paymentId) {
+          try {
+            const Payment = require('../models/payment.model');
+            const payment = await Payment.findById(appointment.paymentId);
+            if (payment && payment.status === 'Pending') {
+              payment.status = 'Cancelled';
+              await payment.save();
+              console.log(`✅ Payment ${payment._id} đã được cập nhật thành Cancelled do hủy appointment PendingPayment`);
+            }
+          } catch (e) {
+            console.error('⚠️ Không thể cập nhật payment status khi hủy appointment:', e);
+          }
+        }
+
+        // ⭐ Release the reserved timeslot
+        if (appointment.timeslotId) {
+          try {
+            const timeslot = await Timeslot.findById(appointment.timeslotId);
+            if (timeslot) {
+              timeslot.status = 'Available';
+              timeslot.appointmentId = null;
+              timeslot.reservedByUserId = null;
+              timeslot.reservedUntil = null;
+              await timeslot.save();
+              console.log(`🔓 Timeslot ${timeslot._id} released back to Available`);
+            }
+          } catch (e) {
+            console.error('⚠️ Không thể cập nhật trạng thái timeslot khi hủy lịch:', e);
+          }
+        }
+
+        console.log(`✅ Hủy PendingPayment appointment thành công: ${appointmentId}`);
+
+        return {
+          success: true,
+          requiresConfirmation: false,
+          message: 'Hủy lịch hẹn thành công.',
+          data: {
+            appointmentId: appointment._id,
+            status: appointment.status,
+            cancelledAt: appointment.cancelledAt,
+            cancelReason: appointment.cancelReason
+          }
+        };
+      }
+
       // ⭐ Kiểm tra type: Consultation cần confirmation, Examination hủy trực tiếp
       if (appointment.type === 'Consultation' && appointment.mode === 'Online') {
         // ⭐ Trả về requiresConfirmation=true + policies để frontend hiển thị modal
