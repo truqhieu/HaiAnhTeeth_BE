@@ -91,7 +91,40 @@ class PromotionService {
       }
       finalServiceIds = serviceIds;
     } else {
-      finalServiceIds = await Service.find().distinct('_id');
+      // Chỉ áp dụng cho các dịch vụ Active và có giá > 0
+      finalServiceIds = await Service.find({
+        status: 'Active',
+        price: { $gt: 0 }
+      }).distinct('_id');
+    }
+
+
+    // =========================
+    // 4.1. Validate service status and price
+    // =========================
+    const invalidServices = await Service.find({
+      _id: { $in: finalServiceIds },
+      $or: [
+        { status: 'Inactive' },
+        { price: { $lte: 0 } }
+      ]
+    }).select('_id serviceName status price');
+
+    if (invalidServices.length > 0) {
+      const inactiveServices = invalidServices.filter(s => s.status === 'Inactive');
+      const freeServices = invalidServices.filter(s => s.price <= 0);
+
+      const errors = [];
+      if (inactiveServices.length > 0) {
+        const names = inactiveServices.map(s => s.serviceName).join(', ');
+        errors.push(`Dịch vụ đã bị vô hiệu hóa: ${names}`);
+      }
+      if (freeServices.length > 0) {
+        const names = freeServices.map(s => s.serviceName).join(', ');
+        errors.push(`Dịch vụ miễn phí không được áp dụng khuyến mãi: ${names}`);
+      }
+
+      throw new Error(errors.join('. '));
     }
 
     // =========================
@@ -480,8 +513,11 @@ class PromotionService {
     let finalServiceIds = [];
 
     if (isApplyToAll) {
-      // giống createPromotion: áp dụng cho toàn bộ dịch vụ
-      finalServiceIds = await Service.find().distinct('_id');
+      // Chỉ áp dụng cho các dịch vụ Active và có giá > 0
+      finalServiceIds = await Service.find({
+        status: 'Active',
+        price: { $gt: 0 }
+      }).distinct('_id');
     } else {
       if (serviceIds !== undefined) {
         finalServiceIds = serviceIds;
@@ -493,6 +529,42 @@ class PromotionService {
       }
     }
 
+
+    // =========================
+    // 4.1. Validate service status and price
+    // =========================
+    if (finalServiceIds.length > 0) {
+      const invalidServices = await Service.find({
+        _id: { $in: finalServiceIds },
+        $or: [
+          { status: 'Inactive' },
+          { price: { $lte: 0 } }
+        ]
+      }).select('_id serviceName status price');
+
+      if (invalidServices.length > 0) {
+        const inactiveServices = invalidServices.filter(s => s.status === 'Inactive');
+        const freeServices = invalidServices.filter(s => s.price <= 0);
+
+        const errors = [];
+        if (inactiveServices.length > 0) {
+          const names = inactiveServices.map(s => s.serviceName).join(', ');
+          errors.push(`Dịch vụ đã bị vô hiệu hóa: ${names}`);
+        }
+        if (freeServices.length > 0) {
+          const names = freeServices.map(s => s.serviceName).join(', ');
+          errors.push(`Dịch vụ miễn phí không được áp dụng khuyến mãi: ${names}`);
+        }
+
+        throw new Error(errors.join('. '));
+      }
+    }
+
+    // =========================
+    // 6. CHECK CONFLICT với các promotion khác
+    //     - Nếu gia hạn hoặc đổi dịch vụ, mà bị trùng
+    //       với promo khác đang Active/Upcoming => báo lỗi
+    // =========================
     if (finalServiceIds.length > 0) {
       const conflictingPromotions = await PromotionServiceModel.aggregate([
         {
@@ -593,15 +665,53 @@ class PromotionService {
     // =========================
     // 10. Update service links
     // =========================
-    if (!isApplyToAll && serviceIds !== undefined) {
-      await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+    // Có 3 trường hợp:
+    // 1. Chuyển từ specific -> applyToAll: Tạo PromotionService cho TẤT CẢ dịch vụ Active
+    // 2. Chuyển từ applyToAll -> specific: Xóa hết, tạo mới cho serviceIds
+    // 3. Vẫn là specific, chỉ đổi serviceIds: Xóa hết, tạo mới cho serviceIds
 
-      if (serviceIds.length > 0) {
-        const links = serviceIds.map(sid => ({
-          promotionId: promotion._id,
-          serviceId: sid
-        }));
-        await PromotionServiceModel.insertMany(links);
+    if (applyToAll !== undefined) {
+      // Có thay đổi applyToAll
+      if (isApplyToAll) {
+        // Case 1: Chuyển sang applyToAll = true -> Tạo cho TẤT CẢ dịch vụ Active và có giá > 0
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        const allActiveServiceIds = await Service.find({
+          status: 'Active',
+          price: { $gt: 0 }
+        }).distinct('_id');
+        if (allActiveServiceIds.length > 0) {
+          const links = allActiveServiceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
+      } else {
+        // Case 2: Chuyển sang applyToAll = false -> Tạo cho serviceIds (nếu có)
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        if (serviceIds && serviceIds.length > 0) {
+          const links = serviceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
+      }
+    } else {
+      // Không đổi applyToAll, chỉ đổi serviceIds
+      if (!isApplyToAll && serviceIds !== undefined) {
+        // Case 3: Vẫn là specific, chỉ update danh sách dịch vụ
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        if (serviceIds.length > 0) {
+          const links = serviceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
       }
     }
 

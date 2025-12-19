@@ -2982,18 +2982,25 @@ class AppointmentService {
 
         // === Áp dụng khuyến mãi cho từng dịch vụ ===
         for (let i = 0; i < services.length; i++) {
-          const promotionService = await PromotionService.findOne({
+          const promotionServices = await PromotionService.find({
             serviceId: services[i].serviceId
-          }).select('promotionId');
+          }).populate('promotionId');
 
-          if (promotionService) {
-            const promotion = await Promotion.findOne({ _id: promotionService.promotionId, status: 'Active' });
-            if (promotion) {
-              services[i].price = promotion.discountType === 'Percent'
-                ? services[i].price * (1 - promotion.discountValue / 100)
-                : services[i].price - promotion.discountValue;
-              services[i].price = Math.max(0, services[i].price);
-            }
+          const activePromotionService = promotionServices.find(
+            ps => ps.promotionId && ps.promotionId.status === 'Active'
+          );
+
+          if (activePromotionService && activePromotionService.promotionId) {
+            const promotion = activePromotionService.promotionId;
+            console.log(`🎁 [PDF] Áp dụng promotion "${promotion.name}" cho ${services[i].name}: ${promotion.discountType} ${promotion.discountValue}${promotion.discountType === 'Percent' ? '%' : 'đ'}`);
+
+            const originalPrice = services[i].price;
+            services[i].price = promotion.discountType === 'Percent'
+              ? services[i].price * (1 - promotion.discountValue / 100)
+              : services[i].price - promotion.discountValue;
+            services[i].price = Math.max(0, services[i].price);
+
+            console.log(`   Giá gốc: ${originalPrice.toLocaleString()}đ → Giá sau giảm: ${services[i].price.toLocaleString()}đ`);
           }
         }
 
@@ -3152,10 +3159,7 @@ class AppointmentService {
               widths: ['27%', '71%'],
               body: [
                 ['Họ tên', customerIn4 ? customerIn4.fullName : '-'],
-                ['Giới tính', '-'],
-                ['Tuổi', '-'],
                 ['Điện thoại', customerIn4 ? customerIn4.phoneNumber : '—'],
-                ['Địa chỉ', '—']
               ]
             },
             layout: 'lightHorizontalLines'
