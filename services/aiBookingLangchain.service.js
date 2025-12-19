@@ -806,7 +806,7 @@ class AIBookingLangchainService {
             doctorUserId: doctorId,
             serviceId: serviceId,
             date: date,
-            patientUserId: null, // Don't exclude self-appointments for AI view
+            patientUserId: patientUserId, // ⭐ FIX: Pass patientUserId to exclude user's booked slots
             appointmentFor: 'self' // Default to 'self' for AI
           });
 
@@ -2665,11 +2665,13 @@ async chatWithAI(userPrompt, patientUserId, conversationHistory = [], isNewConve
             this.updateConversationContext(patientUserId, { time: null });
             
             // Get available slots for new date
-            const slotsResult = await availableSlotService.getDoctorScheduleRange(
-              context.doctorId,
-              context.date,
-              context.serviceId
-            );
+            const slotsResult = await availableSlotService.getDoctorScheduleRange({
+              doctorUserId: context.doctorId,
+              serviceId: context.serviceId,
+              date: context.date,
+              patientUserId: patientUserId, // ⭐ FIX: Pass patientUserId to exclude user's booked slots
+              appointmentFor: 'self'
+            });
             
             let response = `Thời gian ${context.time} không khả dụng vào ngày ${context.date}.\n\n`;
             

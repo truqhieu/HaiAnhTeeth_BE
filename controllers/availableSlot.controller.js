@@ -313,8 +313,9 @@ const getAvailableDoctorsForTimeSlot = async (req, res) => {
  */
 const getDoctorScheduleRange = async (req, res) => {
   try {
-    const { doctorUserId, serviceId, date, appointmentFor = 'self', customerFullName, customerEmail } = req.query;
-    const patientUserId = req.user?.userId; // Lấy từ token
+    const { doctorUserId, serviceId, date, appointmentFor = 'self', customerFullName, customerEmail, patientUserId: patientUserIdParam } = req.query;
+    // ⭐ FIX: Ưu tiên lấy patientUserId từ query params (frontend truyền vào), nếu không có thì lấy từ token
+    const patientUserId = patientUserIdParam || req.user?.userId; // Lấy từ query params hoặc token
     const normalizedCustomerFullName = appointmentFor === 'other' && customerFullName
       ? decodeURIComponent(customerFullName)
       : null;
