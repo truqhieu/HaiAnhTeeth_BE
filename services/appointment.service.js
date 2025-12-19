@@ -3151,11 +3151,8 @@ class AppointmentService {
             table: {
               widths: ['27%', '71%'],
               body: [
-                ['Họ tên', customerIn4 ? customerIn4.fullName : '-'],
-                ['Giới tính', '-'],
-                ['Tuổi', '-'],
-                ['Điện thoại', customerIn4 ? customerIn4.phoneNumber : '—'],
-                ['Địa chỉ', '—']
+                ['Họ tên', customerIn4.fullName],
+                ['Điện thoại', customerIn4.phoneNumber],
               ]
             },
             layout: 'lightHorizontalLines'
@@ -3298,11 +3295,11 @@ class AppointmentService {
             table: {
               widths: ['27%', '71%'],
               body: [
-                ['Họ tên', visitTicketData.patientName || '-'],
+                ['Họ tên', visitTicketData.patientName],
                 ['Giới tính', visitTicketData.patientGender === 'Male' ? 'Nam' : 'Nữ'],
-                ['Tuổi', `${visitTicketData.patientAge} tuổi` || '—'],
-                ['Điện thoại', visitTicketData.phoneNumber || '—'],
-                ['Địa chỉ', visitTicketData.address || '—']
+                ['Tuổi', `${visitTicketData.patientAge} tuổi`],
+                ['Điện thoại', visitTicketData.phoneNumber],
+                ['Địa chỉ', visitTicketData.address]
               ]
             },
             layout: 'lightHorizontalLines'
