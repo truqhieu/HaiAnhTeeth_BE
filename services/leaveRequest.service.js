@@ -252,7 +252,7 @@ class LeaveRequestService {
             userId: staff._id,
             createdByUserId: managerId,
             title: 'Bác sĩ nghỉ phép - Cần gán bác sĩ thay thế',
-            message: `Bác sĩ ${doctorName} nghỉ phép từ ${dateRangeStr}. Lịch hẹn với ${patientName} vào ${dateStr} lúc ${timeStr} cần được gán bác sĩ thay thế.`,
+            message: `Bác sĩ ${doctorName} nghỉ phép từ ${dateRangeStr}.`,
             relatedAppointmentId: appointment._id,
             leaveRequestId: requestId,
             link: `/appointments/${appointment._id}`
@@ -278,7 +278,7 @@ class LeaveRequestService {
     leaveStart.setUTCHours(0, 0, 0, 0);
     const leaveEnd = new Date(endDate);
     leaveEnd.setUTCHours(0, 0, 0, 0);
-// ...
+    // ...
     const start = new Date(startDate);
     start.setUTCHours(0, 0, 0, 0);
     const end = new Date(endDate);
