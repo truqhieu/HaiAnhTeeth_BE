@@ -1112,9 +1112,10 @@ class AIBookingLangchainService {
           
           if (isToday) {
             // Check if requested time has already passed
+            // ⭐ FIX: Use Vietnam timezone (UTC+7) instead of UTC
             const now = new Date();
-            const currentHour = now.getHours();
-            const currentMinute = now.getMinutes();
+            const currentHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', hour12: false }).format(now));
+            const currentMinute = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', minute: '2-digit' }).format(now));
             const currentMinutes = currentHour * 60 + currentMinute;
             
             if (requestedMinutes <= currentMinutes) {
@@ -1273,9 +1274,10 @@ class AIBookingLangchainService {
     const { morningStart, morningEnd, afternoonStart, afternoonEnd } = schedule.workingHours;
     
     // Get current time in Vietnam
+    // ⭐ FIX: Use Vietnam timezone (UTC+7) instead of UTC
     const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
+    const currentHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', hour12: false }).format(now));
+    const currentMinute = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Ho_Chi_Minh', minute: '2-digit' }).format(now));
     const currentTimeMinutes = currentHour * 60 + currentMinute;
     
     // Check if searchDate is today
