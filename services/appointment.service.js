@@ -4117,7 +4117,7 @@ class AppointmentService {
     // ⭐ Email
     try {
       await emailService.sendReExaminationEmail({
-        email: originalAppointment.patientUserId?.email,
+        email: originalAppointment.customerId ? originalAppointment.customerId.email : originalAppointment.patientUserId?.email,
         patientName: originalAppointment.patientUserId?.fullName || 'Bệnh nhân',
         patientPhone: originalAppointment.patientUserId?.phoneNumber || 'Chưa cập nhật',
         patientEmail: originalAppointment.patientUserId?.email || 'Chưa cập nhật',
@@ -4800,11 +4800,10 @@ class AppointmentService {
           { text: 'STT', style: 'tableHeader', alignment: 'center' },
           { text: 'Dịch vụ', style: 'tableHeader' },
           { text: 'Loại', style: 'tableHeader', alignment: 'center' },
-          { text: 'Số lượng', style: 'tableHeader', alignment: 'right' },
+          { text: 'Số lượng', style: 'tableHeader', alignment: 'center' },
           { text: 'Giá niêm yết', style: 'tableHeader', alignment: 'right' },
           { text: 'Tổng doanh thu', style: 'tableHeader', alignment: 'right' },
-          { text: 'Tổng thực thu', style: 'tableHeader', alignment: 'right' },
-          { text: 'Tiền giảm', style: 'tableHeader', alignment: 'right' }
+          { text: 'Tổng thực thu', style: 'tableHeader', alignment: 'right' }
         ]
       ];
 
@@ -4818,18 +4817,13 @@ class AppointmentService {
           { text: (index + 1).toString(), alignment: 'center' },
           { text: sv.serviceName || '—' },
           { text: sv.category || '—', alignment: 'center' },
-          { text: (sv.count || 0).toString(), alignment: 'right' },
+          { text: (sv.count || 0).toString(), alignment: 'center' },
           { text: formatPrice(sv.listPrice || 0), alignment: 'right' },
           { text: formatPrice(expectedRevenue), alignment: 'right', color: '#666' },
           {
             text: formatPrice(actualRevenue),
             alignment: 'right',
             bold: true
-          },
-          {
-            text: formatPrice(discountAmount),
-            alignment: 'right',
-            color: discountAmount > 0 ? '#d32f2f' : '#333'
           }
         ]);
       });
@@ -4887,7 +4881,6 @@ class AppointmentService {
               `Tổng số lần sử dụng dịch vụ: ${summary.totalCount}`,
               `Doanh thu nếu bán giá niêm yết: ${formatPrice(summary.totalExpectedRevenue || 0)}`,
               `Doanh thu thực thu (sau giảm): ${formatPrice(summary.totalPaidRevenue || summary.totalRevenue || 0)}`,
-              `Tổng tiền giảm giá: ${formatPrice(summary.totalDiscountAmount || 0)}`,
               `Danh sách dịch vụ được sắp xếp theo số lần sử dụng giảm dần.`
             ],
             margin: [0, 0, 0, 10]
@@ -4899,7 +4892,7 @@ class AppointmentService {
           {
             table: {
               headerRows: 1,
-              widths: ['3%', '18%', '10%', '7%', '14%', '16%', '17%', '15%'],
+              widths: ['5%', '21%', '12%', '10%', '18%', '17%', '17%'],
               body: serviceTableBody
             },
             layout: {

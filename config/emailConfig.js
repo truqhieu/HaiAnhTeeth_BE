@@ -1119,10 +1119,10 @@ const getReExaminationEmailTemplate = (data) => {
   });
 
   // Format giờ bắt đầu tái khám
-  const formattedTime = formatVietnameseTime(appointmentTime);
+  const formattedTime = DateHelper.formatVietnameseTime(appointmentTime);
 
   // Format giờ kết thúc tái khám
-  const formattedEndTime = formatVietnameseTime(appointmentEndTime);
+  const formattedEndTime = DateHelper.formatVietnameseTime(appointmentEndTime);
 
   return {
     subject: `[TÁI KHÁM] Đơn tái khám mới - ${patientName}`,
@@ -1262,7 +1262,7 @@ Vui lòng xem chi tiết lịch tái khám trong hệ thống.
     </div>
     
     <div class="email-body">
-      <p>Chào đội ngũ <strong>${clinicName}</strong>,</p>
+      <p><strong>${clinicName}</strong> xin kính chào quý khách,</p>
       <p>Bác sĩ vừa tạo <strong>đơn tái khám</strong> cho bệnh nhân.</p>
 
       <div class="section-title">Thông tin bệnh nhân</div>
