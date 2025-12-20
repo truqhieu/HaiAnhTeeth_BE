@@ -2133,14 +2133,16 @@ class AppointmentService {
 
       await appointment.save();
 
-      // Nếu hủy thì mở lại timeslot để có thể đặt lại
-      if (newStatus === 'Cancelled' && appointment.timeslotId) {
+      // ⭐ Release timeslot khi Cancelled hoặc Completed
+      // Khi Completed: Bệnh nhân đã khám xong → slot có thể được đặt lại
+      // Khi Cancelled: Bệnh nhân hủy lịch → slot có thể được đặt lại
+      if (['Cancelled', 'Completed'].includes(newStatus) && appointment.timeslotId) {
         try {
           await Timeslot.findByIdAndUpdate(appointment.timeslotId, {
             status: 'Available',
             appointmentId: null
           });
-          console.log('🔓 Timeslot released due to status update → Cancelled');
+          console.log(`🔓 Timeslot released due to status update → ${newStatus}`);
         } catch (e) {
           console.error('⚠️ Không thể release timeslot khi cập nhật trạng thái:', e);
         }
