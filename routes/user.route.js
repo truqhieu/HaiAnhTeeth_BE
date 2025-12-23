@@ -5,15 +5,34 @@ const {
   verifyEmail,
   login,
   getProfile,
+  updateProfile,
+  forgotPassword,
+  resetPassword,
+  verifyResetPasswordToken,
   authenticateToken,
-  fixUserPassword
+  changePassword,
+  logout
 } = require('../controllers/user.controller');
+const upload = require('../config/multer');
+
 
 // Routes công khai (không cần authentication)
 router.post('/register', register);
 router.get('/verify-email', verifyEmail);
 router.post('/login', login);
+router.post('/forgot-password', forgotPassword);
+router.get('/reset-password', verifyResetPasswordToken);
+router.post('/reset-password', resetPassword);
+
+
+
 
 // Routes cần authentication
 router.get('/profile', authenticateToken, getProfile);
+router.patch('/profile', authenticateToken, upload.single('avatar'), updateProfile);
+router.patch('/change-password', authenticateToken, changePassword);
+router.post('/logout', authenticateToken, logout);
 module.exports = router;
+
+
+

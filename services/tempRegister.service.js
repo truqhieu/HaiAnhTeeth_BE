@@ -3,9 +3,6 @@ const crypto = require('crypto');
 
 class TempRegisterService {
 
-  /**
-   * Gửi lại email xác thực - Business Logic hoàn chỉnh
-   */
   async resendVerification(email) {
     if (!email) {
       throw new Error('Vui lòng nhập email');
@@ -28,10 +25,6 @@ class TempRegisterService {
 
     return { tempUser, verificationToken: newVerificationToken };
   }
-
-  /**
-   * Kiểm tra trạng thái đăng ký - Business Logic hoàn chỉnh
-   */
   async checkStatus(email) {
     if (!email) {
       throw new Error('Vui lòng nhập email');
@@ -56,9 +49,6 @@ class TempRegisterService {
     };
   }
 
-  /**
-   * Hủy đăng ký - Business Logic hoàn chỉnh
-   */
   async cancelRegistration(email) {
     if (!email) {
       throw new Error('Vui lòng nhập email');
@@ -73,9 +63,6 @@ class TempRegisterService {
     return true;
   }
 
-  /**
-   * Lấy verification token cho debug - Business Logic hoàn chỉnh
-   */
   async getDebugToken(email) {
     if (!email) {
       throw new Error('Vui lòng nhập email');
@@ -102,6 +89,10 @@ class TempRegisterService {
       tokenExpireAt: tempUser.tokenExpireAt,
       isExpired: tempUser.tokenExpireAt < new Date()
     };
+  }
+
+  async sendEmailChangeDoctor(email){
+    
   }
 }
 
