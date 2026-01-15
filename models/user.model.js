@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
 const userSchema = new mongoose.Schema({
   fullName: {
@@ -33,20 +34,28 @@ const userSchema = new mongoose.Schema({
     type: String,
     enum: ['Male', 'Female', 'Other']
   },
+  avatar : {
+    type : String,
+    default : 'https://res.cloudinary.com/dglnkljzx/image/upload/v1763481608/introductions/fsqmwqvxihuw2hhodcnb.png'
+  },
   role: {
     type: String,
-    enum: ['Patient', 'Doctor', 'Staff', 'Admin'],
+    enum: ['Patient', 'Doctor', 'Staff', 'Admin',"Manager","Nurse"],
     default: 'Patient'
   },
   status: {
     type: String,
-    enum: ['Active', 'Inactive', 'Banned'],
+    enum: ['Active', 'Lock', 'Banned'],
     default: 'Active'
   },
-  createdAt: {
+  resetPasswordToken: {
+    type: String,
+    default: null
+  },
+  resetPasswordExpire: {
     type: Date,
-    default: Date.now
-  }
+    default: null
+  },
 }, {
   timestamps: true
 });
@@ -69,9 +78,22 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.passwordHash);
 };
 
+// Method để tạo reset password token
+userSchema.methods.generateResetPasswordToken = function() {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  
+  // Hash token trước khi lưu vào DB
+  this.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+  
+  // Token hết hạn sau 10 phút
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+  
+  return resetToken;
+};
+
 // Method để cập nhật updatedAt
 userSchema.pre('findOneAndUpdate', function() {
   this.set({ updatedAt: new Date() });
 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = mongoose.model('User', userSchema,'users');

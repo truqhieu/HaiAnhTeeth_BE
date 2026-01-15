@@ -1,7 +1,6 @@
 const tempRegisterService = require('../services/tempRegister.service');
 const emailService = require('../services/email.service');
 
-// Gửi lại email xác thực
 const resendVerificationEmail = async (req, res) => {
   try {
     const { email } = req.body;
@@ -38,7 +37,6 @@ const resendVerificationEmail = async (req, res) => {
   } catch (error) {
     console.error('Lỗi gửi lại email xác thực:', error);
     
-    // Xử lý lỗi từ service (validation errors)
     if (error.message.includes('Vui lòng nhập email') || 
         error.message.includes('Không tìm thấy yêu cầu đăng ký')) {
       return res.status(404).json({
@@ -55,7 +53,6 @@ const resendVerificationEmail = async (req, res) => {
   }
 };
 
-// Kiểm tra trạng thái đăng ký
 const checkRegistrationStatus = async (req, res) => {
   try {
     const { email } = req.query;
@@ -88,7 +85,6 @@ const checkRegistrationStatus = async (req, res) => {
   }
 };
 
-// Hủy đăng ký (xóa khỏi tempRegister)
 const cancelRegistration = async (req, res) => {
   try {
     const { email } = req.body;
@@ -121,7 +117,6 @@ const cancelRegistration = async (req, res) => {
   }
 };
 
-// Debug endpoint - lấy verification token (development only)
 const getVerificationToken = async (req, res) => {
   try {
     const { email } = req.query;

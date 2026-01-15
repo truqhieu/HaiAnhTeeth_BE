@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const ensureAdminAccount = require('./seedAdmin');
 
 const connectMongo = async () => {
   try {
@@ -15,6 +16,7 @@ const connectMongo = async () => {
     });
 
     console.log(`MongoDB Connected: ${conn.connection.host}`);
+    await ensureAdminAccount();
     
     // Xử lý các sự kiện kết nối
     mongoose.connection.on('connected', () => {
@@ -48,3 +50,4 @@ process.on('SIGINT', async () => {
 });
 
 module.exports = connectMongo;
+  

@@ -1,0 +1,746 @@
+const Promotion = require('../models/promotion.model');
+const PromotionServiceModel = require('../models/promotionService.model');
+const Service = require('../models/service.model');
+const DateHelper = require('../utils/dateHelper');
+
+
+class PromotionService {
+
+  /**
+   * Tạo promotion mới
+   */
+  async createPromotion(data) {
+    const {
+      title,
+      description,
+      discountType,
+      discountValue,
+      applyToAll,
+      startDate,
+      endDate,
+      serviceIds
+    } = data;
+
+    // =========================
+    // 1. Validate title
+    // =========================
+    if (typeof title !== 'string' || title.trim().length === 0) {
+      throw new Error('Tiêu đề giảm giá không được để trống');
+    }
+    const cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+    if (cleanTitle.length === 0) {
+      throw new Error('Tiêu đề giảm giá không được để trống');
+    }
+    if (cleanTitle.length < 3 || cleanTitle.length > 200) {
+      throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
+    }
+    if (/[<>]/.test(cleanTitle)) {
+      throw new Error('Tiêu đề không được chứa ký tự < hoặc >');
+    }
+
+    // =========================
+    // 2. Validate description
+    // =========================
+    if (typeof description !== 'string' || description.trim().length === 0) {
+      throw new Error('Mô tả giảm giá không được để trống');
+    }
+    const cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+    if (cleanDescription.length === 0) {
+      throw new Error('Mô tả giảm giá không được để trống');
+    }
+    if (cleanDescription.length < 10) {
+      throw new Error('Mô tả phải có ít nhất 10 ký tự');
+    }
+    if (/[<>]/.test(cleanDescription)) {
+      throw new Error('Mô tả không được chứa ký tự < hoặc >');
+    }
+
+    // =========================
+    // 3. Validate discount type & value
+    // =========================
+    if (typeof discountType !== 'string' || discountType.trim().length === 0) {
+      throw new Error('Thể loại giảm giá không được để trống');
+    }
+    const trimmedType = discountType.trim();
+    if (!['Percent', 'Fix'].includes(trimmedType)) {
+      throw new Error('Thể loại giảm giá chỉ được là "Percent" hoặc "Fix"');
+    }
+
+    if (typeof discountValue !== 'number' || isNaN(discountValue)) {
+      throw new Error('Giá trị giảm giá phải là số');
+    }
+    if (trimmedType === 'Percent' && (discountValue < 1 || discountValue > 100)) {
+      throw new Error('Giảm theo phần trăm phải từ 1 đến 100');
+    }
+    if (trimmedType === 'Fix' && discountValue <= 0) {
+      throw new Error('Giá trị giảm cố định phải lớn hơn 0');
+    }
+
+    // =========================
+    // 4. Validate applyToAll & services
+    // =========================
+    if (typeof applyToAll !== 'boolean') {
+      throw new Error('Áp dụng cho tất cả phải là true hoặc false');
+    }
+    const isApplyToAll = applyToAll === true;
+
+    let finalServiceIds = [];
+    if (!isApplyToAll) {
+      if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+        throw new Error('Vui lòng chọn ít nhất một dịch vụ khi không áp dụng cho tất cả');
+      }
+      finalServiceIds = serviceIds;
+    } else {
+      // Chỉ áp dụng cho các dịch vụ Active và có giá > 0
+      finalServiceIds = await Service.find({
+        status: 'Active',
+        price: { $gt: 0 }
+      }).distinct('_id');
+    }
+
+
+    // =========================
+    // 4.1. Validate service status and price
+    // =========================
+    const invalidServices = await Service.find({
+      _id: { $in: finalServiceIds },
+      $or: [
+        { status: 'Inactive' },
+        { price: { $lte: 0 } }
+      ]
+    }).select('_id serviceName status price');
+
+    if (invalidServices.length > 0) {
+      const inactiveServices = invalidServices.filter(s => s.status === 'Inactive');
+      const freeServices = invalidServices.filter(s => s.price <= 0);
+
+      const errors = [];
+      if (inactiveServices.length > 0) {
+        const names = inactiveServices.map(s => s.serviceName).join(', ');
+        errors.push(`Dịch vụ đã bị vô hiệu hóa: ${names}`);
+      }
+      if (freeServices.length > 0) {
+        const names = freeServices.map(s => s.serviceName).join(', ');
+        errors.push(`Dịch vụ miễn phí không được áp dụng khuyến mãi: ${names}`);
+      }
+
+      throw new Error(errors.join('. '));
+    }
+
+    // =========================
+    // 5. Parse & normalize dates (VN date-only -> UTC boundaries)
+    // =========================
+    let startUtc;
+    let endUtc;
+
+    try {
+      startUtc = DateHelper.parseVNDateOnlyStart(startDate); // 00:00 VN -> UTC
+      endUtc = DateHelper.parseVNDateOnlyEnd(endDate);       // 23:59:59.999 VN -> UTC
+    } catch (e) {
+      console.error('❌ Lỗi parse ngày khuyến mãi:', e.message);
+      throw new Error('Ngày khuyến mãi không hợp lệ');
+    }
+
+    if (isNaN(startUtc.getTime())) throw new Error('Ngày bắt đầu không hợp lệ');
+    if (isNaN(endUtc.getTime())) throw new Error('Ngày kết thúc không hợp lệ');
+
+    // ✅ Lấy đầu ngày hôm nay theo VN (UTC)
+    const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
+
+    if (startUtc < todayVNStartUtc) {
+      throw new Error('Ngày bắt đầu khuyến mãi không được nhỏ hơn ngày hiện tại');
+    }
+
+    if (endUtc < startUtc) {
+      throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
+    }
+
+    const start = startUtc;
+    const end = endUtc;
+
+    console.log('📅 [Promotion] Start:', start.toISOString());
+    console.log('📅 [Promotion] End  :', end.toISOString());
+    console.log('📅 [Promotion] TodayVNStartUTC:', todayVNStartUtc.toISOString());
+
+    // =========================
+    // 6. Check conflict with existing promotions (Active + Upcoming)
+    // =========================
+    const conflictingPromotions = await PromotionServiceModel.aggregate([
+      { $match: { serviceId: { $in: finalServiceIds } } },
+      {
+        $lookup: {
+          from: 'promotions',
+          localField: 'promotionId',
+          foreignField: '_id',
+          as: 'promotion'
+        }
+      },
+      { $unwind: '$promotion' },
+      {
+        $match: {
+          'promotion.status': { $in: ['Active', 'Upcoming'] },
+          'promotion.startDate': { $lte: end },
+          'promotion.endDate': { $gte: start }
+        }
+      }
+    ]);
+
+    if (conflictingPromotions.length > 0) {
+      const conflictedServiceIds = conflictingPromotions.map(c => c.serviceId);
+      const error = new Error('Một số dịch vụ đã có khuyến mãi trùng thời gian');
+      error.conflictedServiceIds = conflictedServiceIds;
+      throw error;
+    }
+
+    // =========================
+    // 7. Tính status NGAY LÚC TẠO theo NGÀY VN
+    // - Nếu "hôm nay VN" nằm trong [startDate..endDate] => Active
+    // - Nếu chưa tới => Upcoming
+    // (Expired gần như không xảy ra vì đã validate start >= today)
+    // =========================
+    const todayVNEndUtc = new Date(todayVNStartUtc.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    let status = 'Upcoming';
+    if (start <= todayVNEndUtc && end >= todayVNStartUtc) {
+      status = 'Active';
+    }
+
+    console.log('✅ [Promotion] Initial status (VN-day):', status);
+
+    // =========================
+    // 8. Tạo promotion
+    // =========================
+    const promotion = new Promotion({
+      title: cleanTitle,
+      description: cleanDescription,
+      discountType: trimmedType,
+      discountValue,
+      applyToAll: isApplyToAll,
+      startDate: start,
+      endDate: end,
+      status
+    });
+
+    await promotion.save();
+
+    // =========================
+    // 9. Tạo liên kết dịch vụ trong PromotionService
+    // =========================
+    if (finalServiceIds.length > 0) {
+      const links = finalServiceIds.map(id => ({
+        promotionId: promotion._id,
+        serviceId: id
+      }));
+      await PromotionServiceModel.insertMany(links);
+    }
+
+    // =========================
+    // 10. Lấy tên dịch vụ áp dụng
+    // =========================
+    const appliedServices = await Service.find({ _id: { $in: finalServiceIds } })
+      .select('_id serviceName')
+      .lean();
+
+    return {
+      ...promotion.toObject(),
+      appliedServices,
+      status
+    };
+  }
+
+
+
+
+
+
+  /**
+   * Lấy danh sách promotions
+   */
+  async getAllPromotions(filters = {}) {
+    const {
+      search,
+      status,
+      sort = 'desc',
+      page = 1,
+      limit = 10,
+      startDate,
+      endDate
+    } = filters;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, parseInt(limit, 10) || 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = {};
+
+    if (status) filter.status = status;
+
+    // 🔍 search theo tiêu đề + mô tả
+    if (search && String(search).trim().length > 0) {
+      const trimmed = String(search).trim();
+      const safe = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(safe, 'i');
+      filter.$or = [{ title: regex }, { description: regex }];
+    }
+
+    // 📅 filter theo khoảng ngày startDate
+    if (startDate || endDate) {
+      filter.startDate = {};
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        filter.startDate.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        filter.startDate.$lte = end;
+      }
+    }
+
+    const sortOrder = sort.toLowerCase() === 'asc' ? 1 : -1;
+
+    const [total, promotions] = await Promise.all([
+      Promotion.countDocuments(filter),
+      Promotion.find(filter)
+        .sort({ startDate: sortOrder })
+        .skip(skip)
+        .limit(limitNum)
+        .lean()
+    ]);
+
+    const promotionIds = promotions.map(p => p._id);
+    const promoServices = await PromotionServiceModel.find({
+      promotionId: { $in: promotionIds }
+    })
+      .populate('serviceId', 'serviceName price category status')
+      .lean();
+
+    const promoServiceMap = {};
+    for (const ps of promoServices) {
+      const pid = ps.promotionId.toString();
+      if (!promoServiceMap[pid]) promoServiceMap[pid] = [];
+      promoServiceMap[pid].push(ps.serviceId);
+    }
+
+    const formattedPromotions = promotions.map(promo => {
+      const promoId = promo._id.toString();
+      if (promo.applyToAll) {
+        return {
+          ...promo,
+          applyNote: 'Áp dụng cho toàn bộ dịch vụ hệ thống',
+          services: []
+        };
+      } else {
+        return {
+          ...promo,
+          applyNote: 'Áp dụng cho các dịch vụ cụ thể',
+          services: promoServiceMap[promoId] || []
+        };
+      }
+    });
+
+    return {
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      page: pageNum,
+      limit: limitNum,
+      data: formattedPromotions
+    };
+  }
+
+  /**
+   * Lấy chi tiết promotion
+   */
+  async getPromotionById(id) {
+    const promotion = await Promotion.findById(id);
+    if (!promotion) {
+      throw new Error('Không tìm thấy ưu đãi');
+    }
+    return promotion;
+  }
+
+  /**
+   * Cập nhật promotion
+   */
+  async updatePromotion(id, data) {
+    const {
+      title,
+      description,
+      discountType,
+      discountValue,
+      applyToAll,
+      startDate,
+      endDate,
+      serviceIds,
+      status,
+    } = data;
+
+    const promotion = await Promotion.findById(id);
+    if (!promotion) {
+      throw new Error('Không tìm thấy ưu đãi');
+    }
+
+    // ✅ Cho phép cập nhật cả promotion đã hết hạn
+
+    // =========================
+    // 1. Validate title
+    // =========================
+    let cleanTitle = promotion.title;
+    if (title !== undefined) {
+      if (typeof title !== 'string' || !title.trim()) {
+        throw new Error('Tiêu đề không được để trống');
+      }
+      cleanTitle = title.trim().replace(/\s{2,}/g, ' ');
+      if (cleanTitle.length < 3 || cleanTitle.length > 200) {
+        throw new Error('Tiêu đề phải từ 3 đến 200 ký tự');
+      }
+      if (/[<>]/.test(cleanTitle)) {
+        throw new Error('Tiêu đề không được chứa ký tự < hoặc >');
+      }
+    }
+
+    // =========================
+    // 2. Validate description
+    // =========================
+    let cleanDescription = promotion.description;
+    if (description !== undefined) {
+      if (typeof description !== 'string' || !description.trim()) {
+        throw new Error('Mô tả không được để trống');
+      }
+      cleanDescription = description.trim().replace(/\s{2,}/g, ' ');
+      if (cleanDescription.length < 10) {
+        throw new Error('Mô tả phải có ít nhất 10 ký tự');
+      }
+      if (/[<>]/.test(cleanDescription)) {
+        throw new Error('Mô tả không được chứa ký tự < hoặc >');
+      }
+    }
+
+    // =========================
+    // 3. Validate discount
+    // =========================
+    let finalDiscountType = promotion.discountType;
+    let finalDiscountValue = promotion.discountValue;
+
+    if (discountType !== undefined) {
+      if (typeof discountType !== 'string' || !discountType.trim()) {
+        throw new Error('Thể loại giảm giá không được để trống');
+      }
+      const type = discountType.trim();
+      if (!['Percent', 'Fix'].includes(type)) {
+        throw new Error('Thể loại giảm giá chỉ được là Percent hoặc Fix');
+      }
+      finalDiscountType = type;
+    }
+
+    if (discountValue !== undefined) {
+      if (typeof discountValue !== 'number' || isNaN(discountValue)) {
+        throw new Error('Giá trị giảm giá phải là số');
+      }
+      if (finalDiscountType === 'Percent' && (discountValue < 1 || discountValue > 100)) {
+        throw new Error('Giảm theo phần trăm phải từ 1 đến 100');
+      }
+      if (finalDiscountType === 'Fix' && discountValue <= 0) {
+        throw new Error('Giá trị giảm cố định phải lớn hơn 0');
+      }
+      finalDiscountValue = discountValue;
+    }
+
+    // =========================
+    // 4. ApplyToAll + serviceIds
+    // =========================
+    let isApplyToAll = promotion.applyToAll;
+    if (applyToAll !== undefined) {
+      if (typeof applyToAll !== 'boolean') {
+        throw new Error('Áp dụng cho tất cả phải là true hoặc false');
+      }
+      isApplyToAll = applyToAll;
+    }
+
+    if (!isApplyToAll && serviceIds !== undefined) {
+      if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+        throw new Error('Vui lòng chọn ít nhất một dịch vụ khi không áp dụng cho tất cả');
+      }
+    }
+
+    // =========================
+    // 5. Parse & validate date
+    // =========================
+    let finalStartDate = promotion.startDate;
+    let finalEndDate = promotion.endDate;
+
+    if (startDate !== undefined || endDate !== undefined) {
+      let newStart = promotion.startDate;
+      let newEnd = promotion.endDate;
+
+      try {
+        if (startDate !== undefined) {
+          newStart = DateHelper.parseVNDateOnlyStart(startDate);
+        }
+        if (endDate !== undefined) {
+          newEnd = DateHelper.parseVNDateOnlyEnd(endDate);
+        }
+      } catch (e) {
+        console.error('❌ Lỗi parse ngày update promotion:', e.message);
+        throw new Error('Ngày khuyến mãi không hợp lệ');
+      }
+
+      if (isNaN(newStart.getTime())) {
+        throw new Error('Ngày bắt đầu không hợp lệ');
+      }
+      if (isNaN(newEnd.getTime())) {
+        throw new Error('Ngày kết thúc không hợp lệ');
+      }
+      if (newEnd < newStart) {
+        throw new Error('Ngày kết thúc phải sau hoặc bằng ngày bắt đầu');
+      }
+
+      const todayVNStartUtc = DateHelper.getTodayVNStartUTC();
+      if (startDate !== undefined && newStart < todayVNStartUtc) {
+        throw new Error('Ngày bắt đầu không được sửa về trước hôm nay');
+      }
+
+      finalStartDate = newStart;
+      finalEndDate = newEnd;
+    }
+
+    // =========================
+    // 6. CHECK CONFLICT với các promotion khác
+    //     - Nếu gia hạn hoặc đổi dịch vụ, mà bị trùng
+    //       với promo khác đang Active/Upcoming => báo lỗi
+    // =========================
+    let finalServiceIds = [];
+
+    if (isApplyToAll) {
+      // Chỉ áp dụng cho các dịch vụ Active và có giá > 0
+      finalServiceIds = await Service.find({
+        status: 'Active',
+        price: { $gt: 0 }
+      }).distinct('_id');
+    } else {
+      if (serviceIds !== undefined) {
+        finalServiceIds = serviceIds;
+      } else {
+        // lấy list dịch vụ hiện tại của promotion
+        finalServiceIds = await PromotionServiceModel.find({
+          promotionId: promotion._id
+        }).distinct('serviceId');
+      }
+    }
+
+
+    // =========================
+    // 4.1. Validate service status and price
+    // =========================
+    if (finalServiceIds.length > 0) {
+      const invalidServices = await Service.find({
+        _id: { $in: finalServiceIds },
+        $or: [
+          { status: 'Inactive' },
+          { price: { $lte: 0 } }
+        ]
+      }).select('_id serviceName status price');
+
+      if (invalidServices.length > 0) {
+        const inactiveServices = invalidServices.filter(s => s.status === 'Inactive');
+        const freeServices = invalidServices.filter(s => s.price <= 0);
+
+        const errors = [];
+        if (inactiveServices.length > 0) {
+          const names = inactiveServices.map(s => s.serviceName).join(', ');
+          errors.push(`Dịch vụ đã bị vô hiệu hóa: ${names}`);
+        }
+        if (freeServices.length > 0) {
+          const names = freeServices.map(s => s.serviceName).join(', ');
+          errors.push(`Dịch vụ miễn phí không được áp dụng khuyến mãi: ${names}`);
+        }
+
+        throw new Error(errors.join('. '));
+      }
+    }
+
+    // =========================
+    // 6. CHECK CONFLICT với các promotion khác
+    //     - Nếu gia hạn hoặc đổi dịch vụ, mà bị trùng
+    //       với promo khác đang Active/Upcoming => báo lỗi
+    // =========================
+    if (finalServiceIds.length > 0) {
+      const conflictingPromotions = await PromotionServiceModel.aggregate([
+        {
+          $match: {
+            serviceId: { $in: finalServiceIds },
+            promotionId: { $ne: promotion._id } // loại trừ chính nó
+          }
+        },
+        {
+          $lookup: {
+            from: 'promotions',
+            localField: 'promotionId',
+            foreignField: '_id',
+            as: 'promotion'
+          }
+        },
+        { $unwind: '$promotion' },
+        {
+          $match: {
+            'promotion.status': { $in: ['Active', 'Upcoming'] },
+            'promotion.startDate': { $lte: finalEndDate },
+            'promotion.endDate': { $gte: finalStartDate }
+          }
+        }
+      ]);
+
+      if (conflictingPromotions.length > 0) {
+        const conflictedServiceIds = conflictingPromotions.map(c => c.serviceId);
+        const err = new Error('Một số dịch vụ đã có khuyến mãi trùng thời gian');
+        err.conflictedServiceIds = conflictedServiceIds;
+        throw err;
+      }
+    }
+
+    // =========================
+    // 7. Tính autoStatus theo NGÀY VN (chỉ để làm default)
+    // =========================
+    const todayVNStartUtc = DateHelper.getTodayVNStartUTC(); // 00:00 VN -> UTC
+    const tomorrowVNStartUtc = new Date(
+      todayVNStartUtc.getTime() + 24 * 60 * 60 * 1000
+    );
+
+    let autoStatus = 'Upcoming';
+
+    if (finalEndDate < todayVNStartUtc) {
+      autoStatus = 'Expired';
+    } else if (finalStartDate >= tomorrowVNStartUtc) {
+      autoStatus = 'Upcoming';
+    } else {
+      autoStatus = 'Active';
+    }
+
+    // =========================
+    // 8. XỬ LÝ STATUS (toggle Active <-> Inactive)
+    // =========================
+    let finalStatus;
+
+    if (status !== undefined) {
+      if (!['Active', 'Inactive'].includes(status)) {
+        throw new Error('Chỉ được cập nhật trạng thái thành Đang áp dụng hoặc Không áp dụng');
+      }
+
+      // ✅ Cho phép thay đổi status từ BẤT KỲ trạng thái nào (Expired, Upcoming, Active, Inactive)
+
+      if (status === 'Inactive') {
+        finalStatus = 'Inactive';
+      }
+
+      if (status === 'Active') {
+        // ✅ Cho phép set Active kể cả khi đã hết hạn (admin có thể muốn extend)
+        if (autoStatus !== 'Active') {
+          console.warn(`⚠️ [Promotion] Admin đang force Active promotion ${id} mặc dù autoStatus = ${autoStatus}`);
+        }
+        finalStatus = 'Active';
+      }
+    } else {
+      if (promotion.status === 'Inactive') {
+        finalStatus = 'Inactive';
+      } else {
+        finalStatus = autoStatus;
+      }
+    }
+
+    // =========================
+    // 9. Update DB
+    // =========================
+    promotion.title = cleanTitle;
+    promotion.description = cleanDescription;
+    promotion.discountType = finalDiscountType;
+    promotion.discountValue = finalDiscountValue;
+    promotion.applyToAll = isApplyToAll;
+    promotion.startDate = finalStartDate;
+    promotion.endDate = finalEndDate;
+    promotion.status = finalStatus;
+
+    await promotion.save();
+
+    // =========================
+    // 10. Update service links
+    // =========================
+    // Có 3 trường hợp:
+    // 1. Chuyển từ specific -> applyToAll: Tạo PromotionService cho TẤT CẢ dịch vụ Active
+    // 2. Chuyển từ applyToAll -> specific: Xóa hết, tạo mới cho serviceIds
+    // 3. Vẫn là specific, chỉ đổi serviceIds: Xóa hết, tạo mới cho serviceIds
+
+    if (applyToAll !== undefined) {
+      // Có thay đổi applyToAll
+      if (isApplyToAll) {
+        // Case 1: Chuyển sang applyToAll = true -> Tạo cho TẤT CẢ dịch vụ Active và có giá > 0
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        const allActiveServiceIds = await Service.find({
+          status: 'Active',
+          price: { $gt: 0 }
+        }).distinct('_id');
+        if (allActiveServiceIds.length > 0) {
+          const links = allActiveServiceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
+      } else {
+        // Case 2: Chuyển sang applyToAll = false -> Tạo cho serviceIds (nếu có)
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        if (serviceIds && serviceIds.length > 0) {
+          const links = serviceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
+      }
+    } else {
+      // Không đổi applyToAll, chỉ đổi serviceIds
+      if (!isApplyToAll && serviceIds !== undefined) {
+        // Case 3: Vẫn là specific, chỉ update danh sách dịch vụ
+        await PromotionServiceModel.deleteMany({ promotionId: promotion._id });
+
+        if (serviceIds.length > 0) {
+          const links = serviceIds.map(sid => ({
+            promotionId: promotion._id,
+            serviceId: sid
+          }));
+          await PromotionServiceModel.insertMany(links);
+        }
+      }
+    }
+
+    return {
+      ...promotion.toObject(),
+      status: finalStatus,
+    };
+  }
+
+
+
+
+
+
+  /**
+   * Xóa promotion
+   */
+  async deletePromotion(id) {
+    const result = await Promotion.findByIdAndDelete(id);
+    if (!result) {
+      throw new Error('Không tìm thấy ưu đãi');
+    }
+
+    // Xóa các liên kết trong PromotionService
+    await PromotionServiceModel.deleteMany({ promotionId: id });
+
+    return true;
+  }
+}
+
+module.exports = new PromotionService();
+
